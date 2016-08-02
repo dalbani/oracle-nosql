@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -291,6 +291,22 @@ public class KVStoreMain {
             }
         },
 
+        new Command(StorageNodeAgent.STATUS_COMMAND_NAME,
+                StorageNodeAgent.STATUS_COMMAND_DESC) {
+
+	        @Override
+	        void run(String[] args) {
+	            /* Add -status. */
+	            StorageNodeAgentImpl.main
+	                (makeArgs(args, StorageNodeAgent.STATUS_FLAG));
+	        }
+	
+	        @Override
+	        String getUsageArgs() {
+	            return StorageNodeAgent.COMMAND_ARGS;
+	        }
+	    },
+        
         new Command(StorageNodeAgent.RESTART_COMMAND_NAME,
                     StorageNodeAgent.RESTART_COMMAND_DESC) {
 
@@ -707,7 +723,7 @@ public class KVStoreMain {
         MgmtUtil.ConfigParserHelper mgmtParser;
         SecurityConfigCommand.ConfigParserHelper securityParser;
         List<String> mountPoints = new ArrayList<String>();
-        int capacity = 0;
+        int capacity = 1;
         int num_cpus = 0;
         int memory_mb = 0;
         boolean isRunAdmin = false;

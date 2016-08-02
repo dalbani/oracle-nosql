@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,9 +43,18 @@
 
 package oracle.kv.impl.api.table;
 
+import static oracle.kv.impl.api.table.FieldDefImpl.binaryDef;
+import static oracle.kv.impl.api.table.FieldDefImpl.booleanDef;
+import static oracle.kv.impl.api.table.FieldDefImpl.doubleDef;
+import static oracle.kv.impl.api.table.FieldDefImpl.floatDef;
+import static oracle.kv.impl.api.table.FieldDefImpl.integerDef;
+import static oracle.kv.impl.api.table.FieldDefImpl.longDef;
+import static oracle.kv.impl.api.table.FieldDefImpl.stringDef;
 import static oracle.kv.impl.api.table.TableJsonUtils.DESC;
 import static oracle.kv.impl.api.table.TableJsonUtils.FIELDS;
 import static oracle.kv.impl.api.table.TableJsonUtils.NAME;
+import static oracle.kv.impl.api.table.TableJsonUtils.TTL;
+import static oracle.kv.impl.api.table.TableJsonUtils.PKEY_SIZES;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -62,14 +71,10 @@ import java.util.Map.Entry;
 import java.util.TreeMap;
 
 import org.apache.avro.Schema;
-import org.apache.avro.generic.GenericData;
-import org.apache.avro.generic.GenericDatumReader;
-import org.apache.avro.generic.GenericDatumWriter;
-import org.apache.avro.generic.GenericRecord;
-import org.apache.avro.io.DatumReader;
+import org.apache.avro.Schema.Field;
 import org.apache.avro.io.Decoder;
 import org.apache.avro.io.Encoder;
-import org.codehaus.jackson.JsonParser;
+import org.apache.avro.io.ResolvingDecoder;
 import org.codehaus.jackson.map.ObjectWriter;
 import org.codehaus.jackson.node.ArrayNode;
 import org.codehaus.jackson.node.ObjectNode;
@@ -79,15 +84,16 @@ import com.sleepycat.util.PackedInteger;
 import oracle.kv.Key;
 import oracle.kv.Key.BinaryKeyIterator;
 import oracle.kv.Value;
+import oracle.kv.Value.Format;
 import oracle.kv.ValueVersion;
 import oracle.kv.impl.admin.IllegalCommandException;
+import oracle.kv.impl.api.ops.ResultKey;
 import oracle.kv.impl.metadata.Metadata.MetadataType;
 import oracle.kv.impl.metadata.MetadataInfo;
 import oracle.kv.impl.security.Ownable;
 import oracle.kv.impl.security.ResourceOwner;
 import oracle.kv.impl.util.JsonUtils;
 import oracle.kv.impl.util.SortableString;
-import oracle.kv.table.EnumDef;
 import oracle.kv.table.FieldDef;
 import oracle.kv.table.FieldRange;
 import oracle.kv.table.FieldValue;
@@ -100,6 +106,7 @@ import oracle.kv.table.RecordValue;
 import oracle.kv.table.ReturnRow;
 import oracle.kv.table.Row;
 import oracle.kv.table.Table;
+import oracle.kv.table.TimeToLive;
 
 /**
  * TableImpl implements Table, which represents a table in Oracle NoSQL
@@ -118,6 +125,8 @@ import oracle.kv.table.Table;
  * 4.  optional indexes, defined in terms of fields in the table.
  * 5.  optional child tables, keyed by table name.  Child tables inherit the
  * table's primary key and shard key.
+ * 6.  optional Time-to-Live (TTL) duration. A record may use this TTL as its
+ *  expiration when no explicit TTL value is set for the same record.
  *
  * If a table is a child table it also references its parent table.  When a
  * table is created the system generates a unique long to serve as an id for
@@ -136,22 +145,51 @@ import oracle.kv.table.Table;
  *
  * Tables can evolve in limited ways with schema evolution.  The only thing
  * that can be done is to add or remove non-key fields or change fields in
- * a way that does not affect their serialization.  Once r2compat tables have
- * been evolved they are no longer readable by R2 key/value code.
+ * a way that does not affect their serialization or change the default TTL.
+ * Once r2compat tables have been evolved they are no longer readable by R2
+ * key/value code.
+ * <p>
+ *
+ * Tables can carry an optional default expiry duration. Expiry duration can be
+ * null or a positive value (including 0) in a particular unit of time. A 0
+ * value is semantically equivalent to no expiry being defined at all.
+ * <br>
+ * For non-zero positive expiry value, the unit of time must be equal or longer
+ * than a minimum time unit supported by the system. <br>
+ * Currently, minimum unit of time is an hour.
+ *
  */
 public class TableImpl implements Table, MetadataInfo, Ownable,
                                   Serializable, Cloneable {
 
     private static final long serialVersionUID = 1L;
+
     private final String name;
+
     private long id;
+
     private final TableImpl parent;
+
     private final TreeMap<String, Index> indexes;
+
     private final List<String> primaryKey;
+
+    /*
+     * If non-null, a list of size constraints on the corresponding Primary Key
+     * fields.
+     */
+    private final List<Integer> primaryKeySizes;
+
     private final List<String> shardKey;
+
     private final String description;
+
     private final Map<String, Table> children;
+
     private final ArrayList<FieldMap> versions;
+
+    private TimeToLive ttl;
+
     private TableStatus status;
 
     /*
@@ -165,11 +203,15 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
 
     private final ResourceOwner owner;
 
+    /* Whether this table is system table */
+    private final boolean sysTable;
+
     /*
      * transient, cached values
      */
     /* Cached Avro Schema for current version, unrelated to schemaId above */
     private transient Schema schema;
+
     /*
      * The current version of this table instance. It must only be set using
      * its accessor to ensure that associated caches are maintained.
@@ -241,6 +283,9 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
     private static final String SEPARATOR_REGEX = "\\.";
     private static final int INITIAL_TABLE_VERSION = 1;
 
+    /* The prefix of system table names, case insensitive */
+    public static final String SYSTEM_TABLE_PREFIX = "SYS$";
+
     /*
      * Names (field names, enum symbols) must start with an alphabetic
      * character [A-Za-z] followed by alphabetic characters, numeric
@@ -264,30 +309,43 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
      * @param validate if true validate the fields and state of the table
      * upon construction
      * @param owner the owner of this table
+     * @param sysTable if true the table is a system table
      */
     private TableImpl(final String name,
                       final TableImpl parent,
                       final List<String> primaryKey,
+                      final List<Integer> primaryKeySizes,
                       final List<String> shardKey,
                       final FieldMap fields,
+                      final TimeToLive ttl,
                       boolean r2compat,
                       int schemaId,
                       final String description,
                       boolean validate,
-                      ResourceOwner owner) {
+                      ResourceOwner owner,
+                      boolean sysTable) {
         this.name = name;
         this.parent = parent;
         this.description = description;
         this.primaryKey = primaryKey;
+        this.primaryKeySizes = primaryKeySizes;
         this.shardKey = shardKey;
         this.status = TableStatus.READY;
         this.r2compat = r2compat;
         this.schemaId = schemaId;
+        this.sysTable = sysTable;
         children = new TreeMap<String, Table>(FieldComparator.instance);
         indexes = new TreeMap<String, Index>(FieldComparator.instance);
         versions = new ArrayList<FieldMap>();
         versions.add(fields);
+        this.ttl = ttl;
         setVersion(INITIAL_TABLE_VERSION);
+
+        if (sysTable) {
+            validateSystemTableName(name);
+        } else {
+            validateComponent(name, true);
+        }
         if (validate) {
             validate();
             setSchema(true);
@@ -310,11 +368,13 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
         description = t.description;
         parent = t.parent;
         primaryKey = t.primaryKey;
+        primaryKeySizes = t.primaryKeySizes;
         shardKey = t.shardKey;
         status = t.status;
         r2compat = t.r2compat;
         schemaId = t.schemaId;
         owner = t.owner;
+        sysTable = t.sysTable;
 
         children = new TreeMap<String, Table>(FieldComparator.instance);
         for (Table table : t.children.values()) {
@@ -322,6 +382,7 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
         }
 
         versions = new ArrayList<FieldMap>(t.versions);
+        ttl = t.ttl;
         setVersion(t.version);
         /* this constructor uses the same Comparator as t.indexes */
         indexes = new TreeMap<String, Index>(t.indexes);
@@ -329,32 +390,39 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
         setIdString();
     }
 
-    static TableImpl createTable(String name,
-                                 Table parent,
-                                 List<String> primaryKey,
-                                 List<String> shardKey,
-                                 FieldMap fields,
-                                 boolean r2compat,
-                                 int schemaId,
-                                 String description,
-                                 boolean validate,
-                                 ResourceOwner owner) {
+    public static TableImpl createTable(String name,
+                                        Table parent,
+                                        List<String> primaryKey,
+                                        List<Integer> primaryKeySizes,
+                                        List<String> shardKey,
+                                        FieldMap fields,
+                                        boolean r2compat,
+                                        int schemaId,
+                                        String description,
+                                        boolean validate,
+                                        ResourceOwner owner,
+                                        TimeToLive ttl,
+                                        boolean sysTable) {
         return new TableImpl(name, (TableImpl)parent,
                              primaryKey,
-                             shardKey, fields,
+                             primaryKeySizes,
+                             shardKey, fields, ttl,
                              r2compat,
                              schemaId,
                              description,
                              validate,
-                             owner);
+                             owner,
+                             sysTable);
     }
 
+    /*
+     * Needed to deserialize an instance of TableImpl via java deserialization.
+     * Specifically, it is needed to initialize transient fields not sent in
+     * the serialized object.
+     */
     private void readObject(java.io.ObjectInputStream in)
         throws IOException, ClassNotFoundException {
         in.defaultReadObject();
-        /*
-         * Initialize transient fields not sent in the serialized object.
-         */
         setSchema(false);
         getTableVersion();
         setIdString();
@@ -400,6 +468,10 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
 
     public String getAvroSchema(boolean pretty) {
         return generateAvroSchema(version, pretty);
+    }
+
+    public Schema getSchema() {
+        return schema;
     }
 
     /**
@@ -553,12 +625,32 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
         return Collections.unmodifiableList(shardKey);
     }
 
-    List<String> getPrimaryKeyInternal() {
+    public List<String> getPrimaryKeyInternal() {
         return primaryKey;
+    }
+
+    public int getPrimaryKeySize() {
+        return primaryKey.size();
+    }
+
+    public List<Integer> getPrimaryKeySizes() {
+        return primaryKeySizes;
+    }
+
+    public String getPrimaryKeyColumnName(int i) {
+        return primaryKey.get(i);
     }
 
     List<String> getShardKeyInternal() {
         return shardKey;
+    }
+
+    public int getShardKeySize() {
+        return shardKey.size();
+    }
+
+    public RecordDefImpl getRowType() {
+        return new RecordDefImpl(getName(), getFieldMap());
     }
 
     @Override
@@ -609,7 +701,7 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
     @Override
     public Row createRowFromJson(InputStream jsonInput, boolean exact) {
         RowImpl row = createRow();
-        createFromJson(row, jsonInput, exact);
+        ComplexValueImpl.createFromJson(row, jsonInput, exact);
         return row;
     }
 
@@ -624,7 +716,7 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
     public PrimaryKeyImpl createPrimaryKeyFromJson(InputStream jsonInput,
                                                    boolean exact) {
         PrimaryKeyImpl key = createPrimaryKey();
-        createFromJson(key, jsonInput, exact);
+        ComplexValueImpl.createFromJson(key, jsonInput, exact);
         return key;
     }
 
@@ -639,7 +731,7 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
             throw new IllegalArgumentException
                 ("Field does not exist in primary key: " + fieldName);
         }
-        return new FieldRange(fieldName, def);
+        return new FieldRange(fieldName, def, getPrimaryKeySize(fieldName));
     }
 
     @Override
@@ -686,6 +778,18 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
     }
 
     /**
+     * Returns the size contstraint for the named primary key field, or 0
+     * if there is none. This assumes that the field name has already been
+     * validated as a primary key field.
+     */
+    public int getPrimaryKeySize(String keyName) {
+        if (primaryKeySizes != null) {
+            return primaryKeySizes.get(primaryKey.indexOf(keyName));
+        }
+        return 0;
+    }
+
+    /**
      * Return true if ancestor is an ancestor of this table.   Match on
      * full name only.  Equality isn't needed here.
      */
@@ -712,42 +816,15 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
     }
 
     /**
-     * Set value to row or complex field based on JSON input.
-     */
-    static void createFromJson(ComplexValueImpl complexValue,
-                               InputStream jsonInput,
-                               boolean exact) {
-        JsonParser jp = null;
-        try {
-            jp = TableJsonUtils.createJsonParser(jsonInput);
-            /*move to START_OBJECT or START_ARRAY*/
-            jp.nextToken();
-            complexValue.addJsonFields(jp, (complexValue instanceof IndexKey),
-                              null, exact);
-            complexValue.validate();
-        } catch (IOException ioe) {
-            throw new IllegalArgumentException
-                (("Failed to parse JSON input: " + ioe.getMessage()), ioe);
-        } finally {
-            if (jp != null) {
-                try {
-                    jp.close();
-                } catch (IOException ignored) {
-                    /* ignore failures on close */
-                }
-            }
-        }
-    }
-
-    /**
-     * Determine equality.  Use name, parentage, version, and field definitions.
+     * Determine equality.  Use name, parentage, version, field definitions
+     * and default TTL.
      */
     @Override
     public boolean equals(Object other) {
         if (other != null && other instanceof Table) {
             TableImpl otherDef = (TableImpl) other;
             if (getName().equalsIgnoreCase(otherDef.getName()) &&
-                getId() == otherDef.getId()) {
+                idsEqual(otherDef)) {
                 if (getParent() != null) {
                     if (!getParent().equals(otherDef.getParent())) {
                         return false;
@@ -755,11 +832,54 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
                 } else if (otherDef.getParent() != null) {
                     return false;
                 }
+                if (!equalsTTL(ttl, otherDef.ttl)) {
+                    return false;
+                }
+                if (!equalsPKSizes(primaryKeySizes,
+                                   otherDef.primaryKeySizes)) {
+                    return false;
+                }
                 return (versionsEqual(otherDef) &&
                         getFieldMap().equals(otherDef.getFieldMap()));
             }
         }
         return false;
+    }
+
+    /*
+     * Compares ids, matching an id of 0 as ok against any actual versioned id.
+     * This allows transient tables to compare correctly to persistent onces
+     * when everything but the id matches.
+     */
+    private boolean idsEqual(TableImpl other) {
+        if ((getId() == other.getId()) ||
+            (getId() == 0 || other.getId() == 0)) {
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean equalsTTL(TimeToLive ttl, TimeToLive ottl) {
+        if (ttl != null) {
+            return ttl.equals(ottl);
+        }
+        return (ottl == null);
+    }
+
+    private static boolean equalsPKSizes(final List<Integer> pks,
+                                         final List<Integer> opks) {
+        if (pks != null) {
+            if (opks != null && (pks.size() == opks.size())) {
+                for (int i = 0; i < pks.size(); i++) {
+                    if (pks.get(i) != opks.get(i)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            return false;
+        }
+        return (opks == null);
     }
 
     /**
@@ -796,7 +916,8 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
     @Override
     public int hashCode() {
         return getFullName().hashCode() + versions.size() +
-            getFieldMap().hashCode();
+            getFieldMap().hashCode()
+          + (getDefaultTTL() != null ? getDefaultTTL().hashCode() : 0);
     }
 
     boolean nameEquals(TableImpl other) {
@@ -922,29 +1043,30 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
         return getFieldMapEntry(fieldName, mustExist, false);
     }
 
-    private FieldMapEntry getFieldMapEntry(String fieldName,
+    private FieldMapEntry getFieldMapEntry(String fieldPath,
                                            boolean mustExist,
                                            boolean allowNesting) {
         FieldMap fieldMap = getFieldMap();
-        String fieldToUse = fieldName;
+        String fieldToUse = fieldPath;
+
         if (allowNesting) {
 
             /*
              * Find the containing map and use it, along with the final
              * component of the field name.
              */
-            TableField tableField = new TableField(fieldMap, fieldName);
-            if (tableField.isComplex()) {
-                fieldMap = findContainingMap(fieldMap, tableField, mustExist);
+            TablePath tablePath = new TablePath(fieldMap, fieldPath);
+            if (tablePath.isComplex()) {
+                fieldMap = findContainingMap(fieldMap, tablePath, mustExist);
                 if (fieldMap == null) {
                     if (!mustExist) {
                         return null;
                     }
                     throw new IllegalArgumentException
                         ("Field does not exist in table definition: " +
-                         fieldName);
+                         fieldPath);
                 }
-                fieldToUse = tableField.getLastComponent();
+                fieldToUse = tablePath.getLastStep();
             }
         }
 
@@ -954,7 +1076,7 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
         }
         if (mustExist) {
             throw new IllegalArgumentException
-                ("Field does not exist in table definition: " + fieldName);
+                ("Field does not exist in table definition: " + fieldPath);
         }
         return null;
     }
@@ -965,14 +1087,18 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
      * otherwise it is the record that references the field.
      */
     static FieldMap findContainingMap(FieldMap map,
-                                      TableField tableField,
+                                      TablePath tablePath,
                                       boolean mustExist) {
-        if (!tableField.isComplex()) {
+        if (!tablePath.isComplex()) {
             return map;
         }
-        String fieldName = tableField.getFieldName();
-        String parent = fieldName.substring(0, fieldName.lastIndexOf('.'));
-        FieldDef def = findTableField(new TableField(map, parent));
+
+        String fieldPathName = tablePath.getPathName();
+
+        String parent = fieldPathName.substring(
+            0, fieldPathName.lastIndexOf('.'));
+
+        FieldDef def = findTableField(new TablePath(map, parent));
 
         /* def can be null if a bad field name is passed */
         if (def instanceof MapDefImpl || def instanceof ArrayDefImpl) {
@@ -981,24 +1107,16 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
              * Try the full name in these cases. If the array or map
              * element is a record the above code won't work.
              */
-            def = findTableField(tableField);
+            def = findTableField(tablePath);
         }
         if (def == null || !(def instanceof RecordDefImpl)) {
             if (mustExist) {
                 throw new IllegalArgumentException
-                    ("Containing field is not a record: " + fieldName);
+                    ("Containing field is not a record: " + fieldPathName);
             }
             return null;
         }
         return ((RecordDefImpl)def).getFieldMap();
-    }
-
-    List<String> getMutablePrimaryKey() {
-        return primaryKey;
-    }
-
-    public int getPrimaryKeySize() {
-        return primaryKey.size();
     }
 
     Map<String, Index> getMutableIndexes() {
@@ -1029,8 +1147,10 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
      * respect to failures and return null if they fail to match
      * a table.  This is necessary for mixed access between tables and
      * potentially matching key/value records.
+     *
+     * This is public so that code in api/ops can use it.
      */
-    RowImpl createRowFromKeyBytes(byte[] keyBytes) {
+    public RowImpl createRowFromKeyBytes(byte[] keyBytes) {
         return createFromKeyBytes(keyBytes, false);
     }
 
@@ -1039,6 +1159,15 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
      */
     PrimaryKeyImpl createPrimaryKeyFromKeyBytes(byte[] keyBytes) {
         return (PrimaryKeyImpl) createFromKeyBytes(keyBytes, true);
+    }
+
+    PrimaryKeyImpl createPrimaryKeyFromResultKey(ResultKey rkey) {
+        PrimaryKeyImpl pkey =
+            (PrimaryKeyImpl) createFromKeyBytes(rkey.getKeyBytes(), true);
+        if (pkey != null) {
+            pkey.setExpirationTime(rkey.getExpirationTime());
+        }
+        return pkey;
     }
 
     /**
@@ -1078,11 +1207,18 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
      * initRowFromByteValue() in order to handle schema evolved
      * records that may contain default values not in the record value.
      */
+    @SuppressWarnings("deprecation")
     RowImpl createRowFromBytes(byte[] keyBytes,
                                byte[] valueBytes,
                                boolean keyOnly) {
         RowImpl fullKey = createRowFromKeyBytes(keyBytes);
-        if (fullKey != null) {
+        /*
+         * If createRowFromKeyBytes returns null, then the serialized key
+         * doesn't match the table's key.  It may, however, return a false
+         * positive if the key belongs to a descendent in the parent-child
+         * table hierarchy.  Hence the extra test for matching table Ids.
+         */
+        if (fullKey != null && getId() == fullKey.getTableImpl().getId()) {
             /*
              * The length check is pure paranoia, but doesn't hurt.
              * See header comment above.
@@ -1139,33 +1275,13 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
      * 2. Default values.  If a field is both optional AND not set in the Row,
      * put its default value into the Avro record.  Required fields are just
      * that -- required.
-     *
-     * For now this code iterates the fields in the target Row and adds them
-     * to an Avro GenericRecord, which is then serialized.  GenericRecord maps
-     * specific Avro types to/from Java types.  The summary is on this page:
-     *     http://avro.apache.org/docs/current/api/java/
-     *                 org/apache/avro/generic/package-summary.html
-     * Schema records are implemented as GenericRecord.
-     * Schema enums are implemented as GenericEnumSymbol.
-     * Schema arrays are implemented as Collection.
-     * Schema maps are implemented as Map.
-     * Schema fixed are implemented as GenericFixed.
-     * Schema strings are implemented as CharSequence.
-     * Schema bytes are implemented as ByteBuffer.
-     * Schema ints are implemented as Integer.
-     * Schema longs are implemented as Long.
-     * Schema floats are implemented as Float.
-     * Schema doubles are implemented as Double.
-     * Schema booleans are implemented as Boolean.
-     *
-     * The appropriate mapping and copying of types is done by the various
-     * FieldValueImpl subclasses in their toAvroValue() methods.  In the case
-     * of complex types this is recursive.
      */
+    @SuppressWarnings("deprecation")
     Value createValue(Row row) {
+
         setSchema(false);
         if (schema == null) {
-            return Value.EMPTY_VALUE;
+            return Value.internalCreateValue(new byte[0], Format.TABLE);
         }
         boolean isAvro = (schemaId != 0 && getTableVersion() == 1);
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
@@ -1196,51 +1312,17 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
 
         Encoder e = TableJsonUtils.getEncoderFactory().
             binaryEncoder(outputStream, null);
-        GenericDatumWriter<GenericRecord> w =
-            new GenericDatumWriter<GenericRecord>(schema);
 
-        /*
-         * Populate an Avro GenericRecord with the row data
-         */
-        GenericRecord r = new GenericData.Record(schema);
-
-        for (Map.Entry<String, FieldMapEntry> entry :
-                 getFields(version).entrySet()) {
-            FieldMapEntry fme = entry.getValue();
-            String fieldName = entry.getKey();
-            if (!isKeyComponent(fieldName)) {
-                FieldValueImpl fv = (FieldValueImpl) row.get(fieldName);
-                if (fv == null) {
-                    fv = fme.getDefaultValue();
-                }
-                if (fv.isNull()) {
-                    if (!fme.isNullable()) {
-                        throw new IllegalCommandException
-                            ("The field can not be null: " + fieldName);
-                    }
-                    r.put(fieldName, null);
-                } else {
-                    r.put(fieldName,
-                          fv.toAvroValue(schema.getField
-                                         (fieldName).schema()));
-                }
-            }
-        }
         try {
-            // Encode
-            w.write(r, e);
+            writeAvroRecord(e, (RecordValueImpl) row, true);
             e.flush();
+            return Value.internalCreateValue
+                (outputStream.toByteArray(),
+                 isAvro ? Value.Format.AVRO : Value.Format.TABLE);
         } catch (IOException ioe) {
             throw new IllegalCommandException("Failed to serialize Avro: " +
                                               ioe);
         }
-
-        /*
-         *
-         */
-        return Value.internalCreateValue
-            (outputStream.toByteArray(),
-             isAvro ? Value.Format.AVRO : Value.Format.TABLE);
     }
 
     /**
@@ -1265,10 +1347,16 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
      * values may either (1) have the encoded schema id (first byte < 0) or
      * be newly-written values, which will have the table format (1) as
      * the first byte and table version used for write as the second byte.
+     *
+     * This is public to allow access from the query processor.
      */
-    private boolean initRowFromByteValue(RowImpl row, byte[] data,
-                                         Value.Format format, int offset) {
-        GenericRecord result = null;
+    @SuppressWarnings("deprecation")
+    public boolean initRowFromByteValue(RowImpl row, byte[] data,
+                                 Value.Format format, int offset) {
+
+        /*
+         * Decode the serialized data if the record is not key-only
+         */
         if (data.length >= (offset + 1)) {
             Schema writerSchema = schema;
             int tableVersion = (format == Value.Format.AVRO ? 1
@@ -1303,63 +1391,69 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
                 if (!(format == Value.Format.AVRO) || offset == 0) {
                     offset += 1;
                 }
-                DatumReader<GenericRecord> reader =
-                    new GenericDatumReader<GenericRecord>(writerSchema, schema);
-
                 Decoder decoder =
                     TableJsonUtils.getDecoderFactory().binaryDecoder
                     (data, offset, (data.length - offset), null);
 
-                result = reader.read(null, decoder);
+                SimpleAvroReader reader =
+                    new SimpleAvroReader(writerSchema, schema, row);
+                reader.read(decoder);
+                return true;
             } catch (Exception e) {
                 /*
-                 * Exception is a big catch-all.  Consider splitting out
+                 * Exception is a big catch-all. It's possible to enumerate
                  * the possibilities, but they all end up returning false.
-                 * If client-side logging is added, this is a desirable
-                 * location -- failures here end up returning false which
-                 * results in a null Row.
+                 * The reason to do this might be client-side logging but
+                 * there's no easy way to get the logger from here.
                  */
                 return false;
             }
         }
+        fillInDefaultValues(row);
+        return true;
+    }
 
-        /*
-         * Use the fields from the current (expected) table version in
-         * the record to construct the returned row.  This will add
-         * default values for missing fields and implicitly remove
-         * (ignore) fields that have been removed.
-         */
+    /*
+     * The stored record was key-only. In the face of possible schema
+     * evolution this does not mean that the returned row should not
+     * contain any fields. It's possible that the current (expected)
+     * table version has added non-key fields to a previously key-only
+     * table. Such fields need to either be initialized with null or
+     * default values.
+     *
+     * Default values for new fields added to non-key-only tables are
+     * handled in the decoding code called above (SimpleAvroReader)
+     * because default values are returned by the ResolvingDecoder.
+     */
+    private void fillInDefaultValues(RecordValueImpl row) {
         for (Map.Entry<String, FieldMapEntry> entry :
                  getFields(version).entrySet()) {
             FieldMapEntry fme = entry.getValue();
             String fieldName = entry.getKey();
             if (!isKeyComponent(fieldName)) {
-                Object o = (result != null ? result.get(fieldName) : null);
-                if (o != null) {
-                    Schema fieldSchema = schema.getField(fieldName).schema();
-                    row.put(fieldName, FieldValueImpl.
-                            fromAvroValue(fme.getField(), o, fieldSchema));
+                if (fme.hasDefaultValue()) {
+                    row.put(fieldName, fme.getDefaultValue());
                 } else if (fme.isNullable()) {
                     row.putNull(fieldName);
-                } else {
-                    row.put(fieldName, fme.getDefaultValue());
                 }
             }
         }
-        return true;
     }
 
     /**
      * Create a Row from the Value.
      */
-    RowImpl rowFromValueVersion(ValueVersion vv, RowImpl row) {
+    @SuppressWarnings("deprecation")
+    public RowImpl rowFromValueVersion(ValueVersion vv, RowImpl row) {
 
         assert row != null;
 
-        /*
-         * Set the Version for the Row
-         */
         row.setVersion(vv.getVersion());
+
+        if (vv.getValue() == null) {
+            return row;
+        }
+
         byte[] data = vv.getValue().getValue();
 
         /*
@@ -1379,7 +1473,9 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
          * Do the check for schema after the check for the correct format
          * to filter out non-table rows in the case where the table is key-only
          * and there is a KV key in the key space that doesn't belong to the
-         * table.
+         * table. If there is no schema the table is currently key-only, which
+         * means that all non-key fields should be null, and there are no
+         * default values, so just return.
          */
         if (setSchema(false) == null) {
             return row;
@@ -1393,15 +1489,15 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
 
     /**
      * Evolve a table by adding a new version associated with a new set of
-     * fields.  Evolutionary changes are limited to adding/removing non-key
-     * fields.  Evolution is always relative to the latest version.
+     * fields or a new TTL.  Evolutionary changes are limited to adding/removing
+     * non-key fields.  Evolution is always relative to the latest version.
      *
      * When evolution occurs this method will be called twice.  The first time
      * is on the client side where the changes are made transiently.  The
      * second time is on the server when the metadata is to be updated.  That
      * is where the version check can fail.
      */
-    void evolve(FieldMap newFields) {
+    void evolve(FieldMap newFields, TimeToLive newTTL) {
         if (version == 255) {
             throw new IllegalCommandException
                 ("Can't evolve the table any further; too many versions");
@@ -1417,6 +1513,7 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
                 ("Table evolution must be performed on the latest version");
         }
         versions.add(newFields);
+        ttl = newTTL;
         if (version != 0) {
             setVersion(version + 1);
         }
@@ -1446,7 +1543,7 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
          * This is harmless and the code is simpler this way.
          */
         for (FieldMap map : versions) {
-            FieldDef def = findTableField(new TableField(map, fieldName));
+            FieldDef def = findTableField(new TablePath(map, fieldName));
             if (def != null) {
 
                 /*
@@ -1539,11 +1636,21 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
         ObjectNode o = JsonUtils.createObjectNode();
         o.put("type", "table");
         o.put("name", getName());
+        if (getDefaultTTL() != null) {
+            o.put(TTL, getDefaultTTL().toString());
+        }
         o.put("owner", owner == null ? null : owner.toString());
+        if (sysTable) {
+            o.put("sysTable", sysTable);
+        }
         if (r2compat) {
             o.put("r2compat", r2compat);
         }
-        o.put(DESC, description);
+
+        if (description != null) {
+            o.put(DESC, description);
+        }
+
         if (parent != null) {
             o.put("parent", parent.getName());
         }
@@ -1554,6 +1661,12 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
         key = o.putArray("primaryKey");
         for (String fieldName : primaryKey) {
             key.add(fieldName);
+        }
+        if (primaryKeySizes != null) {
+            key = o.putArray(PKEY_SIZES);
+            for (int size : primaryKeySizes) {
+                key.add(size);
+            }
         }
 
         /*
@@ -1623,9 +1736,10 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
                      * using "[]".  If so, try getting the field definition
                      * directly.
                      */
-                    TableField tableField = new TableField(this, fieldName);
-                    if (tableField.isComplex()) {
-                        FieldDefImpl def = findTableField(tableField);
+                    TablePath tablePath = new TablePath(this, fieldName);
+
+                    if (tablePath.isComplex()) {
+                        FieldDefImpl def = findTableField(tablePath);
                         if (def != null) {
                             fnode.put(NAME,
                                       translateToExternalField
@@ -1857,7 +1971,8 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
          * default values are not relevant to primary keys, so they are
          * ignored.
          */
-        for (String pkField : primaryKey) {
+        for (int i = 0; i < primaryKey.size(); i++) {
+            String pkField = primaryKey.get(i);
             FieldDef field = getField(pkField);
             if (field == null) {
                 throw new IllegalCommandException
@@ -1869,7 +1984,136 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
                     ("Field type cannot be part of a primary key: " +
                      field.getType() + ", field name: " + pkField);
             }
+            if (primaryKeySizes != null) {
+                validateKeyFieldSize(field, primaryKeySizes.get(i));
+            }
         }
+    }
+
+    private void validateKeyFieldSize(FieldDef field, int size) {
+        if (size != 0 && !(field.isInteger())) {
+                throw new IllegalCommandException
+                    ("Only Integer sizes can be constrained. Invalid type: " +
+                     field.getType());
+        }
+
+        /* 0 means no restriction */
+        if (size != 0) {
+            if (size < 1 || size > 5) {
+                throw new IllegalCommandException
+                    ("Size constraint value on primary key must be between " +
+                     "1 and 5. Invalid value: " + size);
+            }
+        }
+    }
+
+    /**
+     * Deserialize a record encoded in avro. This API is used by the export
+     * utility to deserialize a record using the version of the table that was
+     * exported and NOT the latest evolved version of the table.
+     *
+     * @param writerSchema avro schema used to write the record value
+     * @param readerSchema avro schema used to read the record value
+     * @param row
+     * @param data record in bytes
+     * @param offset
+     * @param tableVersion version of the table used for export
+     */
+    public void createExportRowFromValueSchema(Schema writerSchema,
+                                               Schema readerSchema,
+                                               RowImpl row,
+                                               byte[] data,
+                                               int offset,
+                                               int tableVersion) {
+
+        if (data.length >= (offset + 1)) {
+            /*
+             * Move the offset past table version byte.
+             */
+            offset++;
+
+            if (readerSchema == null) {
+                readerSchema = schema;
+            }
+
+            Decoder decoder = TableJsonUtils.getDecoderFactory().binaryDecoder
+                (data, offset, (data.length - offset), null);
+
+            SimpleAvroReader reader =
+                new SimpleAvroReader(writerSchema, readerSchema, row);
+            try {
+                reader.read(decoder);
+            } catch (Exception e) {
+                /*
+                 * Return row without the value portion
+                 * Fall through
+                 */
+            }
+            return;
+        }
+        fillInDefaultValues(row);
+    }
+
+    /**
+     * Use table schema (primary key) to create a Row record with values from
+     * the key parameter (derived from Key). This is used by the import utility
+     * to create a Row record using the key field from an external record. The
+     * external record might have been created from a different kvstore and
+     * hence may have a different table idString than the table in this store.
+     * Table idString mismatch will be ignored since the objective is to
+     * populate the table with the key values from an external record. If there
+     * is a key mismatch (by field type and number of fields), false is returned
+     */
+    public boolean createImportRowFromKeyBytes(Row keyRecord,
+                                               BinaryKeyIterator keyIter,
+                                               Iterator<String> pkIter) {
+
+        if (parent != null) {
+            if (!(parent).
+                    createImportRowFromKeyBytes(keyRecord, keyIter, pkIter)) {
+                return false;
+            }
+        }
+
+        assert !keyIter.atEndOfKey();
+
+        setTableVersion(keyRecord);
+        keyIter.next();
+
+        /*
+         * Fill in values for primary key components that belong to this
+         * table.
+         */
+        String lastKeyField = primaryKey.get(primaryKey.size() - 1);
+
+        while (pkIter.hasNext()) {
+
+            /*
+             * If the table in the kvstore has more key components than the
+             * key components in the record being imported return false. The
+             * import utility will reject this record
+             */
+            if (keyIter.atEndOfKey()) {
+                return false;
+            }
+
+            String field = pkIter.next();
+            String val = keyIter.next();
+            FieldDefImpl type = (FieldDefImpl)getField(field);
+
+            try {
+                keyRecord.put(field,
+                    FieldDefImpl.createValueFromKeyString(val, type));
+            } catch (Exception e) {
+                return false;
+            }
+
+            if (field.equals(lastKeyField)) {
+                break;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -1966,12 +2210,15 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
          * table.
          */
         String lastKeyField = primaryKey.get(primaryKey.size() - 1);
+
         while (pkIter.hasNext()) {
             assert !keyIter.atEndOfKey();
             String field = pkIter.next();
             String val = keyIter.next();
+            FieldDefImpl type = (FieldDefImpl)getField(field);
             try {
-                keyRecord.put(field, createFromKey(val, getField(field)));
+                keyRecord.put(
+                    field, FieldDefImpl.createValueFromKeyString(val, type));
             } catch (Exception e) {
                 return false;
             }
@@ -1980,30 +2227,6 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
             }
         }
         return true;
-    }
-
-    /**
-     * Create FieldValue instances from String formats for keys.
-     */
-    private FieldValue createFromKey(String value,
-                                     FieldDef field) {
-        switch (field.getType()) {
-        case INTEGER:
-            return new IntegerValueImpl(value);
-        case LONG:
-            return new LongValueImpl(value);
-        case STRING:
-            return new StringValueImpl(value);
-        case DOUBLE:
-            return new DoubleValueImpl(value);
-        case FLOAT:
-            return new FloatValueImpl(value);
-        case ENUM:
-            return EnumValueImpl.createFromKey((EnumDef)field, value);
-        default:
-            throw new IllegalCommandException("Type is not allowed in a key: " +
-                                              field.getType());
-        }
     }
 
     /**
@@ -2027,7 +2250,7 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
      * serialization/deserializing, where the data-oriented code needs to know
      * the generated names as well. A possible solution is to modify the table
      * metadata to keep both names internally -- one for display and another
-     * for serializaiton/deserialization.  That is a schema change and can be
+     * for serialization/deserialization.  That is a schema change and can be
      * considered for the future.
      *
      * The issue above impacts the ability to easily modularize types that want
@@ -2042,13 +2265,21 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
      * @return the JSON string representing the schema, or null if there are
      * no serializable fields in the table, in which case this is a key-only
      * table.
+     *
+     * This is public access so it can be used by export code.
      */
-    private String generateAvroSchema(final int versionToUse, boolean pretty) {
+    public String generateAvroSchema(final int versionToUse, boolean pretty) {
         boolean hasSchema = false;
         ObjectWriter writer = JsonUtils.createWriter(pretty);
         ObjectNode sch = JsonUtils.createObjectNode();
         sch.put("type", "record");
-        sch.put("name", getName());
+        String schemaName = getName();
+
+        /* Replace dollar sign of system table name for Avro compatability */
+        if (sysTable) {
+            schemaName = schemaName.replace("$", "_");
+        }
+        sch.put("name", schemaName);
         ArrayNode array = sch.putArray("fields");
 
         Map<String, FieldMapEntry> mapToUse = getFields(versionToUse);
@@ -2142,11 +2373,14 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
      * a letter.  This is necessary for Avro schema, which only applies to
      * field names but it's simpler to enforce the restriction for all strings.
      */
-    public static void validateComponent(String comp, boolean isId,
+    public static void validateComponent(String comp,
+                                         boolean isId,
                                          boolean allowDot) {
         List<String> components =
-            allowDot ? new TableField((FieldMap)null, comp).getComponents()
-            : new ArrayList<String>();
+            (allowDot ?
+             new TablePath((FieldMap)null, comp).getSteps() :
+             new ArrayList<String>());
+
         if (!allowDot) {
             components.add(comp);
         }
@@ -2180,52 +2414,27 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
         }
     }
 
+    /**
+     * A system table name must start with "SYS$" prefix. The dollar sign of
+     * system table prefix name will be replaced with "_" when generate Avro
+     * schema. It is neccesary for Avro that the rest of the table name except
+     * prefix must be constrainted to alphanumeric characters plus "_".
+     */
+    public static void validateSystemTableName(String tableName) {
+        final String[] nameComps = tableName.split("\\$");
+        if (nameComps.length > 2) {
+            throw new IllegalArgumentException(
+                "System table names must contains only one dollar sign");
+        }
+        if (nameComps[0].equalsIgnoreCase(SYSTEM_TABLE_PREFIX)) {
+            throw new IllegalArgumentException(
+                "System table names must start with " + SYSTEM_TABLE_PREFIX);
+        }
+        validateComponent(nameComps[1], false, false);
+    }
+
     static String[] parseFullName(String fullName) {
         return fullName.split(SEPARATOR_REGEX);
-    }
-
-    /**
-     * Returns a list of field names components in a complex field name,
-     * or a single name if the field name is not complex (this is for
-     * simplicity in use).
-     */
-    public static List<String> parseComplexFieldName(String fname) {
-        List<String> list = new ArrayList<String>();
-        StringBuilder sb = new StringBuilder();
-
-        for (char ch : fname.toCharArray()) {
-            if (ch == '.') {
-                if (sb.length() == 0) {
-                    throw new IllegalArgumentException
-                        ("Malformed field name: " + fname);
-                }
-                list.add(sb.toString());
-                sb.delete(0, sb.length());
-            } else {
-                sb.append(ch);
-            }
-        }
-
-        if (sb.length() > 0) {
-            list.add(sb.toString());
-        }
-        return list;
-    }
-
-    /**
-     * Constructs a single dot-separated string field path from one or
-     * more components.
-     */
-    public static String createFieldName(Iterator<String> iter) {
-        StringBuilder sb = new StringBuilder();
-        while (iter.hasNext()) {
-            String current = iter.next();
-            sb.append(current);
-            if (iter.hasNext()) {
-                sb.append(TableImpl.SEPARATOR);
-            }
-        }
-        return sb.toString();
     }
 
     /*
@@ -2252,8 +2461,12 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
      * specific fields copied.  This varies for Row and PrimaryKey.  IndexKey
      * does not use this method because it may reference nested fields.
      */
-    static void  populateRecord(RecordValueImpl record,
+    static void populateRecord(RecordValueImpl record,
                                 RecordValue value) {
+        if (record instanceof IndexKey) {
+            throw new IllegalStateException(
+                "Index keys cannot be passed to TableImpl.populateRecord");
+        }
         for (String s : record.getFields()) {
             FieldValue v = value.get(s);
             if (v != null) {
@@ -2263,9 +2476,22 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
         record.validate();
     }
 
+    /**
+     * Checks if a given index is a duplicate of an existing index. Two indices
+     * are considered duplicate if all following conditions are true
+     *
+     * 1. The two indices are of the same type, e.g., both are secondary
+     * indices or both are text indices;
+     * 2. The two indices share the same field or same set of fields, e.g.,
+     * both indices are defined on the same columns.
+     *
+     * @param index  index to check
+     */
     void checkForDuplicateIndex(Index index) {
         for (Map.Entry<String, Index> entry : indexes.entrySet()) {
-            if (index.getFields().equals(entry.getValue().getFields())) {
+            final Index existingIndex = entry.getValue();
+            if (index.getType().equals(existingIndex.getType()) &&
+                index.getFields().equals(existingIndex.getFields())) {
                 throw new IllegalCommandException
                     ("Index is a duplicate of an existing index with " +
                      "another name.  Existing index name: " +
@@ -2280,7 +2506,7 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
     }
 
     /**
-     * See findTableField(TableField) for semantics.
+     * See findTableField(TablePath) for semantics.
      * This is internal for now, but public to allow test case access.
      */
     public FieldDefImpl findTableField(String fieldName) {
@@ -2288,7 +2514,7 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
     }
 
     static FieldDefImpl findTableField(FieldMap fieldMap, String fieldName) {
-        return findTableField(new TableField(fieldMap, fieldName));
+        return findTableField(new TablePath(fieldMap, fieldName));
     }
 
     /**
@@ -2300,7 +2526,7 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
      *
      * @return the FieldDef for the field or null if the field does not exist.
      */
-    static FieldDefImpl findTableField(TableField field) {
+    static FieldDefImpl findTableField(TablePath field) {
 
         ListIterator<String> fieldPath = field.iterator();
         assert fieldPath.hasNext();
@@ -2389,97 +2615,368 @@ public class TableImpl implements Table, MetadataInfo, Ownable,
         return owner;
     }
 
+    @Override
+    public TimeToLive getDefaultTTL() {
+        return ttl;
+    }
+
     /**
-     * This class encapsulates methods used to help parse and navigate paths to
-     * nested fields in metadata, although it works with both simple and
-     * complex paths.
-     *
-     * Simple fields (e.g. "name") have a single component. Fields that
-     * navigate into nested fields (e.g. "address.city") have multiple
-     * components.  The state maintained by TableField includes:
-     * fieldName -- the full string name or path.
-     * fieldComponents -- a parsed List of components of the path.  Simple
-     *   fields will have a single entry. Complex fields, more than one.
-     * isComplex -- true if this is a complex path.
-     * fieldMap -- the FieldMap of the containing object that provides context
-     *   for navigations.  In most cases it will be the FieldMap associated with
-     *   a TableImpl.  In some cases it is the FieldMap of a RecordValueImpl.
-     *
-     * Field names are case-insensitive, so strings are stored lower-case to
-     * simplify case-insensitive comparisons.
+     * Whether this table is system table, internal use only.
      */
-    static class TableField {
-        final private String fieldName;
-        final private List<String> fieldComponents;
-        final private boolean isComplex;
-        final private FieldMap fieldMap;
+    public boolean isSystemTable() {
+        return sysTable;
+    }
 
-        protected TableField(TableImpl table, String fieldName) {
-            this(table.getFieldMap(), fieldName);
-        }
+    /**
+     * Whether this table need to be exported, internal use only.
+     */
+    public boolean dontExport() {
+        /*
+         * May change in future, currently only system tables don't need to
+         * be exported.
+         */
+        return isSystemTable();
+    }
 
-        protected TableField(FieldMap fieldMap, String fieldName) {
-            this.fieldMap = fieldMap;
-            this.fieldName = fieldName.toLowerCase();
-            fieldComponents = parseComplexFieldName(fieldName);
-            isComplex = (fieldComponents.size() > 1);
-        }
+    /**
+     * An internal class to do the work of deserializing Avro-encoded table
+     * records without creating a tree of objects. The values are decoded
+     * directly into the target Row.
+     *
+     * If the reader and writer schemas are the same this is fast. If they are
+     * not the same it's necessary to create a ResolvingDecoder to handle the
+     * schema evolution. This is slightly slower, but still a lot faster than
+     * creating a tree using a ResolvingDecoder unconditionally, which is what
+     * the previous code did.
+     *
+     * TODO: add the ability to selectively decode, creating sparse Rows
+     */
+    private static class SimpleAvroReader {
+        final private RowImpl row;
+        /*
+         * The reader (expected) schema. The writer schema does not need to
+         * be part of the state.
+         */
+        final private Schema expected;
+        final private ResolvingDecoder resolver; // null if no schema evolution
+        final RecordDefImpl recordDef;
 
-        final FieldMap getFieldMap() {
-            return fieldMap;
-        }
-
-        final boolean isComplex() {
-            return isComplex;
-        }
-
-        final String getFieldName() {
-            return fieldName;
-        }
-
-        final List<String> getComponents() {
-            return fieldComponents;
-        }
-
-
-        ListIterator<String> iterator() {
-            return fieldComponents.listIterator();
-        }
-
-        final String getLastComponent() {
-            return fieldComponents.get(fieldComponents.size() - 1);
+        /**
+         * @param writer the writer schema used to write the record
+         * @param reader the reader schema, which is the one expected by the
+         * caller and represents the current state of the table schema
+         * @param row the target Row for the data, partially populated, or not
+         */
+        private SimpleAvroReader(Schema writer, Schema reader, RowImpl row) {
+            this.expected = reader;
+            this.row = row;
+            this.recordDef = row.getDefinition();
+            resolver = (writer == reader ? null :
+                        getResolvingDecoder(writer, reader));
         }
 
         /**
-         * Returns the FieldDef associated with the first (and maybe only)
-         * component of the field.
+         * Construct a resolving decoder to handle schema evolution
          */
-        FieldDefImpl getFirstDef() {
-            return (FieldDefImpl) fieldMap.get(fieldComponents.get(0));
+        private static ResolvingDecoder getResolvingDecoder(
+            Schema actual, Schema expected) {
+            try {
+                return TableJsonUtils.getDecoderFactory().resolvingDecoder(
+                    Schema.applyAliases(actual, expected), expected, null);
+            } catch (IOException ioe) {}
+            return null;
         }
 
-        @Override
-        public String toString() {
-            return fieldName;
+        private FieldValue read(Decoder in) throws IOException {
+            if (resolver != null) {
+                return readWithResolver(in);
+            }
+            readRecord(expected, recordDef, row, in);
+            return row;
         }
+
+        private FieldValue readWithResolver(Decoder in)
+            throws IOException {
+
+            resolver.configure(in);
+            readRecord(expected, recordDef, row, resolver);
+            resolver.drain();
+            return row;
+        }
+
+        private FieldValue read(Schema schema,
+                                FieldDefImpl def,
+                                Decoder in)
+            throws IOException {
+
+            switch (schema.getType()) {
+
+            case RECORD:  return readRecord(schema, def, null, in);
+            case ENUM:    return readEnum(def, in);
+            case ARRAY:   return readArray(schema, def, in);
+            case MAP:     return readMap(schema, def, in);
+            case UNION:   return read(
+                schema.getTypes().get(in.readIndex()), def, in);
+            case FIXED:   return readFixed(schema, def, in);
+            case STRING:  return stringDef.createString(in.readString());
+            case BYTES:   return readBinary(in);
+            case INT:     return integerDef.createInteger(in.readInt());
+            case LONG:    return longDef.createLong(in.readLong());
+            case FLOAT:   return floatDef.createFloat(in.readFloat());
+            case DOUBLE:  return doubleDef.createDouble(in.readDouble());
+            case BOOLEAN: return booleanDef.createBoolean(in.readBoolean());
+            case NULL:    in.readNull(); return NullValueImpl.getInstance();
+            default: throw new IllegalStateException("Unknown type: " +
+                                                     schema);
+            }
+        }
+
+        private RecordValueImpl readRecord(Schema schema,
+                                           FieldDefImpl def,
+                                           RecordValueImpl record,
+                                           Decoder in) throws IOException {
+            if (in instanceof ResolvingDecoder) {
+                return resolveRecord(def, record, (ResolvingDecoder) in);
+            }
+
+            RecordDefImpl rdef = (RecordDefImpl) def;
+            if (record == null) {
+                record = rdef.createRecord();
+            }
+
+            for (Field f : schema.getFields()) {
+                record.put(f.name(),
+                           read(f.schema(), rdef.getField(f.name()), in));
+            }
+            return record;
+        }
+
+        /**
+         * A variant of readRecord that is used for schema evolution
+         * between the writer and reader schemas.
+         */
+        private RecordValueImpl resolveRecord(FieldDefImpl def,
+                                              RecordValueImpl record,
+                                              ResolvingDecoder in)
+            throws IOException {
+
+            RecordDefImpl rdef = (RecordDefImpl) def;
+            if (record == null) {
+                record = rdef.createRecord();
+            }
+            for (Field f : in.readFieldOrder()) {
+                record.put(f.name(), read(f.schema(),
+                                          rdef.getField(f.name()),
+                                          in));
+            }
+            return record;
+        }
+
+        private MapValueImpl readMap(Schema schema,
+                                     FieldDefImpl def,
+                                     Decoder in) throws IOException {
+
+            MapDefImpl mdef = (MapDefImpl) def;
+            MapValueImpl map = mdef.createMap();
+            Schema valueType = schema.getValueType();
+            for (long i = in.readMapStart(); i != 0; i = in.mapNext()) {
+                for (long j = 0; j < i; j++) {
+                    String key = in.readString();
+                    map.put(key, read(valueType,
+                                      (FieldDefImpl)mdef.getElement(),
+                                      in));
+                }
+            }
+            return map;
+        }
+
+        private ArrayValueImpl readArray(Schema schema,
+                                         FieldDefImpl def,
+                                         Decoder in) throws IOException {
+
+            ArrayDefImpl adef = (ArrayDefImpl) def;
+            ArrayValueImpl array = adef.createArray();
+            Schema elementType = schema.getElementType();
+            for (long i = in.readArrayStart(); i != 0; i = in.arrayNext()) {
+                for (long j = 0; j < i; j++) {
+                    array.add(read(elementType,
+                                   (FieldDefImpl)adef.getElement(),
+                                   in));
+                }
+            }
+            return array;
+        }
+
+        private FieldValue readEnum(FieldDefImpl def,
+                                    Decoder in) throws IOException {
+
+            EnumDefImpl edef = (EnumDefImpl) def;
+            return edef.createEnum(in.readEnum());
+        }
+
+        private FieldValue readFixed(Schema schema,
+                                     FieldDefImpl def,
+                                     Decoder in) throws IOException {
+            int size = schema.getFixedSize();
+            byte[] bytes = new byte[size];
+            in.readFixed(bytes, 0, size);
+            return def.createFixedBinary(bytes);
+        }
+
+        private BinaryValueImpl readBinary(Decoder in)
+            throws IOException {
+            return binaryDef.createBinary(in.readBytes(null).array());
+        }
+    }
+
+    /**
+     * Below are methods to serialize a Row into an Avro encoding but bypassing
+     * the creation of a GenericRecord from the Row. This code uses
+     * FieldDefImpl and FieldValueImpl instances as the schema rather than
+     * avro schema. This is safe because the table definition is what generates
+     * the avro schema in the first place. This code uses the Avro Encoder class,
+     * which is responsible for the serialization format.
+     */
+    private void writeAvro(Encoder encoder,
+                           FieldValueImpl fieldValue)
+        throws IOException {
+
+        switch (fieldValue.getType()) {
+        case INTEGER:
+            encoder.writeInt(fieldValue.asInteger().get());
+            break;
+        case LONG:
+            encoder.writeLong(fieldValue.asLong().get());
+            break;
+        case DOUBLE:
+            encoder.writeDouble(fieldValue.asDouble().get());
+            break;
+        case FLOAT:
+            encoder.writeFloat(fieldValue.asFloat().get());
+            break;
+        case STRING:
+            encoder.writeString(fieldValue.asString().get());
+            break;
+        case BOOLEAN:
+            encoder.writeBoolean(fieldValue.asBoolean().get());
+            break;
+        case BINARY:
+            encoder.writeBytes(fieldValue.asBinary().get());
+            break;
+        case FIXED_BINARY:
+            encoder.writeFixed(fieldValue.asFixedBinary().get());
+            break;
+        case ENUM:
+            /*
+             * this depends on Avro's indexes on enums being the same as ours
+             */
+            encoder.writeEnum(fieldValue.asEnum().getIndex());
+            break;
+        case RECORD:
+            RecordValueImpl rval = (RecordValueImpl) fieldValue;
+            writeAvroRecord(encoder, rval, false);
+            break;
+        case MAP:
+            writeAvroMap(encoder, (MapValueImpl) fieldValue);
+            break;
+        case ARRAY:
+            writeAvroArray(encoder, (ArrayValueImpl)fieldValue);
+            break;
+        default:
+            throw new IllegalStateException("Unexpected type: " + fieldValue);
+        }
+    }
+
+    /**
+     * Encode/write a record
+     * @param encode the Encoder instance responsible for serialization
+     * @param record the RecordValueImpl to encode
+     * @param isRow true if this is the first call of this method serializing
+     * a row. This is needed to filter out primary key components
+     */
+    private void writeAvroRecord(Encoder encoder,
+                                 RecordValueImpl record,
+                                 boolean isRow)
+        throws IOException {
 
         /*
-         * The raw field name is sufficient to distinguish TableField
-         * instances.  Comparisons are never made across tables, and
-         * all paths within the same table are unique.
+         * The complication in this loop is that fields in records may
+         * be nullable or not and they may have default values. Not-nullable
+         * fields must have default values.
+         *
+         * Nullable fields are represented in Avro as a union, which is why
+         * the writeIndex() calls are necessary to discrimiate the type.
+         *
+         * Fields must be written in field order because Avro schemas are
+         * ordered.
          */
-        @Override
-        public boolean equals(Object obj) {
-            if (obj instanceof TableField) {
-                TableField other = (TableField) obj;
-                return fieldName.equalsIgnoreCase(other.fieldName);
-            }
-            return false;
-        }
+        FieldMap fieldMap = record.getDefinition().getFieldMap();
+        for (String fieldName : fieldMap.getFieldOrder()) {
+            if (!isRow || !isKeyComponent(fieldName)) {
+                FieldValueImpl fv = (FieldValueImpl) record.get(fieldName);
+                FieldMapEntry fme = fieldMap.getFieldMapEntry(fieldName);
+                if (fv == null || fv.isNull()) {
+                    if (fv == null) {
+                        fv = fme.getDefaultValue();
+                    }
+                    if (fv.isNull()) {
+                        if (!fme.isNullable()) {
+                            throw new IllegalCommandException
+                                ("The field can not be null: " + fieldName);
+                        }
+                        /*
+                         * null is always the first choice in the union when
+                         * there is no default values
+                         */
+                        encoder.writeIndex(0);
+                        encoder.writeNull();
+                        continue;
+                    }
+                }
 
-        @Override
-        public int hashCode() {
-            return fieldName.hashCode();
+                if (fme.isNullable()) {
+                    /*
+                     * nullable fields with a default value generate schemas
+                     * with the default type first in the union.
+                     */
+                    encoder.writeIndex(fme.hasDefaultValue() ? 0 : 1);
+                }
+                writeAvro(encoder, fv);
+            }
         }
+    }
+
+    /**
+     * Write a Map
+     */
+    private void writeAvroMap(Encoder encoder,
+                              MapValueImpl mapValue)
+        throws IOException {
+
+        encoder.writeMapStart();
+        encoder.setItemCount(mapValue.size());
+        for (Map.Entry<String, FieldValue> entry :
+                 mapValue.getFieldsInternal().entrySet()) {
+            encoder.startItem();
+            encoder.writeString(entry.getKey());
+            writeAvro(encoder, (FieldValueImpl) entry.getValue());
+        }
+        encoder.writeMapEnd();
+    }
+
+    /**
+     * Write an Array
+     */
+    private void writeAvroArray(Encoder encoder,
+                                ArrayValueImpl arrayValue)
+        throws IOException {
+
+        encoder.writeArrayStart();
+        encoder.setItemCount(arrayValue.size());
+        for (FieldValue fv : arrayValue.getArrayInternal()) {
+            encoder.startItem();
+            writeAvro(encoder, (FieldValueImpl) fv);
+        }
+        encoder.writeArrayEnd();
     }
 }

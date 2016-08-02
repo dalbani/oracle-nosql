@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -54,6 +54,7 @@ import static oracle.kv.impl.param.ParameterState.BOOTSTRAP_TYPE;
 import static oracle.kv.impl.param.ParameterState.GLOBAL_TYPE;
 import static oracle.kv.impl.param.ParameterState.REPNODE_TYPE;
 import static oracle.kv.impl.param.ParameterState.SNA_TYPE;
+import static oracle.kv.impl.param.ParameterState.ARBNODE_TYPE;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -67,6 +68,7 @@ import java.util.logging.Logger;
 
 import oracle.kv.KVVersion;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.BootstrapParams;
 import oracle.kv.impl.admin.param.GlobalParams;
 import oracle.kv.impl.admin.param.RepNodeParams;
@@ -75,6 +77,7 @@ import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.param.LoadParameters;
 import oracle.kv.impl.param.ParameterMap;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
 
@@ -167,7 +170,7 @@ public class ConfigUtils {
         if (bp.getSoftwareVersion() == null) {
             final KVVersion previousVersion =
                                 KVVersion.R2_0_23; // R2.0
-             
+
             bp.setSoftwareVersion(previousVersion);
 
             if (logger != null) {
@@ -300,12 +303,37 @@ public class ConfigUtils {
         return null;
     }
 
+    /**
+     * Get ArbNodeParams, return null if they do not exist.
+     */
+    public static ArbNodeParams getArbNodeParams(File configFile,
+                                                 ArbNodeId arbid,
+                                                 Logger logger) {
+
+        LoadParameters lp = LoadParameters.getParameters(configFile, logger);
+        ParameterMap pm =
+            lp.getMap(arbid.getFullName(), ARBNODE_TYPE);
+        if (pm != null) {
+            return new ArbNodeParams(pm);
+        }
+        return null;
+    }
+
     public static List<ParameterMap> getRepNodes(File configFile,
                                                  Logger logger) {
 
         LoadParameters lp = LoadParameters.getParameters(configFile, logger);
         return lp.getAllMaps(REPNODE_TYPE);
     }
+
+
+    public static List<ParameterMap> getArbNodes(File configFile,
+                                                 Logger logger) {
+
+        LoadParameters lp = LoadParameters.getParameters(configFile, logger);
+        return lp.getAllMaps(ARBNODE_TYPE);
+    }
+
 
     /**
      * Remove the component from the file.  If the component can't be found by
@@ -349,6 +377,14 @@ public class ConfigUtils {
                                              Logger logger) {
         return getParameterMap(snp, gp, rnid.getFullName(), logger);
     }
+
+    public static ParameterMap getArbNodeMap(StorageNodeParams snp,
+                                             GlobalParams gp,
+                                             ArbNodeId arbid,
+                                             Logger logger) {
+        return getParameterMap(snp, gp, arbid.getFullName(), logger);
+    }
+
 
     public static ParameterMap getGlobalMap(StorageNodeParams snp,
                                             GlobalParams gp,

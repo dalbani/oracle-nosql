@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -74,8 +74,9 @@ public class ShellInputReader {
 
     private static final int MID_JL2_CR_READLINE = 0x00;
     private static final int MID_JL2_CR_GETTERM = 0x01;
+    private static final int MID_JL2_CR_SETEXPANDEVENTS = 0x02;
     private static final String[] METHODS_JL2_READER = {
-        "readLine", "getTerminal"
+        "readLine", "getTerminal", "setExpandEvents"
     };
     private static final int MID_JL2_TERM_GETHEIGHT = 0x00;
     private static final String[] METHODS_JL2_TERM = {
@@ -91,7 +92,9 @@ public class ShellInputReader {
     private static final MethodDef[] JL2ReaderMethodsDef = {
         new MethodDef(METHODS_JL2_READER[MID_JL2_CR_READLINE],
                       new Class[]{String.class, Character.class}),
-        new MethodDef(METHODS_JL2_READER[MID_JL2_CR_GETTERM], null)
+        new MethodDef(METHODS_JL2_READER[MID_JL2_CR_GETTERM], null),
+        new MethodDef(METHODS_JL2_READER[MID_JL2_CR_SETEXPANDEVENTS],
+                      new Class[]{boolean.class})
     };
     private static final MethodDef[] JL2TermMethodsDef = {
         new MethodDef(METHODS_JL2_TERM[MID_JL2_TERM_GETHEIGHT], null)
@@ -130,24 +133,27 @@ public class ShellInputReader {
 
     public ShellInputReader(InputStream input,
                             PrintStream output) {
-        this(input, output, null);
+        this(input, output, null, false);
     }
 
     public ShellInputReader(Shell shell) {
-        this(shell.input, shell.output, getHistoryFile(shell));
+        this(shell.input, shell.output, getHistoryFile(shell),
+             shell.isJlineEventDesignatorDisabled());
         loadCommandHistory(shell);
     }
 
     public ShellInputReader(InputStream input,
                             PrintStream output,
-                            File historyFile) {
-        initInputReader(input, output, historyFile);
+                            File historyFile,
+                            boolean disableExpandEvents) {
+        initInputReader(input, output, historyFile, disableExpandEvents);
         this.output = output;
     }
 
     private void initInputReader(InputStream input,
                                  PrintStream output1,
-                                 File historyFile) {
+                                 File historyFile,
+                                 boolean disableExpandEvents) {
         if (isJlineCompatiblePlatform()) {
             try {
                 Class<?> jReader = Class.forName(JL2_READER_CLS);
@@ -187,6 +193,14 @@ public class ShellInputReader {
                             new Class[]{Class.forName(JL2_HISTORY_CLS)}),
                         new Object[]{jFileHistoryObj});
                     setHistoryFileSize();
+                }
+
+                if (disableExpandEvents) {
+                    /**
+                     * Disable the event designators, it is enabled by
+                     * default.
+                     */
+                    enableExpandEvents(false);
                 }
             } catch (Exception ignored)  /* CHECKSTYLE:OFF */ {
             } /* CHECKSTYLE:ON */
@@ -335,13 +349,15 @@ public class ShellInputReader {
     public String readLine(String promptString)
         throws IOException {
 
-        String prompt1 = (promptString != null)?promptString:this.prompt;
+        String promptStr = (promptString != null)? promptString: this.prompt;
         if (jReaderObj != null) {
             String name = METHODS_JL2_READER[MID_JL2_CR_READLINE];
             return (String)invokeJReaderMethod(jReaderObj, name,
-                                               new Object[]{prompt1, null});
+                                               new Object[]{promptStr, null});
         }
-        output.print(prompt1);
+        if (promptStr != null) {
+            output.print(promptStr);
+        }
         return inputReader.readLine();
     }
 
@@ -379,6 +395,17 @@ public class ShellInputReader {
             } /* CHECKSTYLE:ON */
         }
         return getTermHeightImpl();
+    }
+
+    private void enableExpandEvents(boolean enable) {
+        if (jReaderObj != null) {
+            String name = METHODS_JL2_READER[MID_JL2_CR_SETEXPANDEVENTS];
+            try {
+                invokeJReaderMethod(jReaderObj, name,
+                                    new Object[]{Boolean.valueOf(enable)});
+            } catch (IOException ignored)  /* CHECKSTYLE:OFF */ {
+            }
+        }
     }
 
     private Object invokeJReaderMethod(Object jReaderObj1,

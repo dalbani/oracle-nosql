@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -52,12 +52,14 @@ import oracle.kv.impl.admin.param.AdminParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.plan.task.ParallelBundle;
 import oracle.kv.impl.admin.plan.task.StartAdminV2;
-import oracle.kv.impl.admin.plan.task.StartRepNode;
+import oracle.kv.impl.admin.plan.task.StartNode;
 import oracle.kv.impl.admin.plan.task.WaitForAdminState;
-import oracle.kv.impl.admin.plan.task.WaitForRepNodeState;
+import oracle.kv.impl.admin.plan.task.WaitForNodeState;
 import oracle.kv.impl.security.KVStorePrivilege;
 import oracle.kv.impl.security.SystemPrivilege;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNode;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
@@ -95,10 +97,10 @@ public class StartServicesPlan extends AbstractPlan {
                          ". Please provide the id of an existing RepNode.");
                 }
 
-                startTasks.addTask(new StartRepNode(this, rn.getStorageNodeId(),
-                                                    rnId, true));
-                waitTasks.addTask(new WaitForRepNodeState(this, rnId,
-                                                        ServiceStatus.RUNNING));
+                startTasks.addTask(new StartNode(this, rn.getStorageNodeId(),
+                                                 rnId, true));
+                waitTasks.addTask(new WaitForNodeState(this, rnId,
+                                                       ServiceStatus.RUNNING));
             } else if (id instanceof AdminId) {
                 final AdminId adminId = (AdminId)id;
                 final AdminParams adminDbParams = dbParams.get(adminId);
@@ -116,6 +118,20 @@ public class StartServicesPlan extends AbstractPlan {
                 startTasks.addTask(new StartAdminV2(this, snId, adminId, true));
                 waitTasks.addTask(new WaitForAdminState(this, snId, adminId,
                                                         ServiceStatus.RUNNING));
+            } else if (id instanceof ArbNodeId) {
+                final ArbNodeId anId = (ArbNodeId)id;
+                final ArbNode an = topology.get(anId);
+
+                if (an == null) {
+                    throw new IllegalCommandException
+                        ("There is no ArbNode with id " + anId +
+                         ". Please provide the id of an existing ArbNode.");
+                }
+
+                startTasks.addTask(new StartNode(this, an.getStorageNodeId(),
+                                                 anId, true));
+                waitTasks.addTask(new WaitForNodeState(this, anId,
+                                                       ServiceStatus.RUNNING));
             } else {
                 throw new IllegalCommandException
                         ("Command not supported for " + id);
@@ -138,10 +154,6 @@ public class StartServicesPlan extends AbstractPlan {
     @Override
     public String getDefaultName() {
         return "Start Services";
-    }
-
-    @Override
-    void stripForDisplay() {
     }
 
     @Override

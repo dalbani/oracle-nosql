@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -57,6 +57,7 @@ import com.sleepycat.je.EnvironmentConfig;
 import com.sleepycat.je.config.EnvironmentParams;
 import com.sleepycat.je.rep.ReplicationConfig;
 import com.sleepycat.je.rep.ReplicationMutableConfig;
+import com.sleepycat.je.rep.arbiter.ArbiterConfig;
 import com.sleepycat.je.rep.impl.RepParams;
 
 /**
@@ -130,6 +131,11 @@ public class ParameterUtils {
         /* Ignore old primary node ID when restarting as secondary */
         RepParams.IGNORE_SECONDARY_NODE_ID.getName() + "=true;";
 
+    private static final String DEFAULT_ARB_CONFIG_PROPERTIES =
+        ReplicationConfig.ENV_UNKNOWN_STATE_TIMEOUT + "=10 s;" +
+        ReplicationConfig.FEEDER_TIMEOUT + "=10 s;" +
+        ReplicationConfig.REPLICA_TIMEOUT + "=10 s;" +
+        RepParams.MAX_CLOCK_DELTA + "=1 min";
     /**
      * Return an EnvironmentConfig set with the relevant parameters in this
      * object.
@@ -143,6 +149,45 @@ public class ParameterUtils {
             ec.setCacheSize(map.get(ParameterState.JE_CACHE_SIZE).asLong());
         }
         return ec;
+    }
+
+    /**
+     * Return ArbiterConfig set with the relevant parameters in this
+     * object.
+     */
+    public ArbiterConfig getArbConfig(String arbHome) {
+        return getArbConfig(arbHome, false);
+    }
+
+    private ArbiterConfig getArbConfig(String arbHome, boolean validateOnly) {
+        ArbiterConfig arbcfg;
+        arbcfg = new ArbiterConfig(createArbProperties());
+        if (arbHome != null) {
+            arbcfg.setArbiterHome(arbHome);
+        }
+        if (map.exists(ParameterState.JE_HELPER_HOSTS)) {
+            arbcfg.setHelperHosts(
+                map.get(ParameterState.JE_HELPER_HOSTS).asString());
+        }
+        if (map.exists(ParameterState.JE_HOST_PORT)) {
+
+            /*
+             * If in validating mode, setting the nodeHostPort param will not
+             * work correctly because in that case we are running on the admin
+             * host and not the target host.  If validating, treat the
+             * host:port as a single-value helper hosts string and validate
+             * directly.
+             */
+            String nhp = map.get(ParameterState.JE_HOST_PORT).asString();
+            if (validateOnly) {
+                RepParams.HELPER_HOSTS.validateValue(nhp);
+            } else {
+                arbcfg.setNodeHostPort(nhp);
+            }
+            arbcfg.setNodeName(map.get(ParameterState.AP_AN_ID).asString());
+        }
+        return arbcfg;
+
     }
 
     /**
@@ -169,6 +214,17 @@ public class ParameterUtils {
             ParameterUtils pu = new ParameterUtils(map);
             pu.getEnvConfig();
             pu.getRepEnvConfig(null, true, false);
+        } catch (Exception e) {
+            throw new IllegalCommandException("Incorrect parameters: " +
+                                              e.getMessage(), e);
+        }
+    }
+
+    public static void validateArbParams(ParameterMap map) {
+        /* Check for incorrect JE params. */
+        try {
+            ParameterUtils pu = new ParameterUtils(map);
+            pu.getArbConfig(null, true);
         } catch (Exception e) {
             throw new IllegalCommandException("Incorrect parameters: " +
                                               e.getMessage(), e);
@@ -255,6 +311,22 @@ public class ParameterUtils {
             if (removeReplication) {
                 removeRep(props);
             }
+        } catch (Exception e) {
+            /* TODO: do something about this? */
+        }
+        return props;
+    }
+
+
+    public Properties createArbProperties() {
+        Properties props = new Properties();
+        String propertyString = DEFAULT_ARB_CONFIG_PROPERTIES;
+        String configProperties = map.get(ParameterState.JE_MISC).asString();
+        if (configProperties != null) {
+            propertyString = propertyString + ";" + configProperties;
+        }
+        try {
+            props.load(ConfigUtils.getPropertiesStream(propertyString));
         } catch (Exception e) {
             /* TODO: do something about this? */
         }

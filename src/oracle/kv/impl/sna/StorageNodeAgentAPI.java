@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -47,6 +47,7 @@ import java.rmi.RemoteException;
 import java.util.List;
 import java.util.Set;
 
+import oracle.kv.impl.arb.ArbNode;
 import oracle.kv.impl.admin.param.SecurityParams.KrbPrincipalInfo;
 import oracle.kv.impl.metadata.Metadata;
 import oracle.kv.impl.metadata.MetadataInfo;
@@ -59,6 +60,7 @@ import oracle.kv.impl.sna.masterBalance.MasterBalancingInterface.MDInfo;
 import oracle.kv.impl.sna.masterBalance.MasterBalancingInterface.MasterLeaseInfo;
 import oracle.kv.impl.sna.masterBalance.MasterBalancingInterface.StateInfo;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNode;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
@@ -378,6 +380,122 @@ public final class StorageNodeAgentAPI extends RemoteAPI {
         throws RemoteException {
 
         proxyRemote.newRepNodeParameters(repNodeParams,
+                                         NULL_CTX, getSerialVersion());
+    }
+
+    /**
+     * Query whether a give ArbNode has been defined on this Storage Node, as
+     * indicated by its configuration existing in the store's configuration
+     * file.  This is not an indication of its runtime status.
+     *
+     * @param arbNodeId the unique identifier of the ArbNode
+     *
+     * @return true if the specified ArbNode exists in the configuration file
+     */
+    public boolean arbNodeExists(ArbNodeId arbNodeId)
+        throws RemoteException {
+
+        return proxyRemote.arbNodeExists(arbNodeId,
+                                         NULL_CTX, getSerialVersion());
+    }
+
+    /**
+     * Creates and starts a {@link ArbNode} instance
+     * on this Storage Node.  This will cause a new process to be started to
+     * run the ArbNode. The StorageNodeAgent will continue to start this
+     * ArbNode if the Storage Node is restarted unless the ArbNode is stopped
+     * explicitly.
+     *
+     * @param arbNodeParams the configuration of the ArbNode to create
+     *
+     * @return true if the ArbNode was started or existed,
+     * false if it was not started
+     *
+     * @throws RuntimeException if the operation failed.
+     */
+    public boolean createArbNode(ParameterMap arbNodeParams)
+        throws RemoteException {
+
+        return proxyRemote.createArbNode(arbNodeParams,
+                                         NULL_CTX, getSerialVersion());
+    }
+
+    /**
+     * Starts a {@link ArbNode} that has already been
+     * defined on this Storage Node.  The ArbNode will be started automatically
+     * if the Storage Node is restarted or the ArbNode exits unexpectedly.
+     *
+     * @param arbNodeId the unique identifier of the ArbNode to start
+     *
+     * @return true if the ArbNode was not already running, false if it was.
+     *
+     * @throws RuntimeException if the operation failed.
+     */
+    public boolean startArbNode(ArbNodeId arbNodeId)
+        throws RemoteException {
+
+        return proxyRemote.startArbNode(arbNodeId,
+                                        NULL_CTX, getSerialVersion());
+    }
+
+    /**
+     * Stops a {@link ArbNode} that has already been
+     * defined on this Storage Node.  The ArbNode will not be started if the
+     * Storage node is restarted until {@link #startArbNode} is called.
+     *
+     * @param arbNodeId the unique identifier of the ArbNode to stop
+     *
+     * @param force force a shutdown
+     *
+     * @return true if the ArbNode was running, false if it was not.
+     *
+     * @throws RuntimeException if the operation failed.
+     */
+    public boolean stopArbNode(ArbNodeId arbNodeId, boolean force)
+        throws RemoteException {
+
+        return proxyRemote.stopArbNode(arbNodeId, force,
+                                       NULL_CTX, getSerialVersion());
+    }
+
+    /**
+     * Permanently removes the SNA's knowledge of the
+     * {@link ArbNode} with
+     * the specified ArbNodeId.
+     *
+     * @param arbNodeId the unique identifier of the ArbNode to destroy
+     * @param deleteData true if the data stored on disk for this ArbNode
+     *                   should be deleted
+     *
+     * @return true if the ArbNode existed, false if did not.  The running
+     *   state of the ArbNode is not relevant to the return value.
+     *
+     * @throws RuntimeException if the operation failed.
+     */
+    public boolean destroyArbNode(ArbNodeId arbNodeId,
+                                  boolean deleteData)
+        throws RemoteException {
+
+        return proxyRemote.destroyArbNode(arbNodeId, deleteData,
+                                          NULL_CTX, getSerialVersion());
+    }
+
+     /**
+     * Modifies the parameters of a (@link oracle.kv.impl.rep.ArbNode}
+     * ArbNode managed by this StorageNode.  The new parameters will be written
+     * out to the storage node's configuration file.  If the service needs
+     * notification of the new parameters that is done by the admin/planner.
+     *
+     * @param arbNodeParams the new parameters to configure the rep node. This
+     * is a full set of replacement parameters, not partial.
+     *
+     * @throws RuntimeException if the ArbNode is not configured or the
+     * operation failed.
+     */
+    public void newArbNodeParameters(ParameterMap arbNodeParams)
+        throws RemoteException {
+
+        proxyRemote.newArbNodeParameters(arbNodeParams,
                                          NULL_CTX, getSerialVersion());
     }
 

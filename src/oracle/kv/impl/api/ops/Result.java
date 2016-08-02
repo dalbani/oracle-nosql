@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,9 +43,11 @@
 
 package oracle.kv.impl.api.ops;
 
+import static oracle.kv.impl.util.SerialVersion.TTL_SERIAL_VERSION;
+
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -55,8 +57,11 @@ import oracle.kv.OperationExecutionException;
 import oracle.kv.OperationResult;
 import oracle.kv.Value;
 import oracle.kv.Version;
+import oracle.kv.impl.api.table.FieldDefImpl;
 import oracle.kv.impl.api.ops.InternalOperation.OpCode;
 import oracle.kv.impl.util.FastExternalizable;
+import oracle.kv.impl.api.table.FieldValueImpl;
+import oracle.kv.impl.api.table.FieldValueSerialization;
 
 /**
  * The result of running a request.  Result may contain a return value of the
@@ -90,7 +95,7 @@ public abstract class Result
      * The OpCode was read by readFastExternal.
      */
     Result(OpCode op,
-           @SuppressWarnings("unused") ObjectInput in,
+           @SuppressWarnings("unused") DataInput in,
            @SuppressWarnings("unused") short serialVersion) {
 
         this(op);
@@ -99,8 +104,7 @@ public abstract class Result
     /**
      * FastExternalizable factory for all Result subclasses.
      */
-    public static Result readFastExternal(ObjectInput in,
-                                          short serialVersion)
+    public static Result readFastExternal(DataInput in, short serialVersion)
         throws IOException {
 
         final OpCode op = InternalOperation.getOpCode(in.readUnsignedByte());
@@ -112,7 +116,7 @@ public abstract class Result
      * writing additional elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         out.writeByte(opCode.ordinal());
@@ -125,6 +129,26 @@ public abstract class Result
      */
     @Override
     public abstract boolean getSuccess();
+
+    /**
+     * Get the primary-index key to be used as the starting point for
+     * the primary index scan that will produce the next result set.
+     */
+    public byte[] getPrimaryResumeKey() {
+       throw new IllegalStateException(
+           "result of type: " + getClass() +
+           " does not contain a primary resume key");
+    }
+
+    /**
+     * Get the secondary-index key to be used as the starting point for
+     * the secondary index scan that will produce the next result set.
+     */
+    public byte[] getSecondaryResumeKey() {
+       throw new IllegalStateException(
+           "result of type: " + getClass() +
+           " does not contain a secondary resume key");
+    }
 
     /**
      * Gets the current Value result of a Get, Put or Delete operation.
@@ -158,6 +182,25 @@ public abstract class Result
     public Version getNewVersion() {
         throw new IllegalStateException("result of type: " + getClass() +
                                         " does not contain a new Version");
+    }
+
+    /**
+     * Gets the new expiration time a Put operation.
+     *
+     * @throws IllegalStateException if the result is the wrong type
+     */
+    @Override
+    public long getNewExpirationTime() {
+        throw new IllegalStateException("result of type: " + getClass() +
+                                        " does not contain an " +
+                                        "expiration time");
+    }
+
+    @Override
+    public long getPreviousExpirationTime() {
+        throw new IllegalStateException("result of type: " + getClass() +
+                                        " does not contain a " +
+                                        "previous expiration time");
     }
 
     /**
@@ -212,7 +255,7 @@ public abstract class Result
      *
      * @throws IllegalStateException if the result is the wrong type
      */
-    public List<byte[]> getKeyList() {
+    public List<ResultKey> getKeyList() {
         throw new IllegalStateException
             ("result of type: " + getClass() +
              " does not contain a key list");
@@ -240,6 +283,19 @@ public abstract class Result
         throw new IllegalStateException
             ("result of type: " + getClass() +
              " does not contain a ResultIndexRows list");
+    }
+
+    /**
+     * Gets the ResultRecord list of a query operation.
+     *
+     * @throws IllegalStateException if the result is the wrong type
+     *
+     * @since ???
+     */
+    public List<FieldValueImpl> getQueryResults() {
+        throw new IllegalStateException
+            ("result of type: " + getClass() +
+             " is not a query result");
     }
 
     /**
@@ -276,22 +332,25 @@ public abstract class Result
         return 1;
     }
 
-    /* The result of a Get operation. */
+
+    /*
+     * The result of a Get operation.
+     */
     static class GetResult extends ValueVersionResult {
 
         GetResult(OpCode opCode, ResultValueVersion valueVersion) {
             super(opCode, valueVersion);
         }
 
-        /**
+         /**
          * FastExternalizable constructor.  Must call superclass constructor
          * first to read common elements.
          */
-        GetResult(OpCode opCode, ObjectInput in, short serialVersion)
+        GetResult(OpCode opCode, DataInput in, short serialVersion)
             throws IOException {
 
             super(opCode, in, serialVersion);
-        }
+       }
 
         @Override
         public boolean getSuccess() {
@@ -299,31 +358,50 @@ public abstract class Result
         }
     }
 
-    /* The result of a Put operation. */
+
+    /*
+     * The result of a Put operation.
+     */
     static class PutResult extends ValueVersionResult {
 
-        private final Version newVersion;
+        private final Version newVersion;  /* of the new record */
+        private final long newExpirationTime; /* of the new record */
 
+        /**
+         * Constructs a result with required arguments.
+         *
+         * @param opCode code for operation that produced this result
+         * @param prevVal prior value, can be null
+         * @param newVersionAndExpiration the new version and expiration time
+         * of the record being put. May be null if the operation failed.
+         */
         PutResult(OpCode opCode,
                   ResultValueVersion prevVal,
-                  Version newVersion) {
+                  InternalOperationHandler.VersionAndExpiration ve) {
             super(opCode, prevVal);
-            this.newVersion = newVersion;
+            if (ve != null) {
+                newVersion = ve.getVersion();
+                newExpirationTime = ve.getExpirationTime();
+            } else {
+                newVersion = null;
+                newExpirationTime = 0L;
+            }
         }
 
         /**
          * FastExternalizable constructor.  Must call superclass constructor
          * first to read common elements.
          */
-        PutResult(OpCode opCode, ObjectInput in, short serialVersion)
+        PutResult(OpCode opCode, DataInput in, short serialVersion)
             throws IOException {
 
             super(opCode, in, serialVersion);
-            if (in.read() != 0) {
-                newVersion = new Version(in, serialVersion);
-            } else {
-                newVersion = null;
-            }
+            if (in.readByte() != 0) {
+                newVersion =  Version.createVersion(in, serialVersion);
+             } else {
+                 newVersion = null;
+             }
+            newExpirationTime = readExpirationTime(in, serialVersion);
         }
 
         /**
@@ -331,16 +409,21 @@ public abstract class Result
          * write common elements.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
-
             super.writeFastExternal(out, serialVersion);
+            out.write(newVersion == null ? 0 : 1);
             if (newVersion != null) {
-                out.write(1);
                 newVersion.writeFastExternal(out, serialVersion);
-            } else {
-                out.write(0);
             }
+            writeExpirationTime(out,
+                                newExpirationTime,
+                                serialVersion);
+        }
+
+        @Override
+        public boolean getSuccess() {
+            return newVersion != null;
         }
 
         @Override
@@ -349,12 +432,15 @@ public abstract class Result
         }
 
         @Override
-        public boolean getSuccess() {
-            return newVersion != null;
+        public long getNewExpirationTime() {
+            return newExpirationTime;
         }
     }
 
-    /* The result of a Delete operation. */
+
+    /*
+     * The result of a Delete operation.
+     */
     static class DeleteResult extends ValueVersionResult {
 
         private final boolean success;
@@ -370,7 +456,7 @@ public abstract class Result
          * FastExternalizable constructor.  Must call superclass constructor
          * first to read common elements.
          */
-        DeleteResult(OpCode opCode, ObjectInput in, short serialVersion)
+        DeleteResult(OpCode opCode, DataInput in, short serialVersion)
             throws IOException {
 
             super(opCode, in, serialVersion);
@@ -382,7 +468,7 @@ public abstract class Result
          * write common elements.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             super.writeFastExternal(out, serialVersion);
@@ -395,7 +481,10 @@ public abstract class Result
         }
     }
 
-    /* The result of a Delete operation. */
+
+    /*
+     * The result of a Delete operation.
+     */
     static class MultiDeleteResult extends Result {
 
         private final int nDeletions;
@@ -409,7 +498,7 @@ public abstract class Result
          * FastExternalizable constructor.  Must call superclass constructor
          * first to read common elements.
          */
-        MultiDeleteResult(OpCode opCode, ObjectInput in, short serialVersion)
+        MultiDeleteResult(OpCode opCode, DataInput in, short serialVersion)
             throws IOException {
 
             super(opCode, in, serialVersion);
@@ -421,7 +510,7 @@ public abstract class Result
          * write common elements.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             super.writeFastExternal(out, serialVersion);
@@ -444,11 +533,15 @@ public abstract class Result
         }
     }
 
-    /* Base class for results with a Value and Version. */
+
+    /*
+     * Base class for results with a Value and Version.
+     */
     static abstract class ValueVersionResult extends Result {
 
         private final ResultValue resultValue;
-        private final Version version;
+        protected Version version;
+        private final long expirationTime;
 
         ValueVersionResult(OpCode op, ResultValueVersion valueVersion) {
             super(op);
@@ -457,9 +550,11 @@ public abstract class Result
                     (new ResultValue(valueVersion.getValueBytes())) :
                     null;
                 version = valueVersion.getVersion();
+                expirationTime = valueVersion.getExpirationTime();
             } else {
                 resultValue = null;
                 version = null;
+                expirationTime = 0;
             }
         }
 
@@ -467,20 +562,21 @@ public abstract class Result
          * FastExternalizable constructor.  Must call superclass constructor
          * first to read common elements.
          */
-        ValueVersionResult(OpCode op, ObjectInput in, short serialVersion)
+        ValueVersionResult(OpCode op, DataInput in, short serialVersion)
             throws IOException {
 
             super(op, in, serialVersion);
-            if (in.read() != 0) {
+            if (in.readByte() != 0) {
                 resultValue = new ResultValue(in, serialVersion);
             } else {
                 resultValue = null;
             }
-            if (in.read() != 0) {
-                version = new Version(in, serialVersion);
+            if (in.readByte() != 0) {
+                version =  Version.createVersion(in, serialVersion);
             } else {
                 version = null;
             }
+            expirationTime = readExpirationTime(in, serialVersion);
         }
 
         /**
@@ -488,7 +584,7 @@ public abstract class Result
          * write common elements.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             super.writeFastExternal(out, serialVersion);
@@ -498,12 +594,13 @@ public abstract class Result
             } else {
                 out.write(0);
             }
+            out.write(version == null ? 0 : 1);
             if (version != null) {
-                out.write(1);
                 version.writeFastExternal(out, serialVersion);
-            } else {
-                out.write(0);
             }
+            writeExpirationTime(out,
+                                expirationTime,
+                                serialVersion);
         }
 
         @Override
@@ -515,11 +612,19 @@ public abstract class Result
         public Version getPreviousVersion() {
             return version;
         }
+
+        @Override
+        public long getPreviousExpirationTime() {
+            return expirationTime;
+        }
     }
 
+    /*
+     *
+     */
     static class NOPResult extends Result {
 
-        NOPResult(ObjectInput in, short serialVersion) {
+        NOPResult(DataInput in, short serialVersion) {
             super(OpCode.NOP, in, serialVersion);
         }
 
@@ -539,7 +644,10 @@ public abstract class Result
         }
     }
 
-    /* The result of an Execute operation. */
+
+    /*
+     * The result of an Execute operation.
+     */
     static class ExecuteResult extends Result {
 
         private final boolean success;
@@ -569,7 +677,7 @@ public abstract class Result
          * FastExternalizable constructor.  Must call superclass constructor
          * first to read common elements.
          */
-        ExecuteResult(OpCode opCode, ObjectInput in, short serialVersion)
+        ExecuteResult(OpCode opCode, DataInput in, short serialVersion)
             throws IOException {
 
             super(opCode, in, serialVersion);
@@ -596,7 +704,7 @@ public abstract class Result
          * write common elements.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             super.writeFastExternal(out, serialVersion);
@@ -650,18 +758,22 @@ public abstract class Result
 
     public static class PutBatchResult extends Result {
 
+        private int numKVPairs;
         private List<Integer> keysPresent;
 
-        PutBatchResult(List<Integer> keysPresent) {
+        PutBatchResult(int numKVPairs, List<Integer> keysPresent) {
             super(OpCode.PUT_BATCH);
+            this.numKVPairs = numKVPairs;
             this.keysPresent = keysPresent;
         }
 
 
-        PutBatchResult(OpCode op, ObjectInput in, short serialVersion)
+        PutBatchResult(OpCode op, DataInput in, short serialVersion)
             throws IOException {
 
             super(op, in, serialVersion);
+
+            numKVPairs = in.readInt();
 
             final int count = in.readInt();
             if (count == 0) {
@@ -676,10 +788,12 @@ public abstract class Result
         }
 
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             super.writeFastExternal(out, serialVersion);
+
+            out.writeInt(numKVPairs);
 
             final int count = keysPresent.size();
             out.writeInt(count);
@@ -697,10 +811,18 @@ public abstract class Result
         public List<Integer> getKeysPresent() {
             return keysPresent;
         }
+
+        @Override
+        public int getNumRecords() {
+            return numKVPairs - keysPresent.size();
+        }
     }
 
 
-    /* The result of a MultiGetIterate or StoreIterate operation. */
+
+    /*
+     * The result of a MultiGetIterate or StoreIterate operation.
+     */
     static class IterateResult extends Result {
 
         private final List<ResultKeyValueVersion> elements;
@@ -718,7 +840,7 @@ public abstract class Result
          * FastExternalizable constructor.  Must call superclass constructor
          * first to read common elements.
          */
-        IterateResult(OpCode opCode, ObjectInput in, short serialVersion)
+        IterateResult(OpCode opCode, DataInput in, short serialVersion)
             throws IOException {
 
             super(opCode, in, serialVersion);
@@ -737,7 +859,7 @@ public abstract class Result
          * write common elements.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             super.writeFastExternal(out, serialVersion);
@@ -769,16 +891,29 @@ public abstract class Result
         public int getNumRecords() {
             return elements.size();
         }
+
+        @Override
+        public byte[] getPrimaryResumeKey() {
+
+            if (!moreElements || elements == null || elements.isEmpty()) {
+                return null;
+            }
+
+            return elements.get(elements.size() - 1).getKeyBytes();
+        }
     }
 
-    /* The result of a MultiGetKeysIterate or StoreKeysIterate operation. */
+
+    /*
+     * The result of a MultiGetKeysIterate or StoreKeysIterate operation.
+     */
     static class KeysIterateResult extends Result {
 
-        private final List<byte[]> elements;
+        private final List<ResultKey> elements;
         private final boolean moreElements;
 
         KeysIterateResult(OpCode opCode,
-                          List<byte[]> elements,
+                          List<ResultKey> elements,
                           boolean moreElements) {
             super(opCode);
             this.elements = elements;
@@ -789,18 +924,15 @@ public abstract class Result
          * FastExternalizable constructor.  Must call superclass constructor
          * first to read common elements.
          */
-        KeysIterateResult(OpCode opCode, ObjectInput in, short serialVersion)
+        KeysIterateResult(OpCode opCode, DataInput in, short serialVersion)
             throws IOException {
 
             super(opCode, in, serialVersion);
 
             final int listSize = in.readInt();
-            elements = new ArrayList<byte[]>(listSize);
+            elements = new ArrayList<ResultKey>(listSize);
             for (int i = 0; i < listSize; i += 1) {
-                final int keyLen = in.readShort();
-                final byte[] key = new byte[keyLen];
-                in.readFully(key);
-                elements.add(key);
+                elements.add(new ResultKey(in, serialVersion));
             }
 
             moreElements = in.readBoolean();
@@ -811,15 +943,14 @@ public abstract class Result
          * write common elements.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             super.writeFastExternal(out, serialVersion);
 
             out.writeInt(elements.size());
-            for (final byte[] key : elements) {
-                out.writeShort(key.length);
-                out.write(key);
+            for (final ResultKey rkey : elements) {
+                rkey.writeFastExternal(out, serialVersion);
             }
 
             out.writeBoolean(moreElements);
@@ -831,7 +962,7 @@ public abstract class Result
         }
 
         @Override
-        public List<byte[]> getKeyList() {
+        public List<ResultKey> getKeyList() {
             return elements;
         }
 
@@ -844,9 +975,22 @@ public abstract class Result
         public int getNumRecords() {
             return elements.size();
         }
+
+        @Override
+        public byte[] getPrimaryResumeKey() {
+
+            if (!moreElements || elements == null || elements.isEmpty()) {
+                return null;
+            }
+
+            return elements.get(elements.size() - 1).getKeyBytes();
+        }
     }
 
-    /* The result of a table index key iterate operation. */
+
+    /*
+     * The result of a table index key iterate operation.
+     */
     static class IndexKeysIterateResult extends Result {
 
         private final List<ResultIndexKeys> elements;
@@ -864,8 +1008,7 @@ public abstract class Result
          * FastExternalizable constructor.  Must call superclass constructor
          * first to read common elements.
          */
-        IndexKeysIterateResult
-            (OpCode opCode, ObjectInput in, short serialVersion)
+        IndexKeysIterateResult(OpCode opCode, DataInput in, short serialVersion)
             throws IOException {
 
             super(opCode, in, serialVersion);
@@ -884,7 +1027,7 @@ public abstract class Result
          * write common elements.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             super.writeFastExternal(out, serialVersion);
@@ -916,9 +1059,32 @@ public abstract class Result
         public int getNumRecords() {
             return elements.size();
         }
+
+        @Override
+        public byte[] getPrimaryResumeKey() {
+
+            if (!moreElements || elements == null || elements.isEmpty()) {
+                return null;
+            }
+
+            return elements.get(elements.size() - 1).getPrimaryKeyBytes();
+        }
+
+        @Override
+        public byte[] getSecondaryResumeKey() {
+
+            if (!moreElements || elements == null || elements.isEmpty()) {
+                return null;
+            }
+
+            return elements.get(elements.size() - 1).getIndexKeyBytes();
+        }
     }
 
-    /* The result of a table index row iterate operation. */
+
+    /*
+     * The result of a table index row iterate operation.
+     */
     static class IndexRowsIterateResult extends Result {
 
         private final List<ResultIndexRows> elements;
@@ -936,8 +1102,7 @@ public abstract class Result
          * FastExternalizable constructor.  Must call superclass constructor
          * first to read common elements.
          */
-        IndexRowsIterateResult
-            (OpCode opCode, ObjectInput in, short serialVersion)
+        IndexRowsIterateResult(OpCode opCode, DataInput in, short serialVersion)
             throws IOException {
 
             super(opCode, in, serialVersion);
@@ -956,7 +1121,7 @@ public abstract class Result
          * write common elements.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             super.writeFastExternal(out, serialVersion);
@@ -988,12 +1153,36 @@ public abstract class Result
         public int getNumRecords() {
             return elements.size();
         }
+
+        @Override
+        public byte[] getPrimaryResumeKey() {
+
+            if (!moreElements || elements == null || elements.isEmpty()) {
+                return null;
+            }
+
+            return elements.get(elements.size() - 1).getKeyBytes();
+        }
+
+        @Override
+        public byte[] getSecondaryResumeKey() {
+
+            if (!moreElements || elements == null || elements.isEmpty()) {
+                return null;
+            }
+
+            return elements.get(elements.size() - 1).getIndexKeyBytes();
+        }
     }
 
-    /* The result of a multi-get-batch iteration operation. */
+
+    /*
+     * The result of a multi-get-batch iteration operation.
+     */
     static class BulkGetIterateResult extends IterateResult {
 
         private final int resumeParentKeyIndex;
+
         BulkGetIterateResult(OpCode opCode,
                              List<ResultKeyValueVersion> elements,
                              boolean moreElements,
@@ -1006,7 +1195,7 @@ public abstract class Result
          * FastExternalizable constructor.  Must call superclass constructor
          * first to read common elements.
          */
-        BulkGetIterateResult(OpCode opCode, ObjectInput in, short serialVersion)
+        BulkGetIterateResult(OpCode opCode, DataInput in, short serialVersion)
             throws IOException {
 
             super(opCode, in, serialVersion);
@@ -1018,7 +1207,7 @@ public abstract class Result
          * write common elements.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             super.writeFastExternal(out, serialVersion);
@@ -1035,12 +1224,16 @@ public abstract class Result
         }
     }
 
-    /* The result of a multi-get-batch-keys iteration operation. */
+
+    /*
+     * The result of a multi-get-batch-keys iteration operation.
+     */
     static class BulkGetKeysIterateResult extends KeysIterateResult {
 
         private final int resumeParentKeyIndex;
+
         BulkGetKeysIterateResult(OpCode opCode,
-                                 List<byte[]> elements,
+                                 List<ResultKey> elements,
                                  boolean moreElements,
                                  int lastParentKeyIndex) {
             super(opCode, elements, moreElements);
@@ -1052,7 +1245,7 @@ public abstract class Result
          * first to read common elements.
          */
         BulkGetKeysIterateResult(OpCode opCode,
-                                 ObjectInput in,
+                                 DataInput in,
                                  short serialVersion)
             throws IOException {
 
@@ -1065,7 +1258,7 @@ public abstract class Result
          * write common elements.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             super.writeFastExternal(out, serialVersion);
@@ -1080,5 +1273,200 @@ public abstract class Result
         public int getResumeParentKeyIndex() {
             return resumeParentKeyIndex;
         }
+    }
+
+    /*
+     * The result of a Query operation.
+     * This class is public to allow access to the resume key.
+     *
+     * @since ???
+     */
+    public static class QueryResult extends Result {
+
+        private final List<FieldValueImpl> results;
+
+        private final FieldDefImpl resultDef;
+
+        private final boolean moreElements;
+
+        private final byte[] primaryResumeKey;
+
+        private final byte[] secondaryResumeKey;
+        /* TBD: handle inserts, deletes, etc */
+
+        QueryResult(OpCode opCode,
+                    List<FieldValueImpl> results,
+                    FieldDefImpl resultDef,
+                    boolean moreElements,
+                    byte[] primaryResumeKey,
+                    byte[] secondaryResumeKey) {
+            super(opCode);
+            this.results = results;
+            this.resultDef = resultDef;
+            this.moreElements = moreElements;
+            this.primaryResumeKey = primaryResumeKey;
+            this.secondaryResumeKey = secondaryResumeKey;
+        }
+
+        /**
+         * FastExternalizable constructor.  Must call superclass constructor
+         * first to read common elements.
+         */
+        QueryResult(OpCode opCode, DataInput in, short serialVersion)
+            throws IOException {
+
+            super(opCode, in, serialVersion);
+
+            resultDef = TableQuery.readResultDef(in, serialVersion);
+
+            FieldDefImpl valDef = (resultDef.isWildcard() ? null : resultDef);
+
+            final int listSize = in.readInt();
+            results = new ArrayList<FieldValueImpl>(listSize);
+
+            for (int i = 0; i < listSize; i += 1) {
+                FieldValueImpl val =
+                    (FieldValueImpl)FieldValueSerialization.readFieldValue(
+                        valDef, in, serialVersion);
+
+                results.add(val);
+            }
+
+            moreElements = in.readBoolean();
+
+            /*
+             * If there are no more elements, resume key(s) are not written.
+             */
+            if (moreElements) {
+                int keyLen = in.readShort();
+                if (keyLen > 0) {
+                    primaryResumeKey = new byte[keyLen];
+                    in.readFully(primaryResumeKey);
+                } else {
+                    primaryResumeKey = null;
+                }
+
+                keyLen = in.readShort();
+                if (keyLen > 0) {
+                    secondaryResumeKey = new byte[keyLen];
+                    in.readFully(secondaryResumeKey);
+                } else {
+                    secondaryResumeKey = null;
+                }
+
+            } else {
+                primaryResumeKey = null;
+                secondaryResumeKey = null;
+            }
+        }
+
+        /**
+         * FastExternalizable writer.  Must call superclass method first to
+         * write common elements.
+         */
+        @Override
+        public void writeFastExternal(DataOutput out, short serialVersion)
+            throws IOException {
+
+            super.writeFastExternal(out, serialVersion);
+
+            TableQuery.writeResultDef(resultDef, out, serialVersion);
+
+            out.writeInt(results.size());
+
+            boolean isWildcard = resultDef.isWildcard();
+
+            for (final FieldValueImpl res : results) {
+                FieldValueSerialization.writeFieldValue(
+                    res, isWildcard, out, serialVersion);
+            }
+
+            out.writeBoolean(moreElements);
+
+            /*
+             * Only write resume key(s) if moreElements.
+             */
+            if (moreElements) {
+                assert(primaryResumeKey != null || secondaryResumeKey != null);
+                if (primaryResumeKey != null) {
+                    out.writeShort(primaryResumeKey.length);
+                    out.write(primaryResumeKey);
+                } else {
+                    out.writeShort(0);
+                }
+                if (secondaryResumeKey != null) {
+                    out.writeShort(secondaryResumeKey.length);
+                    out.write(secondaryResumeKey);
+                } else {
+                    out.writeShort(0);
+                }
+            }
+        }
+
+        @Override
+        public boolean getSuccess() {
+            return results.size() > 0;
+        }
+
+        @Override
+        public List<FieldValueImpl> getQueryResults() {
+            return results;
+        }
+
+        @Override
+        public boolean hasMoreElements() {
+            return moreElements;
+        }
+
+        @Override
+        public int getNumRecords() {
+            return results.size();
+        }
+
+        @Override
+        public byte[] getPrimaryResumeKey() {
+            return primaryResumeKey;
+        }
+
+        @Override
+        public byte[] getSecondaryResumeKey() {
+            return secondaryResumeKey;
+        }
+    }
+
+    /**
+     * Utility method to write an expiration time conditionally into an output
+     * stream based on serial version.
+     */
+    static void writeExpirationTime(DataOutput out,
+                                    long expirationTime,
+                                    short serialVersion)
+    throws IOException {
+
+        if (serialVersion >= TTL_SERIAL_VERSION) {
+            if (expirationTime == 0) {
+                out.write(0);
+            } else {
+                out.write(1);
+                out.writeLong(expirationTime);
+            }
+        }
+    }
+
+    /**
+     * Utility method to read an expiration time conditionally from an input
+     * stream based on serial version. Returns 0 if it is not available in the
+     * stream.
+     */
+    static long readExpirationTime(DataInput in,
+                                   short serialVersion)
+        throws IOException {
+
+        if (serialVersion >= TTL_SERIAL_VERSION) {
+            if (in.readByte() != 0) {
+                return in.readLong();
+            }
+        }
+        return 0;
     }
 }

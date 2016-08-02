@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,12 +45,12 @@ package oracle.kv.hadoop;
 
 import java.io.IOException;
 
-import oracle.kv.Key;
-
 import org.apache.avro.generic.IndexedRecord;
 import org.apache.hadoop.mapreduce.InputSplit;
 import org.apache.hadoop.mapreduce.RecordReader;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
+
+import oracle.kv.Key;
 
 /**
  * A Hadoop InputFormat class for reading data from Oracle NoSQL Database and
@@ -71,6 +71,7 @@ public class KVAvroInputFormat
     /**
      * @hidden
      */
+    @SuppressWarnings("deprecation")
     @Override
     public RecordReader<Key, IndexedRecord>
         createRecordReader(InputSplit split, TaskAttemptContext context)

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -113,4 +113,22 @@ public interface OperationResult {
      * </ul>
      */
     Value getPreviousValue();
+
+    /**
+     * Internal use only
+     * @hidden
+     *
+     * For a put operation, returns the expiration time of a new record.
+     */
+    long getNewExpirationTime();
+
+    /**
+     * Internal use only
+     * @hidden
+     *
+     * For a put or delete operation, returns the expiration time of the
+     * previous record if available, or 0 (no expiration) if it is not
+     * available.
+     */
+    long getPreviousExpirationTime();
 }

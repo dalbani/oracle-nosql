@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,21 +43,12 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
-import java.util.ArrayList;
-import java.util.List;
 
-import oracle.kv.impl.api.ops.MultiTableOperation.AncestorList;
 import oracle.kv.impl.api.table.IndexRange;
 import oracle.kv.impl.api.table.TargetTables;
-import oracle.kv.impl.topo.PartitionId;
-
-import com.sleepycat.je.DatabaseEntry;
-import com.sleepycat.je.OperationStatus;
-import com.sleepycat.je.SecondaryCursor;
-import com.sleepycat.je.Transaction;
 
 /**
  * An index iteration that returns keys.  The index is specified by a
@@ -116,7 +107,7 @@ public class IndexKeysIterate extends IndexOperation {
      *
      * For subclasses, allows passing OpCode.
      */
-    IndexKeysIterate(ObjectInput in, short serialVersion)
+    IndexKeysIterate(DataInput in, short serialVersion)
         throws IOException {
 
         super(OpCode.INDEX_KEYS_ITERATE, in, serialVersion);
@@ -127,7 +118,7 @@ public class IndexKeysIterate extends IndexOperation {
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
@@ -136,88 +127,5 @@ public class IndexKeysIterate extends IndexOperation {
     @Override
     public String toString() {
         return super.toString(); //TODO
-    }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,  /* Not used */
-                          final OperationHandler operationHandler) {
-
-        verifyTableAccess(operationHandler);
-
-        final AncestorList ancestors =
-            new AncestorList(operationHandler,
-                             txn,
-                             getResumePrimaryKey(),
-                             targetTables.getAncestorTableIds());
-
-        /*
-         * This class returns Row objects which means that a data fetch is
-         * required when the table is not key-only.
-         */
-        final List<ResultIndexKeys> results =
-            new ArrayList<ResultIndexKeys>();
-        final boolean moreElements = TableOperationHandler.indexScan
-            (txn,
-             getSecondaryDatabase(operationHandler),
-             getIndex(operationHandler),
-             getIndexRange(),
-             getResumeSecondaryKey(),
-             getResumePrimaryKey(),
-             true, /* true means that primary data is not fetched */
-             getBatchSize(),
-             new TableOperationHandler.IndexScanVisitor() {
-                 @Override
-                 public int visit(SecondaryCursor cursor,
-                                  DatabaseEntry indexKeyEntry,
-                                  DatabaseEntry primaryKeyEntry,
-                                  DatabaseEntry dataEntry) {
-
-                     if (!inRange(indexKeyEntry.getData())) {
-                         return TableOperationHandler.STOP;
-                     }
-
-                     /*
-                      * Data has not been fetched but the record is locked.
-                      * Create the result from the index key and information
-                      * available in the index record.
-                      */
-                     assert dataEntry.getPartial();
-                     int numResults = 1;
-                     List<byte[]> ancestorKeys =
-                         ancestors.addAncestorKeys(primaryKeyEntry);
-                     if (ancestorKeys != null) {
-                         for (byte[] key : ancestorKeys) {
-                             results.add(new ResultIndexKeys
-                                         (key, indexKeyEntry.getData()));
-                             ++numResults;
-                         }
-                     }
-                     results.add(new ResultIndexKeys
-                                 (primaryKeyEntry.getData(),
-                                  indexKeyEntry.getData()));
-                     return numResults;
-                 }
-
-                 @Override
-                 public OperationStatus getNext(SecondaryCursor cursor,
-                                                DatabaseEntry indexKeyEntry,
-                                                DatabaseEntry primaryKeyEntry,
-                                                DatabaseEntry dataEntry) {
-                     return getNextRecord(cursor, indexKeyEntry,
-                                          primaryKeyEntry, dataEntry);
-                 }
-                 @Override
-                 public OperationStatus getPrev(SecondaryCursor cursor,
-                                                DatabaseEntry indexKeyEntry,
-                                                DatabaseEntry primaryKeyEntry,
-                                                DatabaseEntry dataEntry) {
-                     return getPreviousRecord(cursor, indexKeyEntry,
-                                              primaryKeyEntry, dataEntry);
-                 }
-             });
-        boolean more = (moreElements && results.size() == 0) ? false :
-            moreElements;
-        return new Result.IndexKeysIterateResult(getOpCode(), results, more);
     }
 }

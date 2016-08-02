@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,13 +45,12 @@ package oracle.kv;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
 import java.io.ObjectInputStream;
-import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
-import java.util.EnumSet;
 
 import oracle.kv.impl.util.FastExternalizable;
 import oracle.kv.impl.util.SerialVersion;
@@ -150,21 +149,7 @@ public class Durability implements FastExternalizable, Serializable {
         WRITE_NO_SYNC
     }
 
-    private final static SyncPolicy[] SYNC_POLICIES_BY_ORDINAL;
-    static {
-        final EnumSet<SyncPolicy> set = EnumSet.allOf(SyncPolicy.class);
-        SYNC_POLICIES_BY_ORDINAL = new SyncPolicy[set.size()];
-        for (SyncPolicy op : set) {
-            SYNC_POLICIES_BY_ORDINAL[op.ordinal()] = op;
-        }
-    }
-
-    private static SyncPolicy getSyncPolicy(int ordinal) {
-        if (ordinal < 0 || ordinal >= SYNC_POLICIES_BY_ORDINAL.length) {
-            throw new RuntimeException("unknown SyncPolicy: " + ordinal);
-        }
-        return SYNC_POLICIES_BY_ORDINAL[ordinal];
-    }
+    private final static int SYNC_POLICIES_LENGTH = SyncPolicy.values().length;
 
     /**
      * A replicated environment makes it possible to increase an application's
@@ -200,22 +185,8 @@ public class Durability implements FastExternalizable, Serializable {
         SIMPLE_MAJORITY;
     }
 
-    private final static ReplicaAckPolicy[] REPLICA_ACK_POLICIES_BY_ORDINAL;
-    static {
-        final EnumSet<ReplicaAckPolicy> set =
-            EnumSet.allOf(ReplicaAckPolicy.class);
-        REPLICA_ACK_POLICIES_BY_ORDINAL = new ReplicaAckPolicy[set.size()];
-        for (ReplicaAckPolicy op : set) {
-            REPLICA_ACK_POLICIES_BY_ORDINAL[op.ordinal()] = op;
-        }
-    }
-
-    private static ReplicaAckPolicy getReplicaAckPolicy(int ordinal) {
-        if (ordinal < 0 || ordinal >= REPLICA_ACK_POLICIES_BY_ORDINAL.length) {
-            throw new RuntimeException("unknown ReplicaAckPolicy: " + ordinal);
-        }
-        return REPLICA_ACK_POLICIES_BY_ORDINAL[ordinal];
-    }
+    private final static int REPLICA_ACK_POLICIES_LENGTH =
+        ReplicaAckPolicy.values().length;
 
     /* The sync policy in effect on the Master node. */
     private final SyncPolicy masterSync;
@@ -225,6 +196,30 @@ public class Durability implements FastExternalizable, Serializable {
 
     /* The replica acknowledgment policy to be used. */
     final private ReplicaAckPolicy replicaAck;
+
+    /**
+     * A multi-dimensional array indexed by: Master sync policy, Replica sync
+     * policy and the AckPolicy, to yield a durability with those
+     * characteristics.
+     */
+    private final static Durability durabilityMap[][][] =
+        new Durability[SyncPolicy.values().length][SyncPolicy.values().length]
+            [ReplicaAckPolicy.values().length];
+
+    static {
+        /* Initialize durabilityMap */
+        for (SyncPolicy masterSync : SyncPolicy.values()) {
+            for (SyncPolicy replicaSync : SyncPolicy.values()) {
+                for (ReplicaAckPolicy replicaAckPolicy :
+                         ReplicaAckPolicy.values()) {
+                    durabilityMap[masterSync.ordinal()]
+                                 [replicaSync.ordinal()]
+                                 [replicaAckPolicy.ordinal()] =
+                    new Durability(masterSync, replicaSync, replicaAckPolicy);
+                }
+            }
+        }
+    }
 
     /**
      * Creates an instance of a Durability specification.
@@ -245,18 +240,55 @@ public class Durability implements FastExternalizable, Serializable {
     }
 
     /**
-     * For internal use only.
-     * @hidden
+     * For internal *test* use only.
      *
-     * FastExternalizable constructor.
+     * @throws IOException
+     * @hidden
      */
-    public Durability(ObjectInput in,
-                      @SuppressWarnings("unused") short serialVersion)
+    public Durability(DataInput in, short serialVersion)
         throws IOException {
 
-        masterSync = getSyncPolicy(in.readUnsignedByte());
-        replicaSync = getSyncPolicy(in.readUnsignedByte());
-        replicaAck = getReplicaAckPolicy(in.readUnsignedByte());
+        final Durability d = Durability.deserialize(in, serialVersion);
+
+        this.masterSync = d.masterSync;
+        this.replicaSync = d.replicaSync;
+        this.replicaAck = d.replicaAck;
+    }
+
+    private static int verifySyncPolicyOrdinal(int ordinal) {
+        if (ordinal < 0 || ordinal >= SYNC_POLICIES_LENGTH) {
+            throw new IllegalArgumentException("unknown SyncPolicy: " +
+                                               ordinal);
+        }
+        return ordinal;
+    }
+
+    private static int verifyReplicaAckPolicyOrdinal(int ordinal) {
+        if (ordinal < 0 || ordinal >= REPLICA_ACK_POLICIES_LENGTH) {
+            throw new IllegalArgumentException("unknown ReplicaAckPolicy: " +
+                                               ordinal);
+        }
+        return ordinal;
+    }
+
+    /**
+     * For internal use only.
+     * @throws IOException
+     * @hidden
+     *
+     * Deserializes durability from the input stream to yield an immutable
+     * instance of durability that can be shared.
+     */
+    public static Durability deserialize(DataInput in,
+                                @SuppressWarnings("unused") short serialVersion)
+        throws IOException {
+
+        final int masterSync = verifySyncPolicyOrdinal(in.readUnsignedByte());
+        final int replicaSync = verifySyncPolicyOrdinal(in.readUnsignedByte());
+        final int replicaAck =
+            verifyReplicaAckPolicyOrdinal(in.readUnsignedByte());
+
+        return durabilityMap[masterSync][replicaSync][replicaAck];
     }
 
     /**
@@ -266,7 +298,7 @@ public class Durability implements FastExternalizable, Serializable {
      * FastExternalizable writer.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         out.writeByte(masterSync.ordinal());
@@ -308,7 +340,7 @@ public class Durability implements FastExternalizable, Serializable {
 
             final short serialVersion = ois.readShort();
 
-            return new Durability(ois, serialVersion);
+            return deserialize(ois, serialVersion);
 
         } catch (IOException e) {
             /* Should never happen. */

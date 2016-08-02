@@ -8,20 +8,20 @@
     <meta name="generator" content="DocBook XSL Stylesheets V1.73.2" />
     <link rel="start" href="index.html" title="Getting Started with Oracle NoSQL Database Tables" />
     <link rel="up" href="ddl_overview.html" title="Appendix A. Table Data Definition Language Overview" />
-    <link rel="prev" href="addindexddl.html" title="CREATE INDEX" />
+    <link rel="prev" href="create_text_index.html" title="CREATE FULL TEXT INDEX" />
     <link rel="next" href="describetable.html" title="DESCRIBE AS JSON TABLE" />
   </head>
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
           <th colspan="3" align="center">DROP INDEX</th>
         </tr>
         <tr>
-          <td width="20%" align="left"><a accesskey="p" href="addindexddl.html">Prev</a> </td>
+          <td width="20%" align="left"><a accesskey="p" href="create_text_index.html">Prev</a> </td>
           <th width="60%" align="center">Appendix A. Table Data Definition Language Overview</th>
           <td width="20%" align="right"> <a accesskey="n" href="describetable.html">Next</a></td>
         </tr>
@@ -77,19 +77,33 @@
             using the following statement:
         </p>
       <pre class="programlisting">DROP INDEX IF EXISTS surnameIndex ON Users</pre>
+      <p>
+                Use <code class="literal">DROP INDEX</code> on a text index
+                to stop the population of the index from NoSQL Database 
+                shards, and removes the mapping and all related documents 
+                from Elasticsearch. See the following statement:
+            </p>
+      <pre class="programlisting">DROP INDEX [IF EXISTS] index_name ON table_name</pre>
+      <p>For example:</p>
+      <pre class="programlisting">kv-&gt; execute 'DROP INDEX JokeIndex on Joke'
+Statement completed successfully</pre>
+      <p>For more information, see 
+        <a href="../booklets/fts/index.html#drop_index" class="olink">Drop Index</a>
+        in the <em class="citetitle">Oracle NoSQL Database Full Text Search</em> guide.
+        </p>
     </div>
     <div class="navfooter">
       <hr />
       <table width="100%" summary="Navigation footer">
         <tr>
-          <td width="40%" align="left"><a accesskey="p" href="addindexddl.html">Prev</a> </td>
+          <td width="40%" align="left"><a accesskey="p" href="create_text_index.html">Prev</a> </td>
           <td width="20%" align="center">
             <a accesskey="u" href="ddl_overview.html">Up</a>
           </td>
           <td width="40%" align="right"> <a accesskey="n" href="describetable.html">Next</a></td>
         </tr>
         <tr>
-          <td width="40%" align="left" valign="top">CREATE INDEX </td>
+          <td width="40%" align="left" valign="top">CREATE FULL TEXT INDEX </td>
           <td width="20%" align="center">
             <a accesskey="h" href="index.html">Home</a>
           </td>

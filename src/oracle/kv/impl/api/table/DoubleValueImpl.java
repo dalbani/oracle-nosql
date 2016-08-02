@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -55,11 +55,11 @@ import com.sleepycat.persist.model.Persistent;
 
 @Persistent(version=1)
 class DoubleValueImpl extends FieldValueImpl implements DoubleValue {
-    private static final long serialVersionUID = 1L;
-    private double value;
 
-    /**
-     */
+    private static final long serialVersionUID = 1L;
+
+    protected double value;
+
     DoubleValueImpl(double value) {
         this.value = value;
     }
@@ -77,28 +77,13 @@ class DoubleValueImpl extends FieldValueImpl implements DoubleValue {
     private DoubleValueImpl() {
     }
 
-    @Override
-    public double get() {
-        return value;
-    }
-
-    @Override
-    public FieldDef.Type getType() {
-        return FieldDef.Type.DOUBLE;
-    }
+    /*
+     * Public api methods from Object and FieldValue
+     */
 
     @Override
     public DoubleValueImpl clone() {
         return new DoubleValueImpl(value);
-    }
-
-    @Override
-    public boolean equals(Object other) {
-        if (other instanceof DoubleValueImpl) {
-            /* == doesn't work for the various Double constants */
-            return Double.compare(value,((DoubleValueImpl)other).get()) == 0;
-        }
-        return false;
     }
 
     @Override
@@ -107,37 +92,40 @@ class DoubleValueImpl extends FieldValueImpl implements DoubleValue {
     }
 
     @Override
-    public int compareTo(FieldValue other) {
+    public boolean equals(Object other) {
+
         if (other instanceof DoubleValueImpl) {
-            return Double.compare(value, ((DoubleValueImpl)other).value);
+            /* == doesn't work for the various Double constants */
+            return Double.compare(value,((DoubleValueImpl)other).get()) == 0;
         }
-        throw new ClassCastException
-            ("Object is not an DoubleValue");
+        return false;
+    }
+
+    /**
+     * Allow comparison against Float to succeed.
+     */
+    @Override
+    public int compareTo(FieldValue other) {
+
+        if (other instanceof DoubleValueImpl) {
+            return Double.compare(value, ((DoubleValueImpl)other).get());
+        }
+        throw new ClassCastException("Object is not an DoubleValue");
     }
 
     @Override
-    public String formatForKey(FieldDef field) {
-        return SortableString.toSortable(value);
+    public String toString() {
+        return Double.toString(value);
     }
 
     @Override
-    public FieldValueImpl getNextValue() {
-        return new DoubleValueImpl(Math.nextUp(value));
+    public FieldDef.Type getType() {
+        return FieldDef.Type.DOUBLE;
     }
 
     @Override
-    public FieldValueImpl getMinimumValue() {
-        return new DoubleValueImpl(Double.MIN_VALUE);
-    }
-
-    @Override
-    public JsonNode toJsonNode() {
-        return new DoubleNode(value);
-    }
-
-    @Override
-    public void toStringBuilder(StringBuilder sb) {
-        sb.append(toString());
+    public DoubleDefImpl getDefinition() {
+        return FieldDefImpl.doubleDef;
     }
 
     @Override
@@ -151,7 +139,85 @@ class DoubleValueImpl extends FieldValueImpl implements DoubleValue {
     }
 
     @Override
-    public String toString() {
+    public boolean isAtomic() {
+        return true;
+    }
+
+    @Override
+    public boolean isNumeric() {
+        return true;
+    }
+
+    /*
+     * Public api methods from DoubleValue
+     */
+
+    @Override
+    public double get() {
+        return value;
+    }
+
+    /*
+     * FieldValueImpl internal api methods
+     */
+
+    @Override
+    public double getDouble() {
+        return value;
+    }
+
+    @Override
+    public void setDouble(double v) {
+        value = v;
+    }
+
+    @Override
+    public int castAsInt() {
+        return (int)value;
+    }
+
+    @Override
+    public long castAsLong() {
+        return (long)value;
+    }
+
+    @Override
+    public float castAsFloat() {
+        return (float)value;
+    }
+
+    @Override
+    public double castAsDouble() {
+        return value;
+    }
+
+    @Override
+    public String castAsString() {
         return Double.toString(value);
+    }
+
+    @Override
+    public FieldValueImpl getNextValue() {
+        return new DoubleValueImpl(Math.nextUp(value));
+    }
+
+    @Override
+    public FieldValueImpl getMinimumValue() {
+        return new DoubleValueImpl(Double.MIN_VALUE);
+    }
+
+    @Override
+    public String formatForKey(FieldDef field, int storageSize) {
+        return SortableString.toSortable(value);
+    }
+
+    @Override
+    public JsonNode toJsonNode() {
+        return new DoubleNode(value);
+    }
+
+    @Override
+    public void toStringBuilder(StringBuilder sb) {
+        sb.append(toString());
     }
 }

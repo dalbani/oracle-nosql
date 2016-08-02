@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -60,8 +60,10 @@ import com.sleepycat.persist.model.Persistent;
 
 @Persistent(version=1)
 class FloatValueImpl extends FieldValueImpl implements FloatValue {
+
     private static final long serialVersionUID = 1L;
-    private float value;
+
+    protected float value;
 
     FloatValueImpl(float value) {
         this.value = value;
@@ -80,28 +82,13 @@ class FloatValueImpl extends FieldValueImpl implements FloatValue {
     private FloatValueImpl() {
     }
 
-    @Override
-    public float get() {
-        return value;
-    }
-
-    @Override
-    public FieldDef.Type getType() {
-        return FieldDef.Type.FLOAT;
-    }
+    /*
+     * Public api methods from Object and FieldValue
+     */
 
     @Override
     public FloatValueImpl clone() {
         return new FloatValueImpl(value);
-    }
-
-    @Override
-    public boolean equals(Object other) {
-        if (other instanceof FloatValueImpl) {
-            /* == doesn't work for the various Float constants */
-            return Float.compare(value,((FloatValueImpl)other).get()) == 0;
-        }
-        return false;
     }
 
     @Override
@@ -110,17 +97,113 @@ class FloatValueImpl extends FieldValueImpl implements FloatValue {
     }
 
     @Override
-    public int compareTo(FieldValue other) {
+    public boolean equals(Object other) {
+
+        /* == doesn't work for the various Float constants */
         if (other instanceof FloatValueImpl) {
-            return Float.compare(value, ((FloatValueImpl)other).value);
+            return Double.compare(value, ((FloatValueImpl)other).get()) == 0;
         }
-        throw new ClassCastException
-            ("Object is not an FloatValue");
+        return false;
+    }
+
+    /**
+     * Allow comparison against Double to succeed
+     */
+    @Override
+    public int compareTo(FieldValue other) {
+
+        if (other instanceof FloatValueImpl) {
+            return Double.compare(value, ((FloatValueImpl)other).get());
+        }
+        throw new ClassCastException("Object is not an DoubleValue");
     }
 
     @Override
-    public String formatForKey(FieldDef field) {
-        return SortableString.toSortable(value);
+    public String toString() {
+        return Float.toString(value);
+    }
+
+    @Override
+    public FieldDef.Type getType() {
+        return FieldDef.Type.FLOAT;
+    }
+
+    @Override
+    public FloatDefImpl getDefinition() {
+        return FieldDefImpl.floatDef;
+    }
+
+    @Override
+    public FloatValue asFloat() {
+        return this;
+    }
+
+    @Override
+    public boolean isFloat() {
+        return true;
+    }
+
+    @Override
+    public boolean isAtomic() {
+        return true;
+    }
+
+    @Override
+    public boolean isNumeric() {
+        return true;
+    }
+
+    /*
+     * Public api methods from FloatValue
+     */
+
+    @Override
+    public float get() {
+        return value;
+    }
+
+    /*
+     * FieldValueImpl internal api methods
+     */
+
+    @Override
+    public float getFloat() {
+        return value;
+    }
+
+    @Override
+    public double getDouble() {
+        return value;
+    }
+
+    @Override
+    public void setFloat(float v) {
+        value = v;
+    }
+
+    @Override
+    public int castAsInt() {
+        return (int)value;
+    }
+
+    @Override
+    public long castAsLong() {
+        return (long)value;
+    }
+
+    @Override
+    public float castAsFloat() {
+        return value;
+    }
+
+    @Override
+    public double castAsDouble() {
+        return value;
+    }
+
+    @Override
+    public String castAsString() {
+        return Float.toString(value);
     }
 
     @Override
@@ -134,13 +217,8 @@ class FloatValueImpl extends FieldValueImpl implements FloatValue {
     }
 
     @Override
-    public FloatValue asFloat() {
-        return this;
-    }
-
-    @Override
-    public boolean isFloat() {
-        return true;
+    public String formatForKey(FieldDef field, int storageSize) {
+        return SortableString.toSortable(value);
     }
 
     /**
@@ -158,10 +236,9 @@ class FloatValueImpl extends FieldValueImpl implements FloatValue {
         sb.append(toString());
     }
 
-    @Override
-    public String toString() {
-        return Float.toString(value);
-    }
+    /*
+     * local methods
+     */
 
     /**
      * Jackson 1.9 does not have a FloatNode.  The implementation of

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,54 +43,65 @@
 
 package oracle.kv.impl.api.table;
 
+import java.util.Collections;
+import java.util.List;
+import java.util.ListIterator;
+
+import com.sleepycat.persist.model.Persistent;
+import oracle.kv.impl.util.JsonUtils;
+import oracle.kv.table.FieldDef;
+import oracle.kv.table.FieldValue;
+import oracle.kv.table.RecordDef;
+import org.codehaus.jackson.JsonNode;
+import org.codehaus.jackson.node.ArrayNode;
+import org.codehaus.jackson.node.ObjectNode;
+
 import static oracle.kv.impl.api.table.TableJsonUtils.FIELDS;
 import static oracle.kv.impl.api.table.TableJsonUtils.NAME;
 import static oracle.kv.impl.api.table.TableJsonUtils.RECORD;
 import static oracle.kv.impl.api.table.TableJsonUtils.TYPE;
 
-import java.util.Collections;
-import java.util.ListIterator;
-import java.util.List;
-
-import oracle.kv.impl.util.JsonUtils;
-import oracle.kv.table.FieldDef;
-import oracle.kv.table.FieldValue;
-import oracle.kv.table.RecordDef;
-
-import org.codehaus.jackson.JsonNode;
-import org.codehaus.jackson.node.ArrayNode;
-import org.codehaus.jackson.node.ObjectNode;
-
-import com.sleepycat.persist.model.Persistent;
-
 /**
  * RecordDefImpl implements the RecordDef interface.
  */
 @Persistent(version=1)
-class RecordDefImpl extends FieldDefImpl
-    implements RecordDef {
+public class RecordDefImpl extends FieldDefImpl implements RecordDef {
 
     private static final long serialVersionUID = 1L;
-    final FieldMap fieldMap;
-    final private String name;
 
-    RecordDefImpl(final String name,
-                  final FieldMap fieldMap,
-                  final String description) {
+    final FieldMap fieldMap;
+
+    /* AVRO requires names for records. */
+    private String name;
+
+    RecordDefImpl(FieldMap fieldMap, String description) {
+
         super(Type.RECORD, description);
+
         if (fieldMap == null || fieldMap.isEmpty()) {
             throw new IllegalArgumentException
                 ("Record has no fields and cannot be built");
         }
-        if (name == null) {
-            throw new IllegalArgumentException("Record requires a name");
-        }
-        this.name  = name;
+
+        this.name  = null;
         this.fieldMap = fieldMap;
     }
 
-    RecordDefImpl(final String name,
-                  final FieldMap fieldMap) {
+    RecordDefImpl(
+        final String name,
+        final FieldMap fieldMap,
+        final String description) {
+
+        this(fieldMap, description);
+
+        if (name == null) {
+            throw new IllegalArgumentException("Record requires a name");
+        }
+
+        this.name  = name;
+    }
+
+    RecordDefImpl(final String name, final FieldMap fieldMap) {
         this(name, fieldMap, null);
     }
 
@@ -106,29 +117,18 @@ class RecordDefImpl extends FieldDefImpl
         name = null;
     }
 
+    /*
+     * Public api methods from Object and FieldDef
+     */
+
     @Override
-    public String getName() {
-        return name;
+    public RecordDefImpl clone() {
+        return new RecordDefImpl(this);
     }
 
     @Override
-    public boolean isRecord() {
-        return true;
-    }
-
-    @Override
-    public RecordDef asRecord() {
-        return this;
-    }
-
-    @Override
-    public List<String> getFields() {
-        return Collections.unmodifiableList(fieldMap.getFieldOrder());
-    }
-
-    @Override
-    public FieldDef getField(String name1) {
-        return fieldMap.get(name1);
+    public int hashCode() {
+        return fieldMap.hashCode();
     }
 
     @Override
@@ -144,37 +144,58 @@ class RecordDefImpl extends FieldDefImpl
             /*
              * Perform field-by-field comparison if names match.
              */
-            if (name.equals(otherDef.name)) {
-                return fieldMap.equals(otherDef.fieldMap);
-            }
+            return fieldMap.equals(otherDef.fieldMap);
         }
         return false;
     }
 
     @Override
-    public int hashCode() {
-        return fieldMap.hashCode() + name.hashCode();
+    public boolean isRecord() {
+        return true;
     }
 
     @Override
-    void toJson(ObjectNode node) {
-
-        /*
-         * Records always require a name because of Avro
-         */
-        node.put(NAME, name);
-        super.toJson(node);
-        fieldMap.putFields(node);
+    public boolean isComplex() {
+        return true;
     }
 
     @Override
-    public RecordDefImpl clone() {
-        return new RecordDefImpl(this);
+    public RecordDef asRecord() {
+        return this;
     }
 
     @Override
     public RecordValueImpl createRecord() {
         return new RecordValueImpl(this);
+    }
+
+    /*
+     * Public api methods from RecordDef
+     */
+
+    @Override
+    public String getName() {
+        return name;
+    }
+
+    @Override
+    public FieldDefImpl getField(String name1) {
+        return (FieldDefImpl) fieldMap.get(name1);
+    }
+
+    @Override
+    public FieldDef getField(int index) {
+        return getField(getFieldName(index));
+    }
+
+    @Override
+    public List<String> getFields() {
+        return Collections.unmodifiableList(fieldMap.getFieldOrder());
+    }
+
+    @Override
+    public String getFieldName(int index) {
+        return fieldMap.getFieldOrder().get(index);
     }
 
     @Override
@@ -189,16 +210,52 @@ class RecordDefImpl extends FieldDefImpl
         return fme.getDefaultValue();
     }
 
-    FieldMap getFieldMap() {
-        return fieldMap;
+    /*
+     * FieldDefImpl internal api methods
+     */
+
+    @Override
+    public boolean isPrecise() {
+        return fieldMap.isPrecise();
     }
 
-    int getNumFields() {
-        return fieldMap.size();
+    @Override
+    public boolean isSubtype(FieldDefImpl superType) {
+
+        if (superType.isRecord()) {
+            return fieldMap.isSubtype(((RecordDefImpl)superType).getFieldMap());
+        } else if (superType.isAny() || superType.isAnyRecord()) {
+            return true;
+        } else {
+            return false;
+        }
     }
 
-    List<String> getFieldsInternal() {
-        return fieldMap.getFieldOrder();
+    @Override
+    FieldDefImpl findField(ListIterator<String> fieldPath) {
+        assert fieldPath.hasNext();
+
+        FieldDefImpl def = (FieldDefImpl) fieldMap.get(fieldPath.next());
+        if (def == null || !fieldPath.hasNext()) {
+            return def;
+        }
+        return def.findField(fieldPath);
+    }
+
+    @Override
+    FieldDefImpl findField(String fieldName) {
+        return (FieldDefImpl) fieldMap.get(fieldName);
+    }
+
+    @Override
+    void toJson(ObjectNode node) {
+
+        /*
+         * Records always require a name because of Avro
+         */
+        node.put(NAME, name);
+        super.toJson(node);
+        fieldMap.putFields(node);
     }
 
     /**
@@ -232,19 +289,6 @@ class RecordDefImpl extends FieldDefImpl
         return node;
     }
 
-    FieldMapEntry getFieldMapEntry(String fieldName,
-                                   boolean mustExist) {
-        FieldMapEntry fme = fieldMap.getFieldMapEntry(fieldName);
-        if (fme != null) {
-            return fme;
-        }
-        if (mustExist) {
-            throw new IllegalArgumentException
-                ("Field does not exist in table definition: " + fieldName);
-        }
-        return null;
-    }
-
     @Override
     FieldValueImpl createValue(JsonNode node) {
         if (node == null || node.isNull()) {
@@ -261,19 +305,45 @@ class RecordDefImpl extends FieldDefImpl
         return createRecord();
     }
 
-    @Override
-    FieldDefImpl findField(ListIterator<String> fieldPath) {
-        assert fieldPath.hasNext();
+    /*
+     * local methods
+     */
 
-        FieldDefImpl def = (FieldDefImpl) fieldMap.get(fieldPath.next());
-        if (def == null || !fieldPath.hasNext()) {
-            return def;
+    public void setName(String n) {
+        name = n;
+
+        if (name == null || name.isEmpty()) {
+            throw new IllegalArgumentException(
+                "Record types require a name");
         }
-        return def.findField(fieldPath);
     }
 
-    @Override
-    FieldDefImpl findField(String fieldName) {
-        return (FieldDefImpl) fieldMap.get(fieldName);
+    FieldMap getFieldMap() {
+        return fieldMap;
+    }
+
+    public int getNumFields() {
+        return fieldMap.size();
+    }
+
+    List<String> getFieldsInternal() {
+        return fieldMap.getFieldOrder();
+    }
+
+    public int getFieldPos(String fname) {
+        return fieldMap.getFieldPos(fname);
+    }
+
+    FieldMapEntry getFieldMapEntry(String fieldName, boolean mustExist) {
+
+        FieldMapEntry fme = fieldMap.getFieldMapEntry(fieldName);
+        if (fme != null) {
+            return fme;
+        }
+        if (mustExist) {
+            throw new IllegalArgumentException
+                ("Field does not exist in table definition: " + fieldName);
+        }
+        return null;
     }
 }

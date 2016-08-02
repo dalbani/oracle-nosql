@@ -7,14 +7,14 @@
     <link rel="stylesheet" href="gettingStarted.css" type="text/css" />
     <meta name="generator" content="DocBook XSL Stylesheets V1.73.2" />
     <link rel="start" href="index.html" title="Oracle NoSQL Database Administrator's Guide" />
-    <link rel="up" href="diag_util.html" title="Appendix E. Diagnostics Utility" />
+    <link rel="up" href="diag_util.html" title="Appendix F. Diagnostics Utility" />
     <link rel="prev" href="diag_collect.html" title="Packaging information and files" />
     <link rel="next" href="diag_stats.html" title="Key Distribution Statistics Utility" />
   </head>
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
@@ -22,7 +22,7 @@
         </tr>
         <tr>
           <td width="20%" align="left"><a accesskey="p" href="diag_collect.html">Prev</a> </td>
-          <th width="60%" align="center">Appendix E. Diagnostics Utility</th>
+          <th width="60%" align="center">Appendix F. Diagnostics Utility</th>
           <td width="20%" align="right"> <a accesskey="n" href="diag_stats.html">Next</a></td>
         </tr>
       </table>
@@ -40,7 +40,7 @@
          You can use the <code class="literal">diagnostics verify</code> tool to
          verify the configuration of the specified Storage Nodes. You can also
          check if the configuration of each Storage Node is consistent with
-         other members of the cluster. 
+         other members of the cluster.
       </p>
       <p> 
          The usage of this command is: 
@@ -59,9 +59,9 @@
         <ul type="disc">
           <li>
             <p> 
-               -checkLocal
+               -checkLocal 
             </p>
-            <p> 
+            <p>
                If specified, verifies the configuration of the specified
                Storage Nodes.
             </p>
@@ -88,19 +88,19 @@
             </p>
           </li>
           <li>
-            <p> 
-               -port 
+            <p>
+               -port
             </p>
             <p> 
                Specifies the host of a Storage Node. If specified, it
                detects a running topology in order to update the
                   <code class="literal">sn-target-list</code> without having to run
                   <code class="literal">diagnostics setup</code> first. It needs to be
-               specified with -host.
+               specified with -host. 
             </p>
           </li>
           <li>
-            <p> 
+            <p>
                -sshusername 
             </p>
             <p> Specifies a SSH username to log on as in a Storage Node.
@@ -108,24 +108,23 @@
           </li>
           <li>
             <p> 
-               -username 
+               -username
             </p>
             <p> Specifies a username to log on as in a secure deployment.
             </p>
           </li>
           <li>
             <p>
-               -security
+               -security 
             </p>
-            <p> 
-               In a secured deployment, specifies a path to the security
+            <p> In a secured deployment, specifies a path to the security
                file. If not specified in a secure store, updating the
-                  <code class="literal">sn-target-list</code> will fail.
+                  <code class="literal">sn-target-list</code> will fail. 
             </p>
           </li>
           <li>
-            <p> 
-               -configdir 
+            <p>
+               -configdir
             </p>
             <p> 
                Specifies the directory which contains the

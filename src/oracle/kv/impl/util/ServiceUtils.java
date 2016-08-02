@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,8 +48,10 @@ import java.rmi.RemoteException;
 import java.util.Arrays;
 
 import oracle.kv.impl.admin.CommandServiceAPI;
+import oracle.kv.impl.arb.admin.ArbNodeAdminAPI;
 import oracle.kv.impl.rep.admin.RepNodeAdminAPI;
 import oracle.kv.impl.security.login.LoginManager;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNode;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.StorageNode;
@@ -117,7 +119,7 @@ public class ServiceUtils {
                 exception = e;
             }
 
-            /* 
+            /*
              * Check now for any process startup problems before
              * sleeping.
              */
@@ -233,4 +235,87 @@ public class ServiceUtils {
         }
         throw exception;
     }
+
+    /**
+     * Get and wait for a ArbNodeAdmin handle to reach one of the states in
+     * the ServiceStatus array parameter.
+     */
+    @SuppressWarnings("null")
+    public static ArbNodeAdminAPI
+        waitForArbNodeAdmin(String storeName,
+                            String hostName,
+                            int port,
+                            ArbNodeId arid,
+                            StorageNodeId snid,
+                            LoginManager loginMgr,
+                            long timeoutSec,
+                            ServiceStatus[] targetStatus)
+                            throws Exception {
+
+        Exception exception = null;
+        ArbNodeAdminAPI anai = null;
+        ServiceStatus status = null;
+
+        long limitMs = System.currentTimeMillis() + 1000 * timeoutSec;
+
+        while (System.currentTimeMillis() <= limitMs) {
+
+            /**
+             * The stub may be stale, get it again on exception.
+             */
+            if (exception != null) {
+                anai = null;
+            }
+            try {
+                if (anai == null) {
+                    anai = RegistryUtils.getArbNodeAdmin
+                        (storeName, hostName, port, arid, loginMgr);
+                }
+                status = anai.ping().getServiceStatus();
+                for (ServiceStatus tstatus : targetStatus) {
+                    /**
+                     * Treat UNREACHABLE as "any".
+                     */
+                    if (tstatus == ServiceStatus.UNREACHABLE) {
+                        return anai;
+                    }
+                    if (status == tstatus) {
+                        return anai;
+                    }
+                }
+                exception = null;
+            } catch (RemoteException e) {
+                exception = e;
+            } catch (NotBoundException e) {
+                exception = e;
+            }
+
+            /*
+             * Check now for any process startup problems before
+             * sleeping.
+             */
+            if (snid != null) {
+                RegistryUtils.checkForStartupProblem(storeName,
+                                                     hostName,
+                                                     port,
+                                                     arid,
+                                                     snid,
+                                                     loginMgr);
+            }
+
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ignored) {
+                throw new IllegalStateException("unexpected interrupt");
+            }
+        }
+
+        if (status != null) {
+            throw new IllegalStateException
+                ("ARB current status: " + status + " target status: " +
+                 Arrays.toString(targetStatus));
+        }
+        throw exception;
+    }
+
 }

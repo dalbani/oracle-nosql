@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -47,17 +47,19 @@ import java.util.List;
 import java.util.logging.Logger;
 
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
 import oracle.kv.impl.topo.StorageNodeId;
 
 /**
  * ParamTopoResolver provides an implementation of TopologyResolver that
- * resolves based on Admin Parameters.
+ * resolves based on Parameters.
  */
 public class ParamTopoResolver implements TopologyResolver {
 
@@ -114,6 +116,10 @@ public class ParamTopoResolver implements TopologyResolver {
 
         if (target instanceof StorageNodeId) {
             return getStorageNode((StorageNodeId) target);
+        }
+
+        if (target instanceof ArbNodeId) {
+            return getStorageNode((ArbNodeId) target);
         }
 
         logger.info("ParamTopoResolver: unable to resolve target type: " +
@@ -198,6 +204,35 @@ public class ParamTopoResolver implements TopologyResolver {
         }
 
         logger.fine("ParamTopoResolver: successfully resolved RnId: " + target);
+
+        return new SNInfo(snp.getHostname(), snp.getRegistryPort(), snid);
+    }
+
+
+    private SNInfo getStorageNode(ArbNodeId target) {
+
+        final Parameters params = paramsHandle.getParameters();
+        if (params == null) {
+            logger.info("ParamTopoResolver: unable to resolve AnId: " +
+                        target + " with null Parameters");
+            return null;
+        }
+
+        final ArbNodeParams anp = params.get(target);
+        if (anp == null) {
+            logger.info("ParamTopoResolver: unable to resolve AnId: " +
+                        target + " with null ArbNodeParams");
+            return null;
+        }
+
+        final StorageNodeId snid = anp.getStorageNodeId();
+        final StorageNodeParams snp = params.get(snid);
+        if (snp == null) {
+            throw new IllegalStateException(
+                "StorageNode " + snid + " was not found.");
+        }
+
+        logger.fine("ParamTopoResolver: successfully resolved AnId: " + target);
 
         return new SNInfo(snp.getHostname(), snp.getRegistryPort(), snid);
     }

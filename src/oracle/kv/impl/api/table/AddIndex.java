@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,9 +44,10 @@
 package oracle.kv.impl.api.table;
 
 import java.util.List;
+import java.util.Map;
 
 /**
- *
+ * A TableChange to add an index.
  */
 class AddIndex extends TableChange {
     private static final long serialVersionUID = 1L;
@@ -55,6 +56,8 @@ class AddIndex extends TableChange {
     private final String description;
     private final String tableName;
     private final List<String> fields;
+    private final Map<String,String> annotations;
+    private final Map<String,String> properties;
 
     AddIndex(IndexImpl index, int seqNum) {
         super(seqNum);
@@ -62,11 +65,18 @@ class AddIndex extends TableChange {
         description = index.getDescription();
         tableName = index.getTable().getFullName();
         fields = index.getFieldsInternal();
+        annotations = index.getAnnotationsInternal();
+        properties = index.getProperties();
     }
 
     @Override
     boolean apply(TableMetadata md) {
-        md.insertIndex(name, tableName, fields, description);
+        if (annotations == null) {
+            md.insertIndex(name, tableName, fields, description);
+        } else {
+            md.insertTextIndex
+                (name, tableName, fields, annotations, properties, description);
+        }
         return true;
     }
 }

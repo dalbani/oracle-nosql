@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -55,12 +55,14 @@ import oracle.kv.impl.admin.TopologyCheck.JEHAInfo;
 import oracle.kv.impl.admin.TopologyCheck.OkayRemedy;
 import oracle.kv.impl.admin.TopologyCheck.Remedy;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.plan.AbstractPlan;
 import oracle.kv.impl.fault.OperationFaultException;
 import oracle.kv.impl.sna.StorageNodeAgentAPI;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.StorageNodeId;
 import oracle.kv.impl.topo.Topology;
@@ -74,7 +76,7 @@ import com.sleepycat.persist.model.Persistent;
  * topology inconsistencies and prevent cascading topology errors.
  *
  * Also check the version of the new SN, to prevent the inadvertent downgrade
- * of a RN version. 
+ * of a RN version.
  */
 @Persistent
 public class VerifyBeforeMigrate extends SingleJobTask {
@@ -191,11 +193,11 @@ public class VerifyBeforeMigrate extends SingleJobTask {
 
         for (RepNodeId rnId : hostedRNs) {
             Remedy remedy =
-                checker.checkRNLocation(admin, newSN, rnId,
-                                        false, /* calledByDeployNewRN */
-                                        true /* makeRNEnabled */,
-                                        null /* oldSNId */,
-                                        null /* newMountPoint */);
+                checker.checkLocation(admin, newSN, rnId,
+                                      false, /* calledByDeployNewRN */
+                                      true /* makeRNEnabled */,
+                                      null /* oldSNId */,
+                                      null /* newMountPoint */);
             /* TODO: Consider applying the remedy instead of failing. */
             if (!remedy.isOkay()) {
                 throw new OperationFaultException
@@ -213,6 +215,44 @@ public class VerifyBeforeMigrate extends SingleJobTask {
                     // if so, try moving the check into checkRNLocation
                     throw new OperationFaultException
                         (rnId + " has inconsistent location metadata. "+
+                         " and is living on " + currentHost  +
+                         " rather than " + oldSN + " or " + newSN +
+                         "Please run plan repair-topology");
+                }
+            }
+        }
+
+        Set<ArbNodeId> hostedANs = new HashSet<ArbNodeId>();
+        for (ArbNodeParams anp : params.getArbNodeParams()) {
+            if (anp.getStorageNodeId().equals(oldSN) ||
+                anp.getStorageNodeId().equals(newSN)) {
+                hostedANs.add(anp.getArbNodeId());
+            }
+        }
+
+        for (ArbNodeId anId : hostedANs) {
+            Remedy remedy =
+                checker.checkLocation(admin, newSN, anId,
+                                      false /* calledByDeployNewRN */,
+                                      true /* makeRNEnabled */,
+                                      null /* oldSNId */,
+                                      null /* newMountPoint */);
+            if (!remedy.isOkay()) {
+                throw new OperationFaultException
+                    (anId + " has inconsistent location metadata. Please " +
+                     "run plan repair-topology : " + remedy);
+            }
+
+            final JEHAInfo jeHAInfo = ((OkayRemedy) remedy).getJEHAInfo();
+            if (jeHAInfo != null) {
+                StorageNodeId currentHost = jeHAInfo.getSNId();
+                if (!currentHost.equals(oldSN) &&
+                    !currentHost.equals(newSN)) {
+
+                    // TODO: Run tests to see if this situation occurs, and,
+                    // if so, try moving the check into checkRNLocation
+                    throw new OperationFaultException
+                        (anId + " has inconsistent location metadata. "+
                          " and is living on " + currentHost  +
                          " rather than " + oldSN + " or " + newSN +
                          "Please run plan repair-topology");

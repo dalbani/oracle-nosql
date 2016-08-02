@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -117,8 +117,8 @@ class PoolCommand extends CommandWithSubs {
                     msg = "Pool already exists: " + poolName;
                 } else {
                     cs.addStorageNodePool(poolName);
-                    shell.verboseOutput("Added pool " + poolName);
-                }
+                    msg = "Added pool " + poolName;
+                  }
             } catch (RemoteException re) {
                 cmd.noAdmin(re);
             }
@@ -179,7 +179,7 @@ class PoolCommand extends CommandWithSubs {
                     msg = "Pool does not exist: " + poolName;
                 } else {
                     cs.removeStorageNodePool(poolName);
-                    shell.verboseOutput("Removed pool " + poolName);
+                    msg = "Removed pool " + poolName;
                 }
             } catch (RemoteException re) {
                 cmd.noAdmin(re);

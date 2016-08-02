@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -61,6 +61,7 @@ import javax.management.remote.rmi.RMIConnectorServer;
 import javax.rmi.ssl.SslRMIClientSocketFactory;
 
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.measurement.ServiceStatusChange;
 import oracle.kv.impl.mgmt.AgentInternal;
@@ -68,6 +69,7 @@ import oracle.kv.impl.param.ParameterMap;
 import oracle.kv.impl.rep.monitor.StatsPacket;
 import oracle.kv.impl.sna.ServiceManager;
 import oracle.kv.impl.sna.StorageNodeAgent;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.util.ServiceStatusTracker;
 import oracle.kv.impl.util.registry.RMISocketPolicy;
@@ -81,10 +83,12 @@ public class JmxAgent extends AgentInternal {
     public final static String JMX_SSF_NAME = "jmxrmi";
     final static String JMX_CSF_NAME = "jmxrmi";
 
-    private MBeanServer server;
+    private final MBeanServer server;
     private JMXConnectorServer connector;
-    private StorageNode snMBean;
-    private Map<RepNodeId, RepNode> rnMap = new HashMap<RepNodeId, RepNode>();
+    private final StorageNode snMBean;
+    private final Map<RepNodeId, RepNode> rnMap = new HashMap<RepNodeId, RepNode>();
+    private final Map<ArbNodeId, ArbNode>
+        anMap = new HashMap<ArbNodeId, ArbNode>();
     private Admin admin;
     private static RMISocketPolicy jmxRMIPolicy;
 
@@ -136,7 +140,7 @@ public class JmxAgent extends AgentInternal {
 
                         /*
                          * Needed so that we can bind in the SSL registry.
-                         * Unfortunately, there doesn't appear to be a 
+                         * Unfortunately, there doesn't appear to be a
                          * published mechanism for doing this.
                          */
                         env.put("com.sun.jndi.rmi.factory.socket",
@@ -410,6 +414,48 @@ public class JmxAgent extends AgentInternal {
         rn.setParameters(rnp);
     }
 
+
+    @Override
+    protected void updateArbNodeStatus(ArbNodeId which,
+                                       ServiceStatusChange newStatus) {
+        ArbNode an = anMap.get(which);
+        if (an == null) {
+            sna.getLogger().warning
+                ("Updating service status, ArbNode MBean not found for " +
+                 which.getFullName());
+            return;
+        }
+
+        an.setServiceStatus(newStatus.getStatus());
+    }
+
+    @Override
+    protected void updateArbNodePerfStats(ArbNodeId which, StatsPacket packet) {
+        ArbNode an = anMap.get(which);
+        if (an == null) {
+            sna.getLogger().warning
+                ("Updating perf stats, ArbNode MBean not found for " +
+                 which.getFullName());
+            return;
+        }
+
+        an.setPerfStats(packet);
+    }
+
+    @Override
+    protected void updateArbNodeParameters(ArbNodeId which, ParameterMap map) {
+        ArbNode an = anMap.get(which);
+        if (an == null) {
+            sna.getLogger().warning
+                ("Updating parameters, ArbNode MBean not found for " +
+                 which.getFullName());
+            return;
+        }
+
+        ArbNodeParams anp = new ArbNodeParams(map);
+        an.setParameters(anp);
+    }
+
     @Override
     public void updateAdminParameters(ParameterMap newMap) {
         AdminParams ap = new AdminParams(newMap);
@@ -421,5 +467,25 @@ public class JmxAgent extends AgentInternal {
                                   boolean isMaster) {
 
         admin.setServiceStatus(newStatus.getStatus(), isMaster);
+    }
+
+    @Override
+    public void addArbNode(ArbNodeParams anp, ServiceManager mgr)
+        throws Exception {
+
+        final ArbNodeId anId = anp.getArbNodeId();
+        ArbNode an = new ArbNode(anp, server, snMBean);
+        anMap.put(anId, an);
+        addServiceManagerListener(anId, mgr);
+    }
+
+    @Override
+    public void removeArbNode(ArbNodeId anid) {
+        unexportStatusReceiver(anid);
+        ArbNode an = anMap.get(anid);
+        if (an != null) {
+            an.unregister();
+        }
+        anMap.remove(anid);
     }
 }

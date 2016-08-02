@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -52,18 +52,21 @@ import oracle.kv.impl.topo.PartitionId;
 
 /**
  * A class encapsulates the execute function for multi-get-batch operation.
+ *
+ * @param <T> the type of the associated operation
+ * @param <V> the result type
  */
-class MultiGetBatchExecutor<V> {
+class MultiGetBatchExecutor<T extends InternalOperation, V> {
 
-    final MultiGetBatchHandler<V> handler;
+    final MultiGetBatchHandler<T, V> handler;
 
-    MultiGetBatchExecutor(MultiGetBatchHandler<V> handler) {
+    MultiGetBatchExecutor(MultiGetBatchHandler<T, V> handler) {
         this.handler = handler;
     }
 
-    public Result execute(Transaction txn,
+    public Result execute(T op,
+                          Transaction txn,
                           PartitionId partitionId,
-                          final OperationHandler operationHandler,
                           List<byte[]> keys,
                           byte[] resumeKey,
                           int batchSize) {
@@ -72,14 +75,17 @@ class MultiGetBatchExecutor<V> {
         int index = 0;
         boolean hasMore = false;
         byte[] resumeSubKey = resumeKey;
+        final List<V> subResults = new ArrayList<V>();
         for (; index < keys.size(); index++) {
             final byte[] parentKey = keys.get(index);
             final int subBatchSize = (batchSize > results.size()) ?
                                         batchSize - results.size() : 1;
             final boolean moreElements =
-                handler.iterate(txn, partitionId, operationHandler,
-                                parentKey, subBatchSize, resumeSubKey,
-                                results);
+                handler.iterate(op, txn, partitionId, parentKey, subBatchSize,
+                                resumeSubKey, subResults);
+
+            results.addAll(subResults);
+
             if (moreElements) {
                 hasMore = true;
                 break;
@@ -87,6 +93,8 @@ class MultiGetBatchExecutor<V> {
             if (resumeSubKey != null) {
                 resumeSubKey = null;
             }
+
+            subResults.clear();
         }
         /*
          * If the total number of fetched records exceeds the batchSize, then
@@ -101,12 +109,12 @@ class MultiGetBatchExecutor<V> {
     /**
      * The interface to be implemented by multi-get-batch operations.
      */
-    static interface MultiGetBatchHandler<V> {
+    static interface MultiGetBatchHandler<T, V> {
 
         /* Iterate values and return the next batch. */
-        boolean iterate(Transaction txn,
+        boolean iterate(T op,
+                        Transaction txn,
                         PartitionId partitionId,
-                        OperationHandler operationHandler,
                         byte[] parentKey,
                         int subBatchSize,
                         byte[] resumeSubKey,

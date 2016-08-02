@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -71,12 +71,14 @@ import java.util.logging.Logger;
 import oracle.kv.KVVersion;
 import oracle.kv.impl.admin.CommandServiceAPI;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.BootstrapParams;
 import oracle.kv.impl.admin.param.GlobalParams;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.SecurityParams;
 import oracle.kv.impl.admin.param.SecurityParams.KrbPrincipalInfo;
 import oracle.kv.impl.admin.param.StorageNodeParams;
+import oracle.kv.impl.arb.admin.ArbNodeAdminAPI;
 import oracle.kv.impl.fault.ProcessFaultHandler;
 import oracle.kv.impl.metadata.Metadata;
 import oracle.kv.impl.metadata.MetadataInfo;
@@ -103,6 +105,7 @@ import oracle.kv.impl.test.TestHook;
 import oracle.kv.impl.test.TestHookExecute;
 import oracle.kv.impl.test.TestStatus;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
 import oracle.kv.impl.topo.StorageNodeId;
@@ -138,6 +141,9 @@ public final class StorageNodeAgent {
     public static final String STOP_COMMAND_NAME = "stop";
     public static final String STOP_COMMAND_DESC =
         "stops StorageNodeAgent and services related to kvroot";
+    public static final String STATUS_COMMAND_NAME = "status";
+    public static final String STATUS_COMMAND_DESC =
+        "status for StorageNodeAgent and services related to kvroot";
     public static final String RESTART_COMMAND_NAME = "restart";
     public static final String RESTART_COMMAND_DESC =
         "combines stop and start commands into one";
@@ -157,6 +163,7 @@ public final class StorageNodeAgent {
      * stop and restart commands are used.
      */
     public static final String SHUTDOWN_FLAG = "-shutdown";
+    public static final String STATUS_FLAG = "-status";
     public static final String THREADS_FLAG = "-threads";
     public static final String LINK_COMMAND = "ln";
     private static final String IBM_VENDOR_PREFIX = "IBM";
@@ -168,6 +175,12 @@ public final class StorageNodeAgent {
         ", use the -disable-services" +
         "\noption with the " + START_COMMAND_NAME + ", " + STOP_COMMAND_NAME +
         ", or " + RESTART_COMMAND_NAME + " commands";
+
+    /*
+     * This variable turns the output of command execution into json format
+     * strings if the command supports JSON format result.
+     */
+    private boolean json = false;
 
     private final StorageNodeAgentImpl snai;
     private StorageNodeAgentInterface exportableSnaif;
@@ -213,6 +226,7 @@ public final class StorageNodeAgent {
     private boolean useThreads;
     private Logger logger;
     private final Map<String, ServiceManager> repNodeServices;
+    private final Map<String, ServiceManager> arbNodeServices;
     private ServiceManager adminService;
     private MonitorAgentImpl monitorAgent;
     private MgmtAgent mgmtAgent;
@@ -221,6 +235,13 @@ public final class StorageNodeAgent {
     private final ParameterTracker snParameterTracker;
     private final ParameterTracker globalParameterTracker;
 
+    /* SNAParser handles the command line arguments when issuing commands to
+     * the SNA. The parser should be a member of the class so there's greater
+     * resiliency in having some parsed results even if some of the arguments
+     * throw errors.
+     */
+    private SNAParser snaParser;
+
     /* The master Balance manager component in the SNA. */
     private MasterBalanceManagerInterface masterBalanceManager;
 
@@ -228,7 +249,8 @@ public final class StorageNodeAgent {
     /**
      * Test only.  restart*Hook exists to "fake" exiting the process at various
      * times to test how things go when it is restarted.  It works by creating
-     * a new SNA and shutting down the running one.
+     * a new SNA and shutting down the running one.  Note that the two RN hooks
+     * apply to RNs and ANs.
      */
     private TestHook<StorageNodeAgent> restartRNHook;
     private TestHook<StorageNodeAgent> restartAdminHook;
@@ -271,6 +293,8 @@ public final class StorageNodeAgent {
         globalParameterTracker = new ParameterTracker();
 
         repNodeServices = new HashMap<String, ServiceManager>();
+        arbNodeServices = new HashMap<String, ServiceManager>();
+
         adminService = null;
         final String os = System.getProperty("os.name");
         if (os.indexOf("Windows") != -1) {
@@ -309,16 +333,34 @@ public final class StorageNodeAgent {
         repnodeWaitSecs = seconds;
     }
 
+    public SNAParser getSNAParser () {
+        return snaParser;
+    }
+
     class SNAParser extends CommandParser {
         private boolean shutdown;
+        private boolean status;
         private boolean disableServices;
+        private String command = "start SNA";
 
         SNAParser(String[] args) {
             super(args);
         }
 
-        SNAParserResults getResults() {
-            return new SNAParserResults(shutdown, disableServices);
+        public boolean getShutdown() {
+            return shutdown;
+        }
+
+        public boolean getStatus() {
+            return status;
+        }
+
+        public boolean getDisableServices() {
+            return disableServices;
+        }
+
+        public String getCommand() {
+            return command;
         }
 
         @Override
@@ -349,10 +391,17 @@ public final class StorageNodeAgent {
                 return true;
             }
             if (arg.equals(SHUTDOWN_FLAG)) {
+                command = "stop SNA";
                 shutdown = true;
                 return true;
             }
+            if (arg.equals(STATUS_FLAG)) {
+                command = "status SNA";
+                status = true;
+                return true;
+            }
             if (arg.equals(DISABLE_SERVICES_FLAG)) {
+                command = "stop SNA and disable services";
                 disableServices = true;
                 return true;
             }
@@ -365,39 +414,39 @@ public final class StorageNodeAgent {
 
         @Override
         public void usage(String errorMsg) {
-            throw new IllegalArgumentException(
-                (errorMsg == null ? "" : errorMsg + "\n") +
-                KVSTORE_USAGE_PREFIX + "\n\t<" +
-                START_COMMAND_NAME + " | " +
-                STOP_COMMAND_NAME + " | " +
-                RESTART_COMMAND_NAME + ">\n\t" +
-                COMMAND_ARGS);
+            throw new IllegalArgumentException
+                ((errorMsg == null ? "" : errorMsg + "\n") +
+                 KVSTORE_USAGE_PREFIX + "\n\t<" +
+                 START_COMMAND_NAME + " | " +
+                 STOP_COMMAND_NAME + " | " +
+                 STATUS_COMMAND_NAME + " | " +
+                 RESTART_COMMAND_NAME + ">\n\t" +
+                 COMMAND_ARGS);
         }
     }
 
-    static class SNAParserResults {
-        final boolean shutdown;
-        final boolean disableServices;
-        private SNAParserResults(boolean shutdown, boolean disableServices) {
-            this.shutdown = shutdown;
-            this.disableServices = disableServices;
+    SNAParser parseArgs(String args[]) {
+
+        snaParser = new SNAParser(args);
+        try {
+            snaParser.parseArgs();
+        } catch (IllegalArgumentException re) {
+            /*
+             * Optimistically set json so we can hopefully format illegal
+             * argument exceptions correctly.
+             */
+            json = snaParser.getJson();
+            throw re;
         }
+        bootstrapDir = snaParser.getRootDir();
+        json = snaParser.getJson();
+
+        return snaParser;
     }
 
-    SNAParserResults parseArgs(String args[]) {
+    StorageNodeAgentAPI getRunningAgent(int openTimeout, int readTimeout)
+        throws NotBoundException, RemoteException {
 
-        SNAParser parser = new SNAParser(args);
-        parser.parseArgs();
-        bootstrapDir = parser.getRootDir();
-
-        return parser.getResults();
-    }
-
-    /**
-     * Using the bootstrap config file, attempt to stop the SNA process that it
-     * using it.  Throws an exception if it fails.
-     */
-    void stopRunningAgent() {
         final File configPath = new File(bootstrapDir, bootstrapFile);
         logger = LoggerUtils.getBootstrapLogger
             (bootstrapDir, FileNames.BOOTSTRAP_SNA_LOG, snaName);
@@ -418,7 +467,6 @@ public final class StorageNodeAgent {
                                       null /* snp */, logger);
 
         StorageNodeAgentAPI snai1 = null;
-        try {
             if (bp.getStoreName() != null) {
                 StorageNodeId snid1 = new StorageNodeId(bp.getId());
                 String bn =
@@ -430,13 +478,6 @@ public final class StorageNodeAgent {
                                                     StorageNodeId.getPrefix(),
                                                     InterfaceType.MAIN.
                                                     interfaceName());
-                /**
-                 * Set generous open and read timeouts when communicating with
-                 * the SNA to allow time for long RN shutdown times resulting
-                 * from checkpoints.
-                 */
-                final int openTimeout = 60000;
-                final int readTimeout = 2 * 60 * 60 *1000;
 
                 ClientSocketFactory.configureStoreTimeout
                     (csfName, openTimeout, readTimeout);
@@ -449,7 +490,21 @@ public final class StorageNodeAgent {
                     (bp.getHostname(), bp.getRegistryPort(),
                      GlobalParams.SNA_SERVICE_NAME, getLoginManager());
             }
-            snai1.shutdown(true, false);
+            return snai1;
+    }
+
+    /**
+     * Using the bootstrap config file, attempt to stop the SNA process that it
+     * using it.  Throws an exception if it fails.
+     */
+    void stopRunningAgent() {
+        try {
+            /**
+             * Set generous open and read timeouts when communicating with
+             * the SNA to allow time for long RN shutdown times resulting
+             * from checkpoints.
+             */
+        	getRunningAgent(60000, 2 * 60 * 60 *1000).shutdown(true, false);
         } catch (RemoteException re) {
             throw new IllegalStateException(
                 "Exception shutting down Storage Node Agent: " +
@@ -459,6 +514,21 @@ public final class StorageNodeAgent {
             throw new IllegalStateException(
                 "Unable to contact Storage Node Agent: " + nbe.getMessage(),
                 nbe);
+        }
+    }
+
+    /**
+     * Using the bootstrap config file, attempt to get the SNA process status
+     * Throws an exception if it fails.
+     */
+    ServiceStatus getRunningAgentStatus() {
+
+        try {
+            return getRunningAgent(60000, 5 * 60000).ping().getServiceStatus();
+        } catch (RemoteException re) {
+            return ServiceStatus.UNREACHABLE;
+        } catch (NotBoundException nbe) {
+            return ServiceStatus.UNREACHABLE;
         }
     }
 
@@ -1406,6 +1476,18 @@ public final class StorageNodeAgent {
             }
         }
 
+        List<ParameterMap> arbNodes =
+            ConfigUtils.getArbNodes(kvConfigPath, logger);
+        for (ParameterMap map : arbNodes) {
+            ArbNodeParams an = new ArbNodeParams(map);
+            if (!an.isDisabled()) {
+                startArbNodeInternal(an);
+            } else {
+                logger.info(an.getArbNodeId().getFullName() +
+                            ": Skipping automatic start of stopped ArbNode ");
+            }
+        }
+
         /**
          * Now the Admin if this SN is hosting it.  It may already be running.
          * This will be the case during registration of the SNA that is hosting
@@ -1522,10 +1604,54 @@ public final class StorageNodeAgent {
         repNodeServices.clear();
     }
 
-    String makeRepNodeBindingName(String fullName) {
-        return RegistryUtils.bindingName(getStoreName(),
-                                         fullName,
-                                         RegistryUtils.InterfaceType.ADMIN);
+
+    /**
+     * Stops all running ARB ServiceManagers and optionally arb node services in
+     * parallel. It does this by creating an executor service and shutting down
+     * each AN in a thread associated with the service.
+     *
+     * @param stopService if true stop the service as well as the manager.
+     * @param force if true, stop the service by killing the process/thread.
+     * Note that if force is true, the service is stopped even if stopServices
+     * is false.
+     */
+    private void stopArbNodeServices(boolean stopService, boolean force) {
+
+        if (arbNodeServices.isEmpty()) {
+            return;
+        }
+
+        final ExecutorService pool =
+            Executors.newFixedThreadPool(arbNodeServices.size(),
+                                         new KVThreadFactory("AnShutDownThread",
+                                                              logger));
+        for (ServiceManager mgr : arbNodeServices.values()) {
+            pool.execute(new RNShutdownThread(this, mgr, serviceWaitMillis,
+                                              stopService, force));
+        }
+
+        pool.shutdown();
+
+        /*
+         * Overhead to provide the thread an opportunity to implement the
+         * timeout and minimize the chance of a race.
+         */
+        final long overheadMs = 10000;
+        try {
+            pool.awaitTermination(serviceWaitMillis + overheadMs,
+                                  TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            logger.warning("stopArbNodeservices: Unexpected interrupt" );
+            return;
+        }
+
+        final List<Runnable> residual = pool.shutdownNow();
+        for (Runnable t : residual) {
+            /* Kill the processes, if the AN did not terminate gracefully. */
+            ((RNShutdownThread)t).getMgr().stop();
+        }
+
+        arbNodeServices.clear();
     }
 
     /**
@@ -1564,7 +1690,7 @@ public final class StorageNodeAgent {
 
         masterBalanceManager =
             MasterBalanceManager.create(enabled, snInfo, logger,
-            		                    getLoginManager());
+                                        getLoginManager());
     }
 
     /**
@@ -1623,9 +1749,27 @@ public final class StorageNodeAgent {
      */
     private File validateRepNodeDirectory(RepNodeParams rnp) {
         File mp = rnp.getMountPoint();
+        return validateDirectory(mp, "RepNode");
+    }
+
+    private File validateArbNodeDirectory(ArbNodeParams arp) {
+        File mp =
+            FileNames.getEnvDir(kvRoot.getAbsolutePath(),
+                                getStoreName(),
+                                null,
+                                snid,
+                                arp.getArbNodeId());
+        if (mp.exists()) {
+            validateDirectory(mp, "ArbNode");
+        }
+        return mp;
+    }
+
+    private File validateDirectory(File mp, String nodeType) {
         if (mp != null) {
             if (!mp.isDirectory()) {
-                String msg = "Directory specified for RepNode is either" +
+                String msg = "Directory specified for "+ nodeType +
+                    " is either" +
                     " not present or is not a directory: " +
                     mp.getAbsoluteFile();
                 logger.info(msg);
@@ -1696,6 +1840,68 @@ public final class StorageNodeAgent {
         }
         return true;
     }
+
+    /**
+     * Internal method to start an ArbNode, shared by external and internal
+     * callers.
+     */
+    private boolean startArbNodeInternal(ArbNodeParams anp) {
+
+        ArbNodeId arbid = anp.getArbNodeId();
+        String serviceName = arbid.getFullName();
+        logger.info(serviceName + ": Starting ArbNode");
+        try {
+
+            /**
+             * Create a ManagedService object used by the ServiceManager to
+             * start the service.
+             */
+            ManagedArbNode ms = new ManagedArbNode
+                (sp, anp, kvRoot, snRoot, getStoreName());
+            File arbNodeDir = validateArbNodeDirectory(anp);
+
+            ServiceManager mgr = arbNodeServices.get(serviceName);
+            if (mgr != null) {
+                /* The service may be running */
+                boolean isRunning = mgr.isRunning();
+                if (isRunning) {
+                    logger.info(serviceName +
+                                ": Attempt to start a running ArbNode.");
+                    return true;
+                }
+                logger.info(serviceName + " exists but is not runnable." +
+                            "  Attempt to stop it and restart.");
+                stopArbNode(arbid, true);
+                /*
+                 * recurse back to startArbNode to make sure state gets set
+                 * correctly.
+                 */
+                return startArbNode(arbid);
+            }
+            if (useThreads) {
+                /* start in thread */
+                mgr = new ThreadServiceManager(this, ms);
+            } else {
+                /* start in process */
+                mgr = new ProcessServiceManager(this, ms);
+            }
+            checkForRecovery(arbid, arbNodeDir);
+            mgmtAgent.addArbNode(anp, mgr);
+
+            mgr.start();
+
+            /**
+             * Add service to map of running services.
+             */
+            arbNodeServices.put(serviceName, mgr);
+            logger.info(serviceName + ": Started ArbNode");
+        } catch (Exception e) {
+            logsevere((serviceName + ": Exception starting ArbNode"), e);
+            return false;
+        }
+        return true;
+    }
+
 
     /**
      * Utility method for waiting until a RepNode reaches one of the given
@@ -1856,6 +2062,98 @@ public final class StorageNodeAgent {
             } catch (RuntimeException ce) {
                 logwarning
                     ((serviceName + ": Exception removing RepNode from mgmt" +
+                      " agent"), ce);
+            }
+        }
+        return isRunning;
+    }
+
+    String makeRepNodeBindingName(String fullName) {
+        return RegistryUtils.bindingName(getStoreName(),
+                                         fullName,
+                                         RegistryUtils.InterfaceType.ADMIN);
+    }
+
+    /**
+     * Stop a running ArbNode
+     */
+    public boolean stopArbNode(ArbNodeId rnid, boolean force) {
+        return stopArbNode(rnid, force, serviceWaitMillis);
+    }
+
+    /*
+     * This function should never fail to stop a ArbNode if the ArbNode exists
+     * and is running.  The last resort is to forcibly kill the AN, even if the
+     * force boolean is false.
+     */
+    boolean stopArbNode(ArbNodeId arbid, boolean force, int waitMillis) {
+
+        boolean stopped = false;
+        String serviceName = arbid.getFullName();
+        logger.info(serviceName + ": stopArbNode called");
+        ServiceManager mgr = arbNodeServices.get(serviceName);
+        boolean isRunning = true;
+        if (mgr != null) {
+            isRunning = mgr.isRunning();
+        }
+        if (mgr == null || !isRunning) {
+            logger.info(serviceName + ": ArbNode is not running");
+        }
+        if (mgr == null) {
+            return false;
+        }
+
+        /*
+         * Set the service state in the config file to disabled.  Once this is
+         * done the AN will not be automatically restarted.
+         */
+        setServiceStoppedState
+            (serviceName, ParameterState.COMMON_DISABLED, true);
+        try {
+
+            /*
+             * Make sure the service won't automatically restart.
+             */
+            mgr.dontRestart();
+
+            /*
+             * If force is true, skip directly to killing the service.
+             */
+            if (isRunning && !mgr.forceOK(force)) {
+                ManagedArbNode man = (ManagedArbNode) mgr.getService();
+                ArbNodeAdminAPI ana = man.getArbNodeAdmin(this);
+                ana.shutdown(force);
+
+                /*
+                 * Wait for the execution context (process or thread).
+                 */
+                mgr.waitFor(waitMillis);
+                stopped = true;
+                logger.info(serviceName + ": Stopped ArbNode");
+            }
+        } catch (RuntimeException e) {
+            logwarning((serviceName + ": Exception stopping ArbNode"), e);
+        } catch (RemoteException re) {
+            logwarning((serviceName + ": Exception stopping ArbNode"), re);
+        } finally {
+
+            /*
+             * Ask the ServiceManager to stop it if shutdown failed.
+             */
+            if (!stopped) {
+                mgr.stop();
+            }
+
+            /*
+             * Remove service and set active state in ANP to false.
+             */
+            unbindService(makeRepNodeBindingName(serviceName));
+            arbNodeServices.remove(serviceName);
+            try {
+                mgmtAgent.removeArbNode(arbid);
+            } catch (RuntimeException ce) {
+                logwarning
+                    ((serviceName + ": Exception removing ArbNode from mgmt" +
                       " agent"), ce);
             }
         }
@@ -2331,6 +2629,8 @@ public final class StorageNodeAgent {
         stopRepNodeServices(stopServices, force);
         stopMasterBalanceManager();
 
+        stopArbNodeServices(stopServices, force);
+
         assert TestHookExecute.doHookIfSet(mbmPostShutdownHook, this);
 
         stopAdminService(stopServices, force);
@@ -2536,8 +2836,8 @@ public final class StorageNodeAgent {
      * that is a problem for the administrator.
      */
     private void
-             configureRepNode(Set<Metadata<? extends MetadataInfo>> metadataSet,
-                              RepNodeId rnid) {
+        configureRepNode(Set<Metadata<? extends MetadataInfo>> metadataSet,
+                         RepNodeId rnid) {
 
         /**
          * When creating the RepNode it needs to be configured using the
@@ -2683,6 +2983,156 @@ public final class StorageNodeAgent {
     }
 
     /**
+     * Utility method for waiting until a ArbNode reaches one of the given
+     * states.  Primarily here for the exception handling.
+     */
+    public ArbNodeAdminAPI waitForArbNodeAdmin(ArbNodeId anid,
+                                               ServiceStatus[] targets) {
+        return waitForArbNodeAdmin(anid, targets, repnodeWaitSecs);
+    }
+
+    private ArbNodeAdminAPI waitForArbNodeAdmin(ArbNodeId anid,
+                                                ServiceStatus[] targets,
+                                                int waitSecs) {
+        ArbNodeAdminAPI anai = null;
+        try {
+            anai = ServiceUtils.waitForArbNodeAdmin
+                (getStoreName(), getHostname(), getRegistryPort(), anid, snid,
+                 getLoginManager(), waitSecs, targets);
+        } catch (Exception e) {
+            File logDir = FileNames.getLoggingDir(kvRoot, getStoreName());
+            String logName =
+                logDir + File.separator + anid.toString() + "*.log";
+            String msg = "Failed to attach to ArbNodeService for " +
+                anid + " after waiting " + waitSecs +
+                " seconds; see log, " + logName + ", on host " +
+                getHostname() + " for more information.";
+            logsevere(msg, e);
+
+            /*
+             * Check if the process didn't actually start up, and throw an
+             * exception if so. That's different from a timeout exception, and
+             * it would be better to propagate that information.
+             */
+            RegistryUtils.checkForStartupProblem(getStoreName(), getHostname(),
+                                                 getRegistryPort(), anid, snid,
+                                                 getLoginManager());
+            return null;
+        }
+        return anai;
+    }
+
+    ArbNodeParams lookupArbNode(ArbNodeId arid) {
+
+        return ConfigUtils.getArbNodeParams(kvConfigPath, arid, logger);
+    }
+
+    boolean createArbNode(ArbNodeParams arbNodeParams) {
+
+        /**
+         * Creation of ArbNodes, admins and parameter changes are synchronized
+         * in order to coordinate changes to the config file(s).
+         */
+        synchronized(this) {
+            ArbNodeId anid = arbNodeParams.getArbNodeId();
+            String serviceName = anid.getFullName();
+            logger.info(serviceName + ": Creating ArbNode");
+
+            /**
+             * Add the new ArbNode to configuration.
+             */
+            LoadParameters lp =
+                LoadParameters.getParameters(kvConfigPath, logger);
+
+            /**
+             * The ArbNode may be in the config file but not configured.  This
+             * would happen if the SNA exited after writing the config file but
+             * before the ArbNode configure() method succeeded.
+             *
+             * So, allow the ArbNode to exist and be running and if it's not
+             * yet deployed, deploy (configure) it.  If it is deployed then
+             * this call was in error so return false.
+             */
+            boolean startService = true;
+            ArbNodeParams anp = null;
+            ParameterMap map = lp.getMap(serviceName);
+            if (map != null) {
+                ServiceManager mgr = arbNodeServices.get(serviceName);
+                anp = new ArbNodeParams(map);
+                if (mgr != null) {
+                    /**
+                       The service may have been created.  Don't start it.
+                    */
+                    String msg = serviceName +
+                        ": ArbNode exists, not starting process";
+                    logger.info(msg);
+                    startService = false;
+                } else {
+                    String msg = serviceName +
+                        ": ArbNode exists but is not running, will attempt " +
+                        "to start it";
+                    logger.info(msg);
+                }
+            } else {
+                lp.addMap(arbNodeParams.getMap());
+                lp.saveParameters(kvConfigPath);
+                anp = ConfigUtils.getArbNodeParams(kvConfigPath, anid, logger);
+            }
+
+            /*
+             * Test: exit here between creation and startup.
+             */
+            assert TestHookExecute.doHookIfSet(restartRNHook, this);
+            assert TestHookExecute.doHookIfSet(FAULT_HOOK, 0);
+
+            /*
+             * Start the service.
+             */
+            if (startService) {
+                if (!startArbNodeInternal(anp)) {
+                    return false;
+                }
+            }
+
+            /*
+             * Test exit after start, before waiting
+             */
+            assert TestHookExecute.doHookIfSet(stopRNHook, this);
+
+            ServiceStatus[] targets =
+                {ServiceStatus.WAITING_FOR_DEPLOY, ServiceStatus.RUNNING};
+
+            waitForArbNodeAdmin(anid, targets, repnodeWaitSecs);
+            logger.info(serviceName + ": Created ArbNode");
+            return true;
+        }
+    }
+
+    /**
+     * Start an already created ArbNode.
+     */
+    boolean startArbNode(ArbNodeId arbNodeId) {
+
+        String serviceName = arbNodeId.getFullName();
+        ArbNodeParams arp =
+            ConfigUtils.getArbNodeParams(kvConfigPath, arbNodeId, logger);
+        if (arp == null) {
+            String msg = serviceName + ": ArbNode has not been created";
+            logger.info(msg);
+
+            /* This arb node should have been created by this point. */
+            throw new IllegalStateException(msg);
+        }
+
+        /**
+         * Set active state in arp.
+         */
+        setServiceStoppedState
+            (serviceName, ParameterState.COMMON_DISABLED, false);
+        return startArbNodeInternal(arp);
+    }
+
+    /**
      * Test-oriented interface to wait for the RepNode to exit.
      */
     protected boolean waitForRepNodeExit(RepNodeId rnid, int timeoutSecs) {
@@ -2715,6 +3165,25 @@ public final class StorageNodeAgent {
         }
     }
 
+    void replaceArbNodeParams(ArbNodeParams arbNodeParams) {
+
+        /**
+         * Creation of ArbNodes, admins and parameter changes are synchronized
+         * in order to coordinate changes to the config file(s).
+         */
+        synchronized(this) {
+            String serviceName = arbNodeParams.getArbNodeId().getFullName();
+            LoadParameters lp =
+                LoadParameters.getParameters(kvConfigPath, logger);
+            if (lp.removeMap(serviceName) == null) {
+                throw new IllegalStateException
+                    ("newProperties: ArbNode service " + serviceName + " is not " +
+                     "managed by this Storage Node: " + snaName);
+            }
+            lp.addMap(arbNodeParams.getMap());
+            lp.saveParameters(kvConfigPath);
+        }
+    }
     void replaceAdminParams(AdminId adminId, ParameterMap params) {
 
         /**
@@ -2915,6 +3384,22 @@ public final class StorageNodeAgent {
                     mgmtAgent.addAdmin(ma.getAdminParams(), adminService);
                 } catch (Exception e) {
                     String msg = "Exception adding Admin to MgmtAgent: " +
+                        e.getMessage();
+                    throw new IllegalStateException(msg, e);
+                }
+            }
+
+            /*
+             * If any ArbNodes are running at this time, let the new MgmtAgent
+             * know about them.
+             */
+            for (ServiceManager mgr : arbNodeServices.values()) {
+                ManagedArbNode man = (ManagedArbNode) mgr.getService();
+                try {
+                    mgmtAgent.addArbNode(man.getArbNodeParams(), mgr);
+                } catch (Exception e) {
+                    String msg = man.getResourceId().getFullName() +
+                        ": Exception adding ArbNode to MgmtAgent: " +
                         e.getMessage();
                     throw new IllegalStateException(msg, e);
                 }
@@ -3343,5 +3828,12 @@ public final class StorageNodeAgent {
 
     ProcessFaultHandler getFaultHandler() {
         return snai.getFaultHandler();
+    }
+
+    /**
+     * Returns whether to print results in JSON format
+     */
+    public boolean getJson() {
+        return json;
     }
 }

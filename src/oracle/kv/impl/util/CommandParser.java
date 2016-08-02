@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -83,6 +83,7 @@ public abstract class CommandParser {
     public static final String ADMIN_FLAG = "-admin";
     public static final String USAGE_FLAG = "-usage";
     public static final String VERBOSE_FLAG = "-verbose";
+    public static final String DEBUG_FLAG = "-debug";
     public static final String USER_FLAG = "-username";
     public static final String SECURITY_FLAG = "-security";
     public static final String ADMIN_USER_FLAG = "-admin-username";
@@ -93,6 +94,7 @@ public abstract class CommandParser {
     public static final String HELPER_HOSTS_FLAG = "-helper-hosts";
     public static final String NOCONNECT_FLAG = "-noconnect";
     public static final String NOPROMPT_FLAG = "-noprompt";
+    public static final String DONTEXIT_FLAG = "-no-exit";
     public static final String HIDDEN_FLAG = "-hidden";
     public static final String NAME_FLAG = "-name";
     public static final String LAST_FLAG = "-last";
@@ -100,14 +102,29 @@ public abstract class CommandParser {
     public static final String TO_FLAG = "-to";
     public static final String ON_FLAG = "on";
     public static final String OFF_FLAG = "off";
+    public static final String CONSISTENCY_TIME_FLAG = "-time";
+    public static final String PERMISSIBLE_LAG_FLAG = "-permissible-lag";
+    public static final String MASTER_SYNC_FLAG = "-master-sync";
+    public static final String REPLICA_SYNC_FLAG = "-replica-sync";
+    public static final String REPLICA_ACK_FLAG = "-replica-ack";
+    public static final String TABLE_FLAG = "-table";
+    public static final String FILE_FLAG = "-file";
     public static final String JSON_FLAG = "-json";
     public static final String DNS_CACHETTL_FLAG = "-dns-cachettl";
+    public static final String COMMAND_FLAG = "-command";
+    public static final String PRETTY_FLAG = "-pretty";
 
     public static final String KVSTORE_USAGE_PREFIX =
         "Usage: java -jar KVHOME/lib/kvstore.jar ";
 
     public static final String KVCLI_USAGE_PREFIX =
         "Usage: java -jar KVHOME/lib/kvcli.jar ";
+
+    public static final String KVSQLCLI_USAGE_PREFIX =
+    	"Usage: java -jar KVHOME/lib/onql.jar ";
+
+    public static final String KVTOOL_USAGE_PREFIX =
+        "Usage: java -jar KVHOME/lib/kvtool.jar ";
 
     protected String rootDir;
     protected String hostname;
@@ -329,6 +346,20 @@ public abstract class CommandParser {
     private void doParseArgs() {
         int nArgs = argArray.length;
         argc = 0;
+        String errorArg = null;
+
+        /*
+         * Set json flag first in case an error is thrown during argument
+         * check.
+         */
+        while (argc < nArgs) {
+            if (argArray[argc++].equals(JSON_FLAG)) {
+                 json = true;
+            }
+        }
+
+        argc = 0;
+
         while (argc < nArgs) {
             String thisArg = argArray[argc++];
 
@@ -375,12 +406,14 @@ public abstract class CommandParser {
             } else if (thisArg.equals(ADMIN_SECURITY_FLAG)) {
                 adminSecurityFilePath = nextArg(thisArg);
             } else if (thisArg.equals(JSON_FLAG)) {
-                json = true;
             } else if (!checkArg(thisArg)) {
                 if (!isIgnoreUnknownArg()) {
-                    unknownArg(thisArg);
+                    errorArg=thisArg;
                 }
             }
+        }
+        if (errorArg != null) {
+            unknownArg(errorArg);
         }
     }
 

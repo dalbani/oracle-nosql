@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -60,6 +60,8 @@ import java.util.Set;
 import java.util.TreeMap;
 
 import oracle.kv.impl.admin.IllegalCommandException;
+import oracle.kv.impl.api.table.IndexImpl.AnnotatedField;
+import oracle.kv.impl.api.table.IndexImpl.IndexStatus;
 import oracle.kv.impl.api.table.TableImpl.TableStatus;
 import oracle.kv.impl.metadata.Metadata;
 import oracle.kv.impl.metadata.MetadataInfo;
@@ -67,8 +69,7 @@ import oracle.kv.impl.metadata.MetadataKey;
 import oracle.kv.impl.security.ResourceOwner;
 import oracle.kv.table.Index;
 import oracle.kv.table.Table;
-import oracle.kv.impl.api.table.IndexImpl.AnnotatedField;
-import oracle.kv.impl.api.table.IndexImpl.IndexStatus;
+import oracle.kv.table.TimeToLive;
 
 /**
  * This is internal implementation that wraps Table and Index metadata
@@ -119,25 +120,71 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
     }
 
     public TableImpl addTable(String name,
+            String parentName,
+            List<String> primaryKey,
+            List<String> shardKey,
+            FieldMap fieldMap,
+            boolean r2compat,
+            int schemaId,
+            String description,
+            ResourceOwner owner) {
+
+        return addTable(name, parentName, primaryKey,
+                        null, /* primary key sizes */
+                        shardKey, fieldMap,
+                        null /* TTL*/,
+                        r2compat, schemaId, description, owner);
+    }
+
+    public TableImpl addTable(String name,
                               String parentName,
                               List<String> primaryKey,
+                              List<Integer> primaryKeySizes,
                               List<String> shardKey,
                               FieldMap fieldMap,
+                              TimeToLive ttl,
                               boolean r2compat,
                               int schemaId,
                               String description,
                               ResourceOwner owner) {
         TableImpl table = insertTable(name, parentName,
-                                      primaryKey, shardKey,
+                                      primaryKey, primaryKeySizes, shardKey,
                                       fieldMap,
+                                      ttl,
                                       r2compat, schemaId,
                                       description,
-                                      owner);
+                                      owner, false);
+        addTableChange(table);
+        return table;
+    }
+
+    public TableImpl addSysTable(String name,
+                                 String parentName,
+                                 List<String> primaryKey,
+                                 List<Integer> primaryKeySizes,
+                                 List<String> shardKey,
+                                 FieldMap fieldMap,
+                                 TimeToLive ttl,
+                                 boolean r2compat,
+                                 int schemaId,
+                                 String description,
+                                 ResourceOwner owner) {
+        TableImpl table = insertTable(name, parentName,
+                                      primaryKey, primaryKeySizes, shardKey,
+                                      fieldMap,
+                                      ttl,
+                                      r2compat, schemaId,
+                                      description,
+                                      owner, true);
+        addTableChange(table);
+        return table;
+    }
+
+    private void addTableChange(TableImpl table) {
         bumpSeqNum();
         if (changeHistory != null) {
             changeHistory.add(new AddTable(table, seqNum));
         }
-        return table;
     }
 
     /**
@@ -175,11 +222,18 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
      * other than the latest table version
      */
     public boolean evolveTable(TableImpl table, int tableVersion,
-                               FieldMap fieldMap) {
+                               FieldMap fieldMap, TimeToLive ttl) {
 
-        if (fieldMap.equals(table.getFieldMap())) {
-            return false;
+        if (table.isSystemTable()) {
+            throw new IllegalCommandException
+                ("Cannot evolve table " +
+                 makeQualifiedName(null, table.getName()));
         }
+        if (fieldMap.equals(table.getFieldMap())) {
+            if (ttl.equals(table.getDefaultTTL())) {
+                return false;
+            } 
+        } 
 
         if (tableVersion != table.numTableVersions()) {
             throw new IllegalCommandException
@@ -188,7 +242,7 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
                  table.numTableVersions());
         }
 
-        table.evolve(fieldMap);
+        table.evolve(fieldMap, ttl);
         bumpSeqNum();
         if (changeHistory != null) {
             changeHistory.add(new EvolveTable(table, seqNum));
@@ -211,6 +265,7 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
     public void addTextIndex(String indexName,
                              String tableName,
                              List<AnnotatedField> fields,
+                             Map<String,String> properties,
                              String description) {
         List<String> fieldNames = new ArrayList<String>(fields.size());
         Map<String,String> annotations = new HashMap<String,String>(fields.size());
@@ -220,7 +275,7 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
 
         final IndexImpl index = insertTextIndex(indexName, tableName,
                                                 fieldNames, annotations,
-                                                description);
+                                                properties, description);
 
         bumpSeqNum();
         if (changeHistory != null) {
@@ -261,12 +316,15 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
     TableImpl insertTable(String name,
                           String parentName,
                           List<String> primaryKey,
+                          List<Integer> primaryKeySizes,
                           List<String> shardKey,
                           FieldMap fields,
+                          TimeToLive ttl,
                           boolean r2compat,
                           int schemaId,
                           String description,
-                          ResourceOwner owner) {
+                          ResourceOwner owner,
+                          boolean sysTable) {
 
         TableImpl table = null;
 
@@ -282,10 +340,19 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
                     ("Cannot create table.  Table exists: " +
                      makeQualifiedName(name, parentName));
             }
+
+            if (parent.isSystemTable() != sysTable) {
+                throw new IllegalArgumentException
+                    ("Cannot create table " + name + ". It must" +
+                     ((sysTable) ? " not" : "") + " be a system table, " +
+                     "because its parent is " +
+                     ((sysTable) ? "" : " not") + " a system table");
+            }
             table = TableImpl.createTable(name, parent,
-                                          primaryKey, shardKey,
+                                          primaryKey, primaryKeySizes, shardKey,
                                           fields, r2compat, schemaId,
-                                          description, true, owner);
+                                          description, true, owner, ttl,
+                                          sysTable);
             table.setId(allocateId());
             parent.getMutableChildTables().put(name, table);
         } else {
@@ -294,9 +361,10 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
                     ("Cannot create table.  Table exists: " + name);
             }
             table = TableImpl.createTable(name, null,
-                                          primaryKey, shardKey,
+                                          primaryKey, primaryKeySizes, shardKey,
                                           fields, r2compat, schemaId,
-                                          description, true, owner);
+                                          description, true, owner, ttl,
+                                          sysTable);
             table.setId(allocateId());
             tables.put(name, table);
         }
@@ -307,9 +375,9 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
     /*
      * Evolve the table described.  It must not exist or an exception is thrown.
      */
-    TableImpl evolveTable(String tableName, FieldMap fields) {
+    TableImpl evolveTable(String tableName, FieldMap fields, TimeToLive ttl) {
         final TableImpl table = getTable(tableName, true);
-        table.evolve(fields);
+        table.evolve(fields, ttl);
         return table;
     }
 
@@ -348,6 +416,11 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
         final TableImpl table = getTable(tableName, mustExist);
         String qname = makeQualifiedName(null, tableName);
         if (table != null) {
+            if (table.isSystemTable()) {
+                throw new IllegalCommandException
+                    ("Cannot remove system table: " + qname);
+            }
+
             if (!table.getChildTables().isEmpty()) {
                 throw new IllegalCommandException
                     ("Cannot remove " + qname +
@@ -363,6 +436,11 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
                           List<String> fields,
                           String description) {
         final TableImpl table = getTable(tableName, true);
+        if (table.isSystemTable()) {
+            throw new IllegalCommandException
+                ("Cannot add index " + indexName + " on system table: " +
+                 makeQualifiedName(null, tableName));
+        }
 
         if (table.getIndex(indexName) != null) {
             throw new IllegalArgumentException
@@ -378,6 +456,12 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
 
     boolean removeIndex(String indexName, String tableName) {
         final TableImpl table = getTable(tableName, true);
+        if (table.isSystemTable()) {
+            throw new IllegalCommandException
+                ("Cannot remove index " + indexName + " on system table: " +
+                 makeQualifiedName(null, tableName));
+        }
+
         Index index = table.getIndex(indexName);
         if (index == null) {
             throw new IllegalArgumentException
@@ -416,8 +500,14 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
                               String tableName,
                               List<String> fields,
                               Map<String, String> annotations,
+                              Map<String, String> properties, 
                               String description) {
         final TableImpl table = getTable(tableName, true);
+        if (table.isSystemTable()) {
+            throw new IllegalCommandException
+                ("Cannot add text index " + indexName + " on table: " +
+                 makeQualifiedName(null, tableName));
+        }
 
         if (table.getTextIndex(indexName) != null) {
             throw new IllegalArgumentException
@@ -425,7 +515,7 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
                  makeQualifiedName(null, tableName));
         }
         IndexImpl index = new IndexImpl(indexName, table, fields,
-                                        annotations, description);
+                                        annotations, properties, description);
         index.setStatus(IndexStatus.POPULATING);
         table.addIndex(index);
         return index;
@@ -439,9 +529,24 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
      * component
      */
     public TableImpl getTable(String tableName, boolean mustExist) {
+
         String path[] = TableImpl.parseFullName(tableName);
+        return getTable(path, mustExist);
+    }
+
+    public TableImpl getTable(String tableName) {
+        return getTable(tableName, false);
+    }
+
+    public TableImpl getTable(String[] tableName) {
+        return getTable(tableName, false);
+    }
+
+    public TableImpl getTable(String[] path, boolean mustExist) {
+
         String firstKey = path[0];
         TableImpl targetTable = findTable(firstKey);
+
         if (path.length > 1) {
             for (int i = 1; i < path.length && targetTable != null; i++) {
                 try {
@@ -452,16 +557,13 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
                 }
             }
         }
+
         if (targetTable == null && mustExist) {
             throw new IllegalArgumentException
-               ("Table: " + makeQualifiedName(null, tableName) +
+               ("Table: " + makeQualifiedName(path) +
                 " does not exist in " + this);
         }
         return targetTable;
-    }
-
-    public TableImpl getTable(String tableName) {
-        return getTable(tableName, false);
     }
 
     public boolean tableExists(String name, String tableName) {
@@ -498,6 +600,14 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
 
     public static String makeQualifiedName(TableImpl table) {
         return makeQualifiedName(null, table.getFullName());
+    }
+
+    public static String makeQualifiedName(String[] pathName) {
+        StringBuilder sb = new StringBuilder();
+        for (String step : pathName) {
+            sb.append(step);
+        }
+        return makeQualifiedName(null, sb.toString());
     }
 
     /**
@@ -910,6 +1020,4 @@ public class TableMetadata implements Metadata<TableChangeList>, Serializable {
          */
         boolean tableCallback(Table t);
     }
-
-
 }

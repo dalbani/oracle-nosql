@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -80,6 +80,7 @@ import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.Topology;
 import oracle.kv.impl.topo.TopologyUtil;
 import oracle.kv.impl.util.KVThreadFactory;
+import oracle.kv.table.TimeToLive;
 
 /**
  * This class represents a single bulk put operation. It provides the common
@@ -315,8 +316,8 @@ public abstract class BulkPut<T> {
                                          threadFactory);
         int streamId = 0;
 
-        ArrayList<Future<Integer>>
-            futures = new ArrayList<Future<Integer>>(streams.length);
+        ArrayList<Future<Long>>
+            futures = new ArrayList<Future<Long>>(streams.length);
         for (EntryStream<T> s : streams) {
             final StreamReader<T> streamReader = createReader(++streamId, s);
             if (!futures.add(streamExecutor.submit(streamReader))) {
@@ -432,21 +433,25 @@ public abstract class BulkPut<T> {
             final List<PartitionId> list = map.get(rgId);
 
             /* Divide up the partitions amongst the tasks. */
-
-            int perTaskPartitions =
-                (list.size() + perShardParallelism - 1) / perShardParallelism;
+            int basePartitionsPerTask = list.size() / perShardParallelism;
+            int residualPartitions = list.size() % perShardParallelism;
 
             doneWithShard:
-            for (int i = 0; i < perShardParallelism; i++) {
-                final List<PartitionId> taskPartitions =
-                    list.subList(i * perTaskPartitions,
-                                 Math.min((i + 1) * perTaskPartitions,
-                                          list.size()));
+            for (int i = 0; i < list.size();) {
+                int partitionsThisTask = basePartitionsPerTask;
+                if (residualPartitions > 0) {
+                    /* Distribute residual partitions across lead tasks */
+                    residualPartitions--;
+                    partitionsThisTask++;
+                }
 
-                if (taskPartitions.size() == 0) {
-                    /* Excess threads */
+                if (partitionsThisTask == 0) {
+                    /* More parallelism than partitions in shard. */
                     break doneWithShard;
                 }
+
+                final List<PartitionId> taskPartitions =
+                    list.subList(i, i + partitionsThisTask);
 
                 logger.info("Partitions:" +
                             Arrays.toString(taskPartitions.toArray()) +
@@ -460,6 +465,8 @@ public abstract class BulkPut<T> {
                 }
 
                 putExecutor.submit(putTask);
+                /* Move forward in the partition list */
+                i += partitionsThisTask;
             }
         }
 
@@ -499,7 +506,7 @@ public abstract class BulkPut<T> {
     /**
      * Returns true if the current bulk put operation is terminated.
      */
-    private boolean isTermiated() {
+    private boolean isTerminated() {
         return terminateException.get() != null;
     }
 
@@ -623,7 +630,9 @@ public abstract class BulkPut<T> {
 
             if (!queuedKVPairs.offer(partBatch)) {
                 batchQueueOverflow++;
-                queuedKVPairs.put(partBatch);
+                while (!isTerminated() &&
+                       !queuedKVPairs.offer(partBatch, 10, TimeUnit.SECONDS)) {
+                }
             }
         }
 
@@ -666,6 +675,12 @@ public abstract class BulkPut<T> {
                         }
                     } catch (RuntimeException re) {
                         logger.info(Thread.currentThread() + " caught " + re);
+                        if (re.getCause() != null) {
+                            Throwable e = re.getCause();
+                            if (e instanceof InterruptedException) {
+                                throw (InterruptedException) e;
+                            }
+                        }
                         handleRuntimeException(pbatch, re);
                     }
 
@@ -735,7 +750,7 @@ public abstract class BulkPut<T> {
         throws InterruptedException {
 
         for (PartitionValues pv : pMap) {
-           pv.flush(true);
+            pv.flush(true);
         }
 
         logger.info("Flushed all partitions");
@@ -745,17 +760,17 @@ public abstract class BulkPut<T> {
      * Wait for all futures queued to read streams to finish and accumulate
      * read counts.
      */
-    private void finishStreams(ArrayList<Future<Integer>> futures,
+    private void finishStreams(ArrayList<Future<Long>> futures,
                                AggregateStatistics putResult)
         throws InterruptedException  {
 
-        for (Future<Integer> f : futures) {
-            if (isTermiated()) {
+        for (Future<Long> f : futures) {
+            if (isTerminated()) {
                 f.cancel(true);
                 continue;
             }
             try {
-                int readCount = f.get();
+                long readCount = f.get();
                 putResult.aggregate(readCount);
             } catch (ExecutionException e) {
                 final Throwable t = e.getCause();
@@ -800,7 +815,7 @@ public abstract class BulkPut<T> {
          */
         private long existingKeys ;
 
-        public void aggregate(int entriesRead) {
+        public void aggregate(long entriesRead) {
             readCount += entriesRead;
         }
 
@@ -810,7 +825,7 @@ public abstract class BulkPut<T> {
                 "%,d rows read, %,d inserted, %,d pre-existing. " +
                 "%,d batches; %,d batch queue underflows; " +
                 "%,d batch queue overflows;"  +
-                 "%,d av batch size";
+                "%,d av batch size;";
 
             return String.format(fmt, readCount, putCount, existingKeys,
                                  batchCount,
@@ -838,7 +853,7 @@ public abstract class BulkPut<T> {
      *
      * @param <E> the entry type: Row or a KV pair
      */
-    public abstract class StreamReader<E> implements Callable<Integer> {
+    public abstract class StreamReader<E> implements Callable<Long> {
 
         /**
          * The internal stream id
@@ -853,12 +868,19 @@ public abstract class BulkPut<T> {
         /**
          * The number of records read by this stream reader.
          */
-        private volatile int readCount = 0;
+        private volatile long readCount = 0;
+
+        /**
+         * The number of records with the key that already existed in the
+         * partition buffer, that is, they were duplicates in or across streams
+         * and were detected as such even before being sent to the store.
+         */
+        private volatile long dupCount = 0;
 
         /**
          * The flag to indicate if there are no more elements to read.
          */
-        private boolean noMoreElement = false;
+        private volatile boolean noMoreElement = false;
 
         /**
          * The number of records put to store.
@@ -873,7 +895,7 @@ public abstract class BulkPut<T> {
         }
 
         @Override
-        public Integer call() throws Exception {
+        public Long call() throws Exception {
            final String sfmt = "Started stream reader for %s(%d)";
            logger.info(String.format(sfmt, entryStream.name(), streamId));
 
@@ -890,11 +912,12 @@ public abstract class BulkPut<T> {
                    final long tableId = getTableId(e);
                    final byte[] keyBytes = serializer.toByteArray(pk);
                    final PartitionId pid = topology.getPartitionId(keyBytes);
-
+                   final TimeToLive ttl = getTTL(e);
                    pMap[pid.getPartitionId()].put(keyBytes,
                                                   value.toByteArray(),
                                                   streamId,
-                                                  tableId);
+                                                  tableId,
+                                                  ttl);
                }
                noMoreElement = true;
                /*
@@ -906,6 +929,8 @@ public abstract class BulkPut<T> {
                }
            } catch (RuntimeException re) {
                terminateWithException(re);
+           } catch (InterruptedException ie) {
+               terminateWithException(new RuntimeException(ie));
            } finally {
                final String fmt = "Finished stream reader for %s(%d)";
                logger.info(String.format(fmt, entryStream.name(), streamId));
@@ -913,11 +938,16 @@ public abstract class BulkPut<T> {
            return readCount;
         }
 
+        void keyExists(E entry) {
+            dupCount++;
+            entryStream.keyExists(entry);
+        }
+
         EntryStream<E> getEntryStream() {
             return entryStream;
         }
 
-        int getReadCount() {
+        long getReadCount() {
             return readCount;
         }
 
@@ -926,10 +956,11 @@ public abstract class BulkPut<T> {
         }
 
         /**
-         * Return true if all elements are read and write to the store.
+         * Return true if all elements have read and match all writes after
+         * accounting for transiently detected duplicates.
          */
         boolean isDone() {
-            return noMoreElement && (putCount.get() == readCount);
+            return noMoreElement && (putCount.get() == (readCount - dupCount));
         }
 
         /**
@@ -940,8 +971,20 @@ public abstract class BulkPut<T> {
 
         protected abstract Value getValue(E entry);
 
+        /**
+         * Returns the table id of the entry, BulkPut for table should
+         * override this method.
+         */
         protected long getTableId(@SuppressWarnings("unused") E entry) {
             return 0;
+        }
+
+        /**
+         * Returns the ttl of the entry, BulkPut for table should override
+         * this method.
+         */
+        protected TimeToLive getTTL(@SuppressWarnings("unused") E entry) {
+            return null;
         }
     }
 
@@ -990,11 +1033,24 @@ public abstract class BulkPut<T> {
         }
 
         synchronized void put(byte[] key, byte[] value,
-                              int streamId, long tableId)
+                              int streamId, long tableId,
+                              TimeToLive ttl)
             throws InterruptedException {
 
-            final WrappedValue wv = new WrappedValue(value, streamId, tableId);
-            kvPairs.put(key, wv);
+            final WrappedValue wv = new WrappedValue(value, streamId,
+                                                     tableId, ttl);
+            final WrappedValue old = kvPairs.put(key, wv);
+            if (old != null) {
+                /*
+                 * Found duplicated key, put the old value again to avoid
+                 * update the existing element.
+                 */
+                kvPairs.put(key, old);
+
+                T entry = convertToEntry(serializer.fromByteArray(key),
+                                         Value.fromByteArray(value));
+                readers.get(streamId - 1).keyExists(entry);
+            }
             treeBytes += (key.length + wv.getBytesSize());
             flush(false);
         }
@@ -1013,15 +1069,14 @@ public abstract class BulkPut<T> {
         private void flush(boolean force)
             throws InterruptedException {
 
-            final int maxRequestSize = 1024 * 1024;
+            final int maxRequestSize = options.getMaxRequestSize();
 
             final String fmt =
                 "Queued Partition %d flushed. Batch size %,d; Total:%,d;" +
-                    " Tree bytes:%,d; request size:%,d" ;
+                    " Tree bytes:%,d; request size:%,d";
 
             while ((force && kvPairs.size() > 0) ||
-                   (treeBytes >  partitionThresholdBytes)) {
-
+                   (treeBytes > partitionThresholdBytes)) {
                 int putBatchCount = 0;
                 int requestSize = 0;
                 final List<KVPair> le = new ArrayList<KVPair>();
@@ -1050,8 +1105,11 @@ public abstract class BulkPut<T> {
                         final int kvBytes = key.length + wv.getBytesSize();
                         treeBytes -= kvBytes;
                         requestSize += kvBytes;
-
-                        le.add(new KVPair(key, value, streamId));
+                        le.add(new KVPair(key,
+                                          value,
+                                          wv.getTTLVal(),
+                                          wv.getTTLUnitOrdinal(),
+                                          streamId));
                         tallyEntryCount(streamIdCountMap, streamId);
                         if (requestSize > maxRequestSize) {
                             break;
@@ -1096,11 +1154,20 @@ public abstract class BulkPut<T> {
         private final byte[] value;
         private final int streamId;
         private final long tableId;
+        private final int ttlVal;
+        private final byte ttlUnitOrdinal;
 
-        WrappedValue(byte[] value, int streamId, long tableId) {
+        WrappedValue(byte[] value, int streamId, long tableId, TimeToLive ttl) {
             this.value = value;
             this.streamId = streamId;
             this.tableId = tableId;
+            if (ttl != null) {
+                ttlVal = (int)ttl.getValue();
+                ttlUnitOrdinal = (byte)ttl.getUnit().ordinal();
+            } else {
+                ttlVal = 0;
+                ttlUnitOrdinal = 0;
+            }
         }
 
         int getStreamId() {
@@ -1115,15 +1182,22 @@ public abstract class BulkPut<T> {
             return value;
         }
 
+        int getTTLVal() {
+            return ttlVal;
+        }
+
+        byte getTTLUnitOrdinal() {
+            return ttlUnitOrdinal;
+        }
         /*
          * Returns the bytes size of a WrappedValue object, currently it is
-         * calculated as the total size of its 3 members: value, streamId,
-         * tableId.
+         * calculated as the total size of its 5 members: value:length,
+         * streamId:4, tableId:8, ttlVal:4 and ttlUnitOrdinal:1 .
          *
          * TODO: overhead to add?
          */
         int getBytesSize() {
-            return value.length + 4 + 8;
+            return value.length + 4 + 8 + 4 + 1;
         }
     }
 
@@ -1133,17 +1207,28 @@ public abstract class BulkPut<T> {
     static public class KVPair {
         final byte[] key;
         final byte[] value;
+        final int ttlVal;
+        final byte ttlUnitOrdinal;
         final int streamId;
 
         public KVPair(byte[] key, byte[] value) {
-            this(key, value, -1);
+            this(key, value, 0, (byte)0);
         }
 
-        public KVPair(byte[] key, byte[] value, int streamId) {
+        public KVPair(byte[] key, byte[] value,
+                      int ttlVal, byte ttlUnitOrdinal) {
+           this(key, value, ttlVal, ttlUnitOrdinal, -1);
+        }
+
+        public KVPair(byte[] key, byte[] value,
+                      int ttlVal, byte ttlUnitOrdinal,
+                      int streamId) {
             super();
             this.key = key;
             this.value = value;
             this.streamId = streamId;
+            this.ttlVal = ttlVal;
+            this.ttlUnitOrdinal = ttlUnitOrdinal;
         }
 
         public byte[] getKey() {
@@ -1156,6 +1241,14 @@ public abstract class BulkPut<T> {
 
         public int getStreamId() {
             return streamId;
+        }
+
+        public int getTTLVal() {
+            return ttlVal;
+        }
+
+        public byte getTTLUnitOrdinal() {
+            return ttlUnitOrdinal;
         }
     }
 }

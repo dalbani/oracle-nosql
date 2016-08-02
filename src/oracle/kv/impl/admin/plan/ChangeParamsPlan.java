@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -51,9 +51,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.plan.task.NewRepNodeParameters;
-import oracle.kv.impl.admin.plan.task.StartRepNode;
-import oracle.kv.impl.admin.plan.task.StopRepNode;
-import oracle.kv.impl.admin.plan.task.WaitForRepNodeState;
+import oracle.kv.impl.admin.plan.task.StartNode;
+import oracle.kv.impl.admin.plan.task.StopNode;
+import oracle.kv.impl.admin.plan.task.WaitForNodeState;
 import oracle.kv.impl.admin.plan.task.WriteNewParams;
 import oracle.kv.impl.param.ParameterMap;
 import oracle.kv.impl.param.ParameterUtils;
@@ -84,7 +84,7 @@ public class ChangeParamsPlan extends AbstractPlan {
         this.newParams = map;
         /* Do as much error checking as possible, before the plan is executed.*/
         validateParams(newParams);
-        Set<RepNodeId> restartIds = new HashSet<RepNodeId>();
+        Set<RepNodeId> restartIds = new HashSet<>();
 
         /*
          * First write the new params on all nodes.
@@ -111,18 +111,18 @@ public class ChangeParamsPlan extends AbstractPlan {
             for (RepNodeId rnid : restart) {
                 StorageNodeId snid = topology.get(rnid).getStorageNodeId();
 
-                addTask(new StopRepNode(this, snid, rnid, false));
-                addTask(new StartRepNode(this, snid, rnid, false));
-                addTask(new WaitForRepNodeState(this,
-                                                rnid,
-                                                ServiceStatus.RUNNING));
+                addTask(new StopNode(this, snid, rnid, false));
+                addTask(new StartNode(this, snid, rnid, false));
+                addTask(new WaitForNodeState(this,
+                                             rnid,
+                                             ServiceStatus.RUNNING));
             }
         }
     }
 
     protected List<RepNodeId> sort(Set<RepNodeId> ids,
     		@SuppressWarnings("unused") Topology topology) {
-        List<RepNodeId> list = new ArrayList<RepNodeId>();
+        List<RepNodeId> list = new ArrayList<>();
         for (RepNodeId id : ids) {
             list.add(id);
         }
@@ -159,7 +159,7 @@ public class ChangeParamsPlan extends AbstractPlan {
     }
 
     @Override
-    void stripForDisplay() {
+    public void stripForDisplay() {
         newParams = null;
     }
 

@@ -1,0 +1,547 @@
+/*-
+ *
+ *  This file is part of Oracle NoSQL Database
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
+ *
+ *  Oracle NoSQL Database is free software: you can redistribute it and/or
+ *  modify it under the terms of the GNU Affero General Public License
+ *  as published by the Free Software Foundation, version 3.
+ *
+ *  Oracle NoSQL Database is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  Affero General Public License for more details.
+ *
+ *  You should have received a copy of the GNU Affero General Public
+ *  License in the LICENSE file along with Oracle NoSQL Database.  If not,
+ *  see <http://www.gnu.org/licenses/>.
+ *
+ *  An active Oracle commercial licensing agreement for this product
+ *  supercedes this license.
+ *
+ *  For more information please contact:
+ *
+ *  Vice President Legal, Development
+ *  Oracle America, Inc.
+ *  5OP-10
+ *  500 Oracle Parkway
+ *  Redwood Shores, CA 94065
+ *
+ *  or
+ *
+ *  berkeleydb-info_us@oracle.com
+ *
+ *  [This line intentionally left blank.]
+ *  [This line intentionally left blank.]
+ *  [This line intentionally left blank.]
+ *  [This line intentionally left blank.]
+ *  [This line intentionally left blank.]
+ *  [This line intentionally left blank.]
+ *  EOF
+ *
+ */
+package oracle.kv.impl.query.shell.output;
+
+import java.io.PrintStream;
+import java.util.List;
+import java.util.Set;
+
+import oracle.kv.StatementResult;
+import oracle.kv.impl.query.shell.output.ResultOutputFactory.ResultOutput;
+import oracle.kv.table.ArrayDef;
+import oracle.kv.table.ArrayValue;
+import oracle.kv.table.FieldDef;
+import oracle.kv.table.FieldValue;
+import oracle.kv.table.MapDef;
+import oracle.kv.table.MapValue;
+import oracle.kv.table.RecordDef;
+import oracle.kv.table.RecordValue;
+import oracle.kv.util.shell.Column;
+import oracle.kv.util.shell.Column.Align;
+import oracle.kv.util.shell.Shell;
+import oracle.kv.util.shell.ShellException;
+
+/**
+ * The ColumnOutput class is used to display records in the tabular format.
+ *
+ * For table that contains fields with simple types, its output is like below.
+ * e.g. Table users contains 4 fields:
+ *  1. id INTEGER
+ *  2. name STRING
+ *  3. age INTEGER
+ *  4. email STRING
+ *
+ * onql-> select * from users;
+ * +-----+------------+-----+--------------------+
+ * | id  |    name    | age |      email         |
+ * +-----+------------+-----+--------------------+
+ * |  1  | Jack Smith |  20 | Jack.Smith@ABC.com |
+ * |  2  | Tom White  |  30 | Tom.White@ABC.com  |
+ * | ... | ...        | ... |      ...           |
+ * | ... | ...        | ... |      ...           |
+ * +-----+------------+-----+--------------------+
+ *
+ * If table contains complex field like map or record, then the complex value
+ * are displayed hierarchically like below:
+ *
+ * e.g. Table employees contains 3 fields:
+ *  1. id INTEGER
+ *  2. name RECORD(firstName STRING, lastName STRING)
+ *  3. address RECORD(street STRING,
+ *                    city STRING,
+ *                    state STRING,
+ *                    phone ARRAY(RECORD(type ENUM(work, home),
+ *                                       areacode INTEGER,
+ *                                       number INTEGER)
+ *                    )
+ *     )
+ *
+ * onql-> select * from employees;
+ * +----+--------------=-------+-----------------------------------+
+ * | id |         name         |              address              |
+ * +----+----------------------+-----------------------------------+
+ * |  1 | firstName | Nathan   | street       | 187 Aspen Drive    |
+ * |    | lastName  | Dawson   | city         | Middleburg         |
+ * |    |                      | state        | FL                 |
+ * |    |                      | phone                             |
+ * |    |                      |     type     | work               |
+ * |    |                      |     areacode | 305                |
+ * |    |                      |     number   | 1234079            |
+ * |    |                      |                                   |
+ * |    |                      |     type     | home               |
+ * |    |                      |     areacode | 305                |
+ * |    |                      |     number   | 2066401            |
+ * +----+----------------------+-----------------------------------+
+ * |  2 | firstName | Alyssa   | street       | 36 Mulberry Street |
+ * |    | lastName  | Guerrero | city         | Leominster         |
+ * |    |                      | state        | MA                 |
+ * |    |                      | phone                             |
+ * |    |                      |     type     | work               |
+ * |    |                      |     areacode | 339                |
+ * |    |                      |     number   | 4120211            |
+ * |    |                      |                                   |
+ * |    |                      |     type     | work               |
+ * |    |                      |     areacode | 339                |
+ * |    |                      |     number   | 8694021            |
+ * +----+----------------------+-----------------------------------+
+ * |  ...     ...      ...      ...        ...         ...         |
+ * +----+----------------------+-----------------------------------+
+ *
+ */
+public class ColumnOutput extends ResultOutput {
+
+    /* The columns of the output table. */
+    Column[] columns;
+
+    /* The output table format related information */
+    private final TableFormat format;
+
+    public ColumnOutput(Shell shell,
+                        PrintStream output,
+                        StatementResult statementResult,
+                        boolean pagingEnabled,
+                        int pageHeight) {
+        this(shell, output, statementResult, pagingEnabled,
+             pageHeight, new TableFormat());
+    }
+
+    public ColumnOutput(Shell shell,
+                        PrintStream output,
+                        StatementResult statementResult,
+                        boolean pagingEnabled,
+                        int pageHeight,
+                        TableFormat tableFormat) {
+        super(shell, output, statementResult, pagingEnabled, pageHeight);
+        format = tableFormat;
+        columns = null;
+    }
+
+    /**
+     * Initialize the columns.
+     *
+     * If the field is one of simple field types or a array of simple field
+     * type, then use Column object to display the values. If the field contains
+     * complex types like map, record types, then use CompositeColumn object to
+     * display the field values.
+     */
+    void initColumns() {
+        final int nColumns = recordDef.getFields().size();
+        final char dataDelimiter = format.getDataDelimiter();
+        columns = new Column[nColumns];
+        for (int i = 0; i < nColumns; i++) {
+            final String title = recordDef.getFieldName(i);
+            final FieldDef def = recordDef.getField(i);
+            final Column col;
+
+            if (useCompositeColumn(def)) {
+                col = new CompositeColumn(title, dataDelimiter);
+            } else {
+                col = new Column(title, getDefaultColumnAlign(def));
+            }
+
+            if (def.isComplex()) {
+                if (!format.hasRowSeparator()) {
+                    format.enableRowSeparator(true);
+                }
+            }
+            columns[i] = col;
+        }
+    }
+
+    /**
+     * Returns default alignment for the given FieldDef object.
+     */
+    private Align getDefaultColumnAlign(FieldDef def) {
+        if (def.isNumeric()) {
+            return Align.RIGHT;
+        }
+        return Align.LEFT;
+    }
+
+    /**
+     * Returns true if CompositeColumn should be used to display the value for
+     * the given FieldDef object, otherwise return false.
+     */
+    boolean useCompositeColumn(FieldDef fdef) {
+        if (fdef.isArray()) {
+            fdef = fdef.asArray().getElement();
+        }
+        return fdef.isComplex();
+    }
+
+    @Override
+    long outputRecords(long maxLines, boolean pagingEnabled)
+        throws ShellException {
+
+        long nRows = 0;
+        if (columns == null) {
+            try {
+                initColumns();
+            } catch (IllegalArgumentException iae) {
+                throw new ShellException(iae.getMessage());
+            }
+        }
+
+        while (resultIterator.hasNext()) {
+            RecordValue record = resultIterator.next();
+            appendRecord(nRows++, record);
+            if (columns[0].getHeight() >= maxLines) {
+                break;
+            }
+        }
+        if (nRows > 0 && hasPageSeparator(pagingEnabled)) {
+            appendSeparator();
+        }
+        final String ret = getFormatedRowText();
+        output(ret);
+        resetColumns(pagingEnabled);
+        return nRows;
+    }
+
+    /**
+     * Resets the columns.
+     */
+    void resetColumns(boolean pagingEnabled) {
+        for (Column col : columns) {
+            col.reset(pagingEnabled, !pagingEnabled);
+        }
+    }
+
+    /**
+     * Appends a row to the output table.
+     */
+    void appendRecord(@SuppressWarnings("unused") long rowIndex,
+                      RecordValue recordValue) {
+
+        final int nColumns = columns.length;
+        int height = 0;
+        for (int i = 0; i < nColumns; i++) {
+            final Column col = columns[i];
+            final FieldDef def = recordDef.getField(i);
+            final FieldValue val = recordValue.get(i);
+            appendValue(col, def, val);
+            int colHeight = col.getHeight();
+            if (height < colHeight) {
+                height = col.getHeight();
+            }
+        }
+        finishingRow(height);
+    }
+
+    /**
+     * Do some work after a row is appended to the columns:
+     *  1. Append empty cell(s) to those column with smaller height.
+     *  2. Append row separator line if needed.
+     */
+    void finishingRow(int height) {
+        for (Column col : columns) {
+            final int diff = height - col.getHeight();
+            for (int i = 0; i < diff; i ++) {
+                col.appendEmptyData();
+            }
+        }
+        if (format.hasRowSeparator()) {
+            appendSeparator();
+        }
+    }
+
+    /**
+     * Returns true if need append a page separator line.
+     */
+    private boolean hasPageSeparator(final boolean pagingEnabled) {
+        if (!format.hasLeftRightBorder() || format.hasRowSeparator()) {
+            return false;
+        }
+        return pagingEnabled ? true : !resultIterator.hasNext();
+    }
+
+    /**
+     * Appends a value to column.
+     */
+    void appendValue(final Column col,
+                     final FieldDef def,
+                     final FieldValue fv) {
+
+        if (def.isComplex()) {
+            appendNestedValue(col, null, def, fv, 0);
+        } else {
+            final String value = getStringValue(def, fv);
+            col.appendData(value);
+        }
+    }
+
+    /**
+     * Appends nested values of complex field to the column, the values are
+     * displayed hierarchically that uses indentation to indicate nesting
+     * level.
+     */
+    private void appendNestedValue(final Column col,
+                                   final String field,
+                                   final FieldDef fdef,
+                                   final FieldValue fval,
+                                   final int currentlevel) {
+
+        int level = currentlevel;
+
+        if (!fval.isComplex()) {
+            final String value = getStringValue(fdef, fval);
+            col.appendData(level, field, value);
+            return;
+        }
+
+        if (field != null) {
+            col.appendData(level, field, "");
+            level++;
+        }
+        if (fdef.isRecord()) {
+            final RecordDef rdef = fdef.asRecord();
+            final RecordValue rval = fval.asRecord();
+            final List<String> fields = rdef.getFields();
+            for (String fname : fields) {
+                final FieldDef def = rdef.getField(fname);
+                final FieldValue val = rval.get(fname);
+                appendNestedValue(col, fname, def, val, level);
+            }
+        } else if (fdef.isMap()) {
+            final MapDef mdef = fdef.asMap();
+            final MapValue mval = fval.asMap();
+            final Set<String> keys = mval.getFields().keySet();
+            final FieldDef def = mdef.getElement();
+            if (keys.size() > 0) {
+                for (String key : keys) {
+                    final FieldValue val = mval.get(key);
+                    appendNestedValue(col, key, def, val, level);
+                }
+            } else {
+                col.appendEmptyData();
+            }
+        } else if (fdef.isArray()) {
+            final ArrayDef adef = fdef.asArray();
+            final ArrayValue aval = fval.asArray();
+            if (aval.size() > 0) {
+                final FieldDef def = adef.getElement();
+                for (int i = 0; i < aval.size(); i++) {
+                    final FieldValue val = aval.get(i);
+                    if (i > 0 && val.isComplex()) {
+                        col.appendEmptyLine();
+                    }
+                    appendNestedValue(col, null, def, val, level);
+                }
+            } else {
+                col.appendEmptyData();
+            }
+        }
+    }
+
+    /**
+     * Appends separator line
+     */
+    private void appendSeparator() {
+        for (Column col : columns) {
+            col.appendSeparatorLine();
+        }
+    }
+
+    /**
+     * Formats the columns into a string for output.
+     */
+    private String getFormatedRowText() {
+        final StringBuilder sb = new StringBuilder();
+        final int nRows = columns[0].getHeight();
+        final int nCols = columns.length;
+        for (int i = 0; i < nRows; i++) {
+            final char delimiter = getDelimiter(columns[0], i);
+            setLeftBorder(sb, delimiter);
+            for (int iCol = 0; iCol < nCols; iCol++) {
+                final Column col = columns[iCol];
+                if (iCol > 0) {
+                    setCellBorder(sb, delimiter);
+                }
+                sb.append(col.getFormattedText(i));
+            }
+            setRightBorder(sb, delimiter);
+            sb.append(Shell.eol);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Returns the delimiter character according to column type.
+     */
+    private char getDelimiter(final Column column, final int index) {
+        if (column.isHeader(index)) {
+            return format.getHeaderDelimiter();
+        } else if (column.isSeparatorLine(index) &&
+                  !column.isSeparatorEmptyLine(index)) {
+            return format.getSeparatorLineDelimter();
+        }
+        return format.getDataDelimiter();
+    }
+
+    /**
+     * Appends left border to the output StringBuilder if needed.
+     */
+    private void setLeftBorder(final StringBuilder sb,
+                               final char delimiter) {
+        if (format.hasLeftRightBorder()) {
+            setCellBorder(sb, " ", delimiter);
+        }
+    }
+
+    /**
+     * Appends right border to the output StringBuilder if needed.
+     */
+    private void setRightBorder(final StringBuilder sb,
+                                final char delimiter) {
+        if (format.hasLeftRightBorder()) {
+            setCellBorder(sb, delimiter);
+        }
+    }
+
+    private void setCellBorder(final StringBuilder sb,
+                               final char delimiter) {
+        setCellBorder(sb, null, delimiter);
+    }
+
+    private void setCellBorder(final StringBuilder sb,
+                               final String leftPadding,
+                               final char delimiter) {
+        if (!format.isNoDelimiter(delimiter)) {
+            if (leftPadding != null) {
+                sb.append(leftPadding);
+            }
+            sb.append(delimiter);
+        }
+    }
+
+    /**
+     * A class that represents the format information of the output table.
+     */
+    static class TableFormat {
+
+        /* The default delimiter character used in header columns */
+        final static char HEADER_DELIMITER = '|';
+
+        /* The default delimiter character used in data columns */
+        final static char DATA_DELIMITER = '|';
+
+        /* The default delimiter character used in separator lines */
+        final static char SEPARATOR_LINE_DELIMITER = '+';
+
+        /* A character indicates no delimiter */
+        final static char NO_DELIMITER = '\0';
+
+        private boolean hasRowSeparator;
+        private final boolean hasLeftRightBorder;
+        private final boolean hasHeaderDelimiter;
+        private final char dataDelimiter;
+        private final char headerDelimiter;
+        private final char separatorLineDelimter;
+
+        TableFormat() {
+            this(true, true, false);
+        }
+
+        TableFormat(boolean hasLeftRightBorder,
+                    boolean hasHeaderDelimiter,
+                    boolean hasRowSeparator) {
+            this(hasLeftRightBorder, hasHeaderDelimiter,
+                 hasRowSeparator, DATA_DELIMITER);
+        }
+
+        TableFormat(boolean hasLeftRightBorder,
+                    boolean hasHeaderDelimiter,
+                    boolean hasRowSeparator,
+                    char dataDelimiter) {
+            this(hasLeftRightBorder, hasHeaderDelimiter, hasRowSeparator,
+                 HEADER_DELIMITER, dataDelimiter, SEPARATOR_LINE_DELIMITER);
+        }
+
+        TableFormat(boolean hasLeftRightBorder,
+                    boolean hasHeaderDelimiter,
+                    boolean hasRowSeparator,
+                    char headerDelimiter,
+                    char dataDelimiter,
+                    char separatorLineDelimter) {
+
+            this.hasRowSeparator = hasRowSeparator;
+            this.hasLeftRightBorder = hasLeftRightBorder;
+            this.hasHeaderDelimiter = hasHeaderDelimiter;
+            this.dataDelimiter = dataDelimiter;
+            this.headerDelimiter = headerDelimiter;
+            this.separatorLineDelimter = separatorLineDelimter;
+        }
+
+        boolean hasRowSeparator() {
+            return hasRowSeparator;
+        }
+
+        boolean hasLeftRightBorder() {
+            return hasLeftRightBorder;
+        }
+
+        boolean hasHeaderDelimiter() {
+            return hasHeaderDelimiter;
+        }
+
+        char getDataDelimiter() {
+            return dataDelimiter;
+        }
+
+        char getHeaderDelimiter() {
+            return hasHeaderDelimiter ? headerDelimiter : NO_DELIMITER;
+        }
+
+        char getSeparatorLineDelimter() {
+            return separatorLineDelimter;
+        }
+
+        void enableRowSeparator(boolean value) {
+            hasRowSeparator = value;
+        }
+
+        boolean isNoDelimiter(char delimiter) {
+            return delimiter == NO_DELIMITER;
+        }
+    }
+}

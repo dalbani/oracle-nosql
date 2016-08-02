@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -84,7 +84,7 @@ public class PartitionReader implements Runnable {
     private DataInputStream stream;
     private long highestVLSN;
     private int numRetry;
-    
+
     /* true if reader is canceled */
     private volatile boolean canceled = false;
     /* reader status */
@@ -183,7 +183,7 @@ public class PartitionReader implements Runnable {
 
     /**
      * Gets number of retries reader try to connect to PMS
-     * 
+     *
      * @return number of retries
      */
     public int getNumRetry() {
@@ -259,6 +259,7 @@ public class PartitionReader implements Runnable {
         while (!canceled && !done) {
             long vlsn = VLSN.NULL_VLSN.getSequence();
             long txnId;
+            long expirationTime;
             byte[] key;
             byte[] value;
 
@@ -275,12 +276,15 @@ public class PartitionReader implements Runnable {
                 case COPY:
                     key = readDbEntry();
                     value = readDbEntry();
+                    expirationTime = readExpirationTime();
                     vlsn = readVLSN();
 
                     if (isOpFiltered(vlsn, key)) {
                         status.incrNumFilteredOps();
                     } else {
-                        callBack.processCopy(partitionId, vlsn, key, value);
+                        callBack.processCopy(partitionId, vlsn,
+                                             expirationTime,
+                                             key, value);
                     }
 
                     bytesRead += key.length + value.length + 8;
@@ -290,12 +294,15 @@ public class PartitionReader implements Runnable {
                     txnId = readTxnId();
                     key = readDbEntry();
                     value = readDbEntry();
+                    expirationTime = readExpirationTime();
                     vlsn = readVLSN();
 
                     if (isOpFiltered(vlsn, key)) {
                         status.incrNumFilteredOps();
                     } else {
-                        callBack.processPut(partitionId, vlsn, key, value,
+                        callBack.processPut(partitionId, vlsn,
+                                            expirationTime,
+                                            key, value,
                                             txnId);
                     }
 
@@ -520,6 +527,13 @@ public class PartitionReader implements Runnable {
      * Reads a VLSN from the stream.
      */
     private long readVLSN() throws IOException {
+        return stream.readLong();
+    }
+
+    /**
+     * Reads expiration time from the stream.
+     */
+    private long readExpirationTime() throws IOException {
         return stream.readLong();
     }
 

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -172,7 +172,8 @@ public class ParameterState {
             POLICY,     /* Is settable as a policy parameter */
             HIDDEN,     /* Not displayed in UI, settable only by CLI */
             SECURITY,   /* Applies to security */
-            TRANSPORT   /* Applies to transports */
+            TRANSPORT,  /* Applies to transports */
+            ARBNODE     /* Applies to ArbNode */
     }
 
     /**
@@ -194,6 +195,7 @@ public class ParameterState {
      * changes the persistent representation and should not be done lightly.
      */
     public static final String REPNODE_TYPE = "repNodeParams";
+    public static final String ARBNODE_TYPE = "arbNodeParams";
     public static final String ADMIN_TYPE = "adminParams";
     public static final String GLOBAL_TYPE = "globalParams";
     public static final String SNA_TYPE = "storageNodeParams";
@@ -269,7 +271,7 @@ public class ParameterState {
     public static final String SEC_KERBEROS_KEYTAB_FILE = "krbServiceKeytab";
 
     /**
-     * Common to RepNode and Admin
+     * Common to RepNode, ArbNode, and Admin
      */
     public static final String COMMON_SN_ID = "storageNodeId";
     public static final String COMMON_SN_ID_DEFAULT = "-1";
@@ -421,6 +423,8 @@ public class ParameterState {
     public static final String AP_CHECK_PARTITION_MIGRATION_DEFAULT = "10 s";
     public static final String AP_CHECK_ADD_INDEX = "checkAddIndex";
     public static final String AP_CHECK_ADD_INDEX_DEFAULT = "10 s";
+    public static final String AP_NEW_RN_RETRY_TIME = "newRNRetryTime";
+    public static final String AP_NEW_RN_RETRY_TIME_DEFAULT = "10 MINUTES";
 
 
     public static final String AP_NUM_GC_LOG_FILES = "numGCLogFiles";
@@ -652,7 +656,7 @@ public class ParameterState {
     public static final String RN_MONITOR_SO_CONNECT_TIMEOUT_DEFAULT = "10 s";
 
     /**
-     * The client and server socket configs associated with the RN's admin
+     * The client and server socket configs associated with the RN's/AN's admin
      * interface
      */
     public static final String RN_ADMIN_SO_BACKLOG = "rnAdminSOBacklog";
@@ -728,6 +732,128 @@ public class ParameterState {
     public static final String RN_GC_LOG_FILE_SIZE = "rnGCLogFileSize";
     public static final String RN_GC_LOG_FILE_SIZE_DEFAULT = "1048576";
 
+    /* RN GC configuration */
+
+    /* CMS GC params */
+    public static final String RN_CMS_GC_PARAMS = "rnCMSGCParams";
+
+    /**
+     * These are the default CMS GC parameters that are always applied. They
+     * can be overridden and/or enhanced by user-supplied parameters.
+     *
+     * A note about the rationale behind the CMSInitiatingOccupancyFraction
+     * setting: We currently size the JE cache size (by default) at 70% of the
+     * total heap and use a NewRatio (the ratio of old to new space) of 18. So
+     * if NewRatio + 1 represents the total heap space, old space is
+     *
+     * (1 - ( 1 / (NewRatio + 1)) * 100 =
+     *
+     * (1 - (1 / (18 + 1)) * 100 = 94.7% of total heap space.
+     *
+     * 70% of total heap used for the JE cache represents (70/94.7)*100 =
+     * 73.92% of old space. A CMS setting of 77% allows us a 77% - 73.92% =
+     * 3.08% margin for error when the JE cache is full, before unproductive
+     * CMS cycles kick in.
+     *
+     * The applications metadata requirements (topology, tables, index,
+     * security, sockets, RMI handles, etc.) as well as the jvm's class level
+     * metadata have grown in r3 and need to be accounted for. The metadata
+     * size is particularly relevant when the heap sizes are relatively modest,
+     * but the number of nodes or schema is large, e.g. the default BDA
+     * configuration. So we add another 3% to the percentage calculated above,
+     * to arrive at 77% + 3% = 80% as the value for the occupancy threshold for
+     * the CMS. Using a constant delta percentage is not the best way to
+     * account for this "fixed" (unrelated to data size) overhead. So in future
+     * we will calculate a more dynamic value for the CMS threshold and the JE
+     * cache size as well, to account for the actual metadata overhead which
+     * can vary over the lifetime of the application, even as the the data
+     * sizes and machine resources are held constant.
+     *
+     * SR 22779 and SR 23652 have more detailed discussions on this subject.
+     */
+    public static final String RN_CMS_GC_PARAMS_DEFAULT =
+        "-XX:+UseConcMarkSweepGC " +
+        "-XX:+UseParNewGC " +
+        "-XX:+DisableExplicitGC " +
+        "-XX:NewRatio=18 " +
+        "-XX:SurvivorRatio=4 " +
+        "-XX:MaxTenuringThreshold=10 " +
+        "-XX:CMSInitiatingOccupancyFraction=80 " ;
+
+
+    /* G1 GC params */
+    public static final String RN_G1_GC_PARAMS = "rnG1GCParams";
+
+    /**
+     * These are the default arguments that are used if the G1 GC is explicitly
+     * enabled.
+     *
+     * The number of ConcurrentGCThreads is limited to the max number of
+     * ParallelGCThreads, set by the SNA when it starts up the RN.
+     *
+     * Note that we are relying on the default value of the experimental
+     * parameter XX:G1NewSizePercent of 5%. We don't want to set it explicitly
+     * since it's experimental and could be removed from the jdk at any time.
+     *
+     * Please review the SR below for a discussion of the g1 settings.
+     *
+     * https://sleepycat-tools.us.oracle.com/trac/ticket/24038#comment:115
+     */
+    public static final String RN_G1_GC_PARAMS_DEFAULT =
+        "-XX:+UseG1GC " +
+
+        /**
+         * Try keep the 99% at 100ms
+         */
+        "-XX:MaxGCPauseMillis=100 " +
+
+        /**
+         * Note that this is higher than with CMS (80%) based on JE tuning. May
+         * need further tuning.
+         */
+        "-XX:InitiatingHeapOccupancyPercent=85 " +
+
+        /**
+         * Use max region size given our typical size of heap
+         */
+        "-XX:G1HeapRegionSize=32m " +
+
+       /**
+        * The target number of mixed garbage collections within which the regions
+        * with at most G1MixedGCLiveThresholdPercent live data should be
+        * collected.
+        */
+        "-XX:G1MixedGCCountTarget=32 " +
+
+        /**
+         * G1RSetRegionEntries determines the entries in RSet fine grain table.
+         * Increasing the value decreases the incoming memory slice that must be
+         * scanned for references into the region, but increases the GC storage
+         * overhead since we need more entries. The default value is 768.
+         */
+        "-XX:G1RSetRegionEntries=2560 " +
+
+         /**
+          * Threshold over which to initiate the mixed garbage collection cycle.
+          * 5% is the default but is explicitly specified here to hold this
+          * value constant in case the default changes in future.
+          */
+        "-XX:G1HeapWastePercent=5 " +
+
+        /**
+         * Disable resizing based on JE tuning experience in multi-threaded
+         * environment. It's supposed to reduce thread contention resulting from
+         * resizing of PLABs (Promotion Local Allocation Buffers) during young
+         * generation collections.
+         */
+        "-XX:-ResizePLAB " +
+
+        /**
+         * Stop RMI initiated explicit GCs
+         */
+        "-XX:+DisableExplicitGC ";
+
+
     /**
      * MonitorParams
      */
@@ -742,6 +868,11 @@ public class ParameterState {
     public static final String RP_RN_ID = "repNodeId";
     public static final String RP_RN_ID_DEFAULT = "-1";
 
+    /**
+     * ArbNodeParams
+     */
+    public static final String AP_AN_ID = "arbNodeId";
+    public static final String AP_AN_ID_DEFAULT = "-1";
     /**
      * StatsParams
      */
@@ -791,6 +922,13 @@ public class ParameterState {
     public static final String SN_MAX_LINK_COUNT_DEFAULT = "500";
     public static final String SN_LINK_EXEC_WAIT = "linkExecWait";
     public static final String SN_LINK_EXEC_WAIT_DEFAULT = "200 s";
+    public static final String SN_ALLOW_ARBITERS = "allowArbiters";
+    public static final String SN_ALLOW_ARBITERS_DEFAULT = "true";
+    public static final String SN_SEARCH_CLUSTER_NAME = "searchClusterName";
+    public static final String SN_SEARCH_CLUSTER_NAME_DEFAULT = "";
+    public static final String SN_SEARCH_CLUSTER_MEMBERS =
+        "searchClusterMembers";
+    public static final String SN_SEARCH_CLUSTER_MEMBERS_DEFAULT = "";
 
     /*
      * Let the user customize the command line used to start managed processes,
@@ -926,6 +1064,11 @@ public class ParameterState {
     public static final String ADMIN_LOGIN_SO_BACKLOG =
         "adminLoginSOBacklog";
     public static final String ADMIN_LOGIN_SO_BACKLOG_DEFAULT = "0";
+
+    /**
+     * AN service parameters
+     */
+    public static final int AN_HEAP_MB_MIN = 10;
 
     /**
      * Class methods
@@ -1191,10 +1334,11 @@ public class ParameterState {
              * EnumSet passed to the constructor).
              */
             putState(COMMON_SN_ID, COMMON_SN_ID_DEFAULT, Type.INT,
-                     EnumSet.of(Info.REPNODE, Info.ADMIN,
+                     EnumSet.of(Info.REPNODE, Info.ADMIN, Info.ARBNODE,
                                 Info.SNA, Info.RONLY));
             putState(COMMON_DISABLED, COMMON_DISABLED_DEFAULT, Type.BOOLEAN,
-                     EnumSet.of(Info.REPNODE, Info.ADMIN, Info.RONLY));
+                     EnumSet.of(Info.REPNODE, Info.ADMIN,
+                                Info.RONLY, Info.ARBNODE));
             putState(COMMON_HOSTNAME, COMMON_HOSTNAME_DEFAULT,
                      Type.STRING, EnumSet.of(Info.SNA, Info.BOOT, Info.RONLY));
             putState(COMMON_REGISTRY_PORT, COMMON_REGISTRY_PORT_DEFAULT,
@@ -1217,13 +1361,13 @@ public class ParameterState {
             putState(COMMON_USE_CLIENT_SOCKET_FACTORIES,
                      COMMON_USE_CLIENT_SOCKET_FACTORIES_DEFAULT, Type.BOOLEAN,
                      EnumSet.of(Info.REPNODE, Info.ADMIN, Info.SNA,
-                                Info.POLICY, Info.HIDDEN));
+                                Info.POLICY, Info.HIDDEN, Info.ARBNODE));
             putState(COMMON_CAPACITY, COMMON_CAPACITY_DEFAULT,
                      Type.INT, EnumSet.of(Info.BOOT, Info.SNA, Info.NORESTART),
-                     Scope.SERVICE, 1, 1000, null);
+                     Scope.SERVICE, 0, 1000, null);
             putState(COMMON_NUMCPUS, COMMON_NUMCPUS_DEFAULT,
                      Type.INT, EnumSet.of(Info.BOOT, Info.SNA, Info.NORESTART),
-                      Scope.SERVICE, 1, 128, null);
+                      Scope.SERVICE, 1, 65536, null);
             putState(COMMON_MEMORY_MB, COMMON_MEMORY_MB_DEFAULT,
                      Type.INT,
                      EnumSet.of(Info.BOOT, Info.SNA, Info.NORESTART),
@@ -1379,6 +1523,15 @@ public class ParameterState {
                      EnumSet.of(Info.ADMIN, Info.NORESTART, Info.POLICY,
                                 Info.HIDDEN), Scope.STORE);
 
+            /*
+             * Maximum retry time when failed deploying new RepNode.
+             */
+            putState(AP_NEW_RN_RETRY_TIME,
+                     AP_NEW_RN_RETRY_TIME_DEFAULT,
+                     Type.DURATION,
+                     EnumSet.of(Info.ADMIN, Info.NORESTART, Info.POLICY,
+                                Info.HIDDEN), Scope.STORE);
+
             /* Admin's type */
             putState(AP_TYPE,
                      AP_TYPE_DEFAULT, Type.STRING,
@@ -1449,14 +1602,15 @@ public class ParameterState {
              * TODO: maybe validate JE_MISC as a Properties list
              */
             putState(JE_MISC, JE_MISC_DEFAULT, Type.STRING,
-                     EnumSet.of(Info.REPNODE, Info.ADMIN, Info.POLICY),
+                     EnumSet.of(Info.REPNODE, Info.ADMIN,
+                                Info.POLICY, Info.ARBNODE),
                      Scope.STORE);
             putState(JE_HOST_PORT, JE_HOST_PORT_DEFAULT, Type.STRING,
                      EnumSet.of(Info.REPNODE, Info.ADMIN, Info.RONLY,
-                                Info.HIDDEN));
+                                Info.HIDDEN, Info.ARBNODE));
             putState(JE_HELPER_HOSTS, JE_HELPER_HOSTS_DEFAULT, Type.STRING,
                      EnumSet.of(Info.REPNODE, Info.ADMIN,
-                                Info.HIDDEN, Info.NORESTART),
+                                Info.HIDDEN, Info.NORESTART, Info.ARBNODE),
                      Scope.REPGROUP);
             putState(JE_CACHE_SIZE, JE_CACHE_SIZE_DEFAULT, Type.LONG,
                      EnumSet.of(Info.REPNODE, Info.POLICY, Info.NORESTART),
@@ -1466,11 +1620,13 @@ public class ParameterState {
              * JVMParams
              */
             putState(JVM_MISC, JVM_MISC_DEFAULT, Type.STRING,
-                     EnumSet.of(Info.REPNODE, Info.ADMIN, Info.POLICY),
+                     EnumSet.of(Info.REPNODE, Info.ADMIN,
+                                Info.POLICY, Info.ARBNODE),
                      Scope.STORE);
             /* TODO: logging changes are restart-required, this may change */
             putState(JVM_LOGGING, JVM_LOGGING_DEFAULT, Type.STRING,
-                     EnumSet.of(Info.REPNODE, Info.ADMIN, Info.POLICY),
+                     EnumSet.of(Info.REPNODE, Info.ADMIN,
+                                Info.POLICY, Info.ARBNODE),
                      Scope.STORE);
 
             /**
@@ -1567,15 +1723,18 @@ public class ParameterState {
                      Scope.STORE);
             putState(RN_ADMIN_SO_BACKLOG, RN_ADMIN_SO_BACKLOG_DEFAULT,
                      Type.INT,
-                     EnumSet.of(Info.REPNODE, Info.POLICY, Info.HIDDEN),
+                     EnumSet.of(Info.REPNODE, Info.ARBNODE,
+                                Info.POLICY, Info.HIDDEN),
                      Scope.STORE);
             putState(RN_ADMIN_SO_CONNECT_TIMEOUT,
                      RN_ADMIN_SO_CONNECT_TIMEOUT_DEFAULT, Type.DURATION,
-                     EnumSet.of(Info.REPNODE, Info.POLICY, Info.HIDDEN),
+                     EnumSet.of(Info.REPNODE, Info.ARBNODE,
+                                Info.POLICY, Info.HIDDEN),
                      Scope.STORE);
             putState(RN_ADMIN_SO_READ_TIMEOUT,
                      RN_ADMIN_SO_READ_TIMEOUT_DEFAULT, Type.DURATION,
-                     EnumSet.of(Info.REPNODE, Info.POLICY, Info.HIDDEN),
+                     EnumSet.of(Info.REPNODE, Info.ARBNODE,
+                                Info.POLICY, Info.HIDDEN),
                      Scope.STORE);
             putState(RN_MONITOR_SO_BACKLOG,
                      RN_MONITOR_SO_BACKLOG_DEFAULT, Type.INT,
@@ -1591,10 +1750,20 @@ public class ParameterState {
                      Scope.STORE);
             putState(RN_NUM_GC_LOG_FILES,
                      RN_NUM_GC_LOG_FILES_DEFAULT, Type.INT,
-                     EnumSet.of(Info.REPNODE, Info.POLICY, Info.HIDDEN),
+                     EnumSet.of(Info.REPNODE, Info.ARBNODE,
+                                Info.POLICY, Info.HIDDEN),
                      Scope.STORE);
             putState(RN_GC_LOG_FILE_SIZE,
                      RN_GC_LOG_FILE_SIZE_DEFAULT, Type.INT,
+                     EnumSet.of(Info.REPNODE, Info.ARBNODE,
+                                Info.POLICY, Info.HIDDEN),
+                     Scope.STORE);
+            putState(RN_CMS_GC_PARAMS,
+                     RN_CMS_GC_PARAMS_DEFAULT, Type.STRING,
+                     EnumSet.of(Info.REPNODE, Info.POLICY, Info.HIDDEN),
+                     Scope.STORE);
+            putState(RN_G1_GC_PARAMS,
+                     RN_G1_GC_PARAMS_DEFAULT, Type.STRING,
                      EnumSet.of(Info.REPNODE, Info.POLICY, Info.HIDDEN),
                      Scope.STORE);
             putState(RN_LOGIN_SO_BACKLOG,
@@ -1667,13 +1836,22 @@ public class ParameterState {
                      Scope.STORE, 0, 1024, null);
 
             /**
+             * StatsParams (RepNode and ArbNode)
+             */
+            putState(SP_INTERVAL, SP_INTERVAL_DEFAULT, Type.DURATION,
+                     EnumSet.of(Info.REPNODE, Info.ARBNODE,
+                                Info.NORESTART, Info.POLICY),
+                     Scope.STORE);
+            putState(SP_COLLECT_ENV_STATS,
+                     SP_COLLECT_ENV_STATS_DEFAULT, Type.BOOLEAN,
+                     EnumSet.of(Info.REPNODE, Info.ARBNODE,
+                                Info.NORESTART, Info.POLICY),
+                     Scope.STORE);
+            /**
              * StatsParams (RepNode only)
              */
             putState(SP_MAX_LATENCY, SP_MAX_LATENCY_DEFAULT, Type.DURATION,
-                     EnumSet.of(Info.REPNODE, Info.NORESTART, Info.POLICY));
-            putState(SP_INTERVAL, SP_INTERVAL_DEFAULT, Type.DURATION,
-                     EnumSet.of(Info.REPNODE, Info.NORESTART, Info.POLICY),
-                     Scope.STORE);
+                    EnumSet.of(Info.REPNODE, Info.NORESTART, Info.POLICY));
             putState(SP_DUMP_INTERVAL, SP_DUMP_INTERVAL_DEFAULT, Type.DURATION,
                      EnumSet.of(Info.REPNODE, Info.NORESTART, Info.POLICY,
                                 Info.HIDDEN), Scope.STORE);
@@ -1684,10 +1862,6 @@ public class ParameterState {
             putState(SP_THREAD_DUMP_MAX, SP_THREAD_DUMP_MAX_DEFAULT, Type.INT,
                      EnumSet.of(Info.REPNODE, Info.NORESTART, Info.POLICY,
                                 Info.HIDDEN), Scope.STORE);
-            putState(SP_COLLECT_ENV_STATS,
-                     SP_COLLECT_ENV_STATS_DEFAULT, Type.BOOLEAN,
-                     EnumSet.of(Info.REPNODE, Info.NORESTART, Info.POLICY),
-                     Scope.STORE);
             putState(SP_LATENCY_CEILING, SP_LATENCY_CEILING_DEFAULT, Type.INT,
                      EnumSet.of(Info.REPNODE, Info.POLICY, Info.NORESTART),
                      Scope.STORE);
@@ -1806,6 +1980,10 @@ public class ParameterState {
             putState(SN_REGISTRY_SO_READ_TIMEOUT,
                      SN_REGISTRY_SO_READ_TIMEOUT_DEFAULT, Type.DURATION,
                      EnumSet.of(Info.SNA, Info.POLICY, Info.HIDDEN));
+            putState(SN_ALLOW_ARBITERS, SN_ALLOW_ARBITERS_DEFAULT, Type.BOOLEAN,
+                    EnumSet.of(Info.SNA, Info.POLICY, Info.HIDDEN,
+                            Info.NORESTART),
+                    Scope.SERVICE);
 
             putState(ADMIN_COMMAND_SERVICE_SO_BACKLOG,
                      ADMIN_COMMAND_SERVICE_SO_BACKLOG_DEFAULT,
@@ -1823,6 +2001,12 @@ public class ParameterState {
                                           Info.HIDDEN),
                      Scope.STORE);
 
+            putState(SN_SEARCH_CLUSTER_NAME,
+                     SN_SEARCH_CLUSTER_NAME_DEFAULT,
+                     Type.STRING,EnumSet.of(Info.SNA));
+            putState(SN_SEARCH_CLUSTER_MEMBERS,
+                     SN_SEARCH_CLUSTER_MEMBERS_DEFAULT,
+                     Type.STRING,EnumSet.of(Info.SNA));
             /**
              * SecurityParams
              */
@@ -1878,6 +2062,9 @@ public class ParameterState {
             putState(SEC_TRANS_CLIENT_ALLOW_PROTOCOLS, "",
                      Type.STRING, EnumSet.of(Info.TRANSPORT, Info.RONLY));
 
+            /* ArbNode parameters */
+            putState(AP_AN_ID, AP_AN_ID_DEFAULT, Type.STRING,
+                    EnumSet.of(Info.ARBNODE, Info.RONLY));
             putState(SEC_KERBEROS_CONFIG_FILE, "",
                      Type.STRING, EnumSet.of(Info.SECURITY, Info.RONLY));
             putState(SEC_KERBEROS_SERVICE_NAME,

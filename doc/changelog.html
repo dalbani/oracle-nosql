@@ -3,7 +3,7 @@
 <!-- Note: RELEASE_VERSION and DATE are set by ant -->
 
 <head>
-  <title>The Oracle NoSQL Database (Release 12cR1.3.5.2 Community Edition) Change Log</title>
+  <title>The Oracle NoSQL Database (Release 12cR1.4.0.9 Community Edition) Change Log</title>
   <meta name="description"
         content="Oracle NoSQL Database: A Distributed Key-Value Store.">
   <meta name="keywords"
@@ -16,40 +16,257 @@
 
 <h2 align="center">Oracle NoSQL Database Change Log
 </h2>
-<p align="center">Release 12cR1.3.5.2 Community Edition</p>
+<p align="center">Release 12cR1.4.0.9 Community Edition</p>
 
 <h3><a name="Upgrade">Upgrade Requirements</a></h3>
-Upgrading an existing store to release 3.5 requires that the store be
-running with a 2.0 release or later.  If you want to use release 3.5
-with a store created prior to the 2.0 release, be sure to upgrade the
-store to a 2.0 release before upgrading it to the 3.5 release.  Once a
-store has been upgraded to release 3.5, it cannot be downgraded to an
-earlier release.
+Upgrading an existing store to release 4.0 or later requires that the
+store be running with a 3.0 release or later.  If you want to use this
+release with a store created prior to the 3.0 release, be sure to
+upgrade the store to a 3.x release before upgrading it to this release.
+Once a store has been upgraded to this release, it cannot be downgraded
+to an earlier major or minor release.
 <p>
 See the section
 on <a href="http://docs.oracle.com/cd/NOSQL/html/AdminGuide/deploymentupdate.html">
 Updating an Existing Oracle NoSQL Database Deployment</a> in the Admin
 Guide.
 <p>
-Release 3.5 is compatible with Java SE 7 and later, and has been tested
-and certified against Oracle Java SE 8 Update 45. We encourage you to
-upgrade to the latest Java releases to take advantage of the latest bug
-fixes and performance improvements.
+This release of the server is compatible with Java SE 8 and later, and
+the client is compatible with Java SE 6 and later.  Both have been
+tested and certified against Oracle Java SE 8 Update 73. We encourage
+you to upgrade to the latest Java releases to take advantage of the
+latest bug fixes and performance improvements.
 </p>
 <p>
-Attempting to use this release with a version of Java earlier than Java
-7 will produce an error message similar to:
+Attempting to use this release with a version of Java earlier than the
+required version will produce an error message similar to:
 </p>
 <blockquote>
 <pre>
 Exception in thread "main" java.lang.UnsupportedClassVersionError:
-  oracle/kv/impl/util/KVStoreMain : Unsupported major.minor version 51.0
+  oracle/kv/impl/util/KVStoreMain : Unsupported major.minor version 52.0
 </pre>
 </blockquote>
 <!-- ============================================================ -->
-<h3 align="center"><u>Changes in 12cR1.3.5.2 Community Edition</u></h3>
-
+<h3 align="center"><u>Changes in 12cR1.4.0.9 Community Edition</u></h3>
 <h3><a name="NewFeatures">New Features</a></h3>
+<ol>
+<li>
+Added the ability to define a Time To Live (TTL) on an individual
+table row.  The TTL can be defined in terms of hours or days and can
+be declared as a default on a table or applied per-row on put
+operations. Applying a TTL to a row results in an absolute expiration
+time on that row after which it will not be available. The expiration
+time is available using new API on Row. [#24743]
+</li>
+<li>
+Includes a preview release of an SQL-like declarative query language,
+called ONQL, that can be used to access data in tables in a read-only
+fashion. As a preview release its use and feedback is encouraged. We
+expect that additions and changes done for a later formal release will
+be backward-compatible with this preview, however we cannot rule out
+minor incompatibilities.
+<p>
+As of this preview release the language supports
+SELECT-FROM-WHERE-ORDERBY queries that can perform projection,
+predicate-based filtering, simple arithmetic operations, index-based
+sorting, and path expressions for navigating and projecting out data
+from complex structures (records, arrays, and maps). Bind variables
+are also supported for reuse of prepared queries.
+<p>
+The ONQL processor performs all operations on the server side and
+automatically takes advantage of primary and secondary indexes to
+increase query performance. The language also supports hints to allow
+users to explicitly choose an index for a query, in cases where the
+query processor is not making the best choice among the multiple
+indexes applicable to a query.
+<p>
+In addition a new ONQL shell has been added to facilitate use of the
+query language in an interactive, command line interface. [#24186]
+</li>
+<li>
+Added Export/Import utility. Export utility allows a user to export the
+contents from Oracle NoSql Store to an external export store (Local File
+System / Oracle Storage Cloud Service). Import utility allows a user to
+import the contents from an external export store (Local File System /
+Oracle Storage Cloud Service) to Oracle NoSql store. [#24734]
+</li>
+<li>
+Added a preview release of integration with Elasticsearch to provide
+full text search indexing.  Text indexes can be added to tables in
+Oracle NoSQL Database, which will cause a corresponding index in an
+attached Elasticsearch cluster to be populated and maintained. [#23733]
+<p>
+To use this feature, users must first make available on the network an
+Elasticsearch 2.0 cluster, and register the cluster with the NoSQL
+Store.  This enables use of the CREATE FULLTEXT INDEX DDL command.
+</li>
+<li>
+Added mechanism to support creating statistics tables automatically at the
+end of the existing plan deploy-topology. [#24768]
+</li>
+<li>
+Added a <em>predicate pushdown</em> mechanism to the
+<a href="examples/hadoop/hive/table/package-summary.html#ondb_hive_integration_classes">
+<b><code>Oracle NoSQL Database Table API Hive Integration
+classes</code></b></a>.  Specifically, a mechanism was added which
+supports the decomposition of a Hive or Big Data SQL
+query's <code>WHERE</code> clause (the <em>predicates</em>) into
+information that can be passed to the KVStore database so that some/all
+search processing can be performed in the database itself rather than in
+the processing performed on the client side of the query. For more
+details on this new mechanism, refer to
+<a href="examples/hadoop/hive/table/package-summary.html#appendix_d_predicate_pushdown">
+<b><code>Appendix D of the <em>Table API Hive
+Cookbook</em></code></b></a>. [#24525]
+</li>
+<li>
+Added a non-interactive login mode for command line utilities like Admin
+command line interface and Ping utility. Setting the login property introduced
+this release, "oracle.kv.password.noPrompt" as true, the non-interactive login
+mode will be enabled. If users are not using password store and configuring
+login properties incorrectly, the utilities would directly exit without
+automatically prompting password or user name like previous releases. [#24931]
+</li>
+<li>
+Added a new example that demonstrates how to perform Kerberos
+authentication on the client side. [#24328]
+</li>
+<li>
+Ranges declared on fields in DDL "CREATE TABLE" expressions are no longer
+supported. In previous releases it was possible to declare range constraints on
+fields in tables. This was done using the data definition language (DDL)
+keyword "CHECK" and providing a range. The primary intent of this
+feature was to allow the system to optimize primary key size for such
+fields because keep primary key size small is an important optimization.
+This feature was allowed for numeric and String types.
+<p>
+As of this release the CHECK syntax and generalized ranges are no longer
+supported. Existing tables created with such fields will continue to
+operate correctly and enforce the range constraints.
+To replace this function, an optional storage size
+specification is allowed on fields declared in the primary key. This
+makes the intent of the feature very clear &mdash; reducing primary key size.
+This is only allowed on fields of type INTEGER at this time. [#24769]
+</li>
+<li>
+Added new methods to support bulk put operations in the table API.  See
+the documentation for the
+<a href="javadoc/oracle/kv/table/TableAPI.html#put-java.util.List-oracle.kv.BulkWriteOptions-">
+<code>TableAPI.put(List&lt;EntryStream&lt;Row&gt;&gt;, BulkWriteOptions)
+</code></a> and
+<a href="javadoc/oracle/kv/KVStore.html#put-java.util.List-oracle.kv.BulkWriteOptions-">
+<code>KVstore.put(List&lt;EntryStream&lt;KeyValue&gt;&gt;, BulkWriteOptions)
+</code></a> methods for more details. [#24563]
+</li>
+</ol>
+<h3><a name="BugFixes">Bug and Performance Fixes</a></h3>
+<ol>
+<li>
+Changes have been made to the Admin and Rep Node service's persistent store
+to support more flexible upgrades in future releases. This change will have a
+one-time impact when upgrading from a previous release to this release. During
+the upgrade the Admin may temporarily enter a "read-only" mode. While in the
+read-only mode it will not be possible to change the persistent state of the
+Admin. This includes creating new topologies, changing parameters, creating
+new plans, or running existing plans. A read-only Admin will attempt to
+exit this mode by transferring control to another Admin node. [#24634] [#24725]
+</li>
+<li>
+System tables that are internally managed and maintained by the system are
+now read-only when security is enabled on the store. In addition,
+whether or not security is enabled, the schema for system tables are now
+immutable, and users are not permitted to alter, or drop or add indexes
+for system tables. The old tables (TableStatsPartition, TableStatsIndex,
+PartitionStatsLease and IndexStatsLease) used by statistics gathering are
+deprecated in this release.  If enabled statistics gathering in an earlier
+release, you are still able to read these tables to check old statistics data,
+but they will not be updated in this release. You can drop old tables
+if you do not have any plan to maintain old statistics. [#24467]
+</li>
+<li>
+Fixed a problem that prevented the ping command from authenticating
+properly when used with a secure store. [#24808]
+</li>
+</ol>
+<h3><a name="Utilities">Utility Changes</a></h3>
+<ol>
+<li>
+Due to changes in the Admin service's persist store (described in the "Bug and
+Performance Fixes" section above) the new versions of the dump and load
+utilities can only be used after the store has been fully upgraded. Also,
+previous versions of these utilities will no longer work once an upgrade to
+this release has begun.  During an upgrade the new utilities will not operate
+until all of the Admin nodes have been upgraded and the Admin is no longer in
+the read-only mode described above. [#24634] [#24725]
+</li>
+<li>
+The "table size" sub command was mistakenly marked to be deprecated together
+with its parent command "table" command in release 12cR1.3.5.2, move "table size"
+to top level command and rename it to "table-size".
+</li>
+<li>
+Added a new status utility command that shows the status of a storage
+node agent. [#23561]
+</li>
+<li>
+Fixed a problem where executing a Hive query against a table containing
+an array with no elements would cause an exception like the following:
+<pre>
+2016-02-09 13:31:24,213 ERROR [main]: CliDriver (SessionState.java:printError(921)) - Failed with exception java.io.IOException:java.lang.IndexOutOfBoundsException: Index: 0, Size: 0
+java.io.IOException: java.lang.IndexOutOfBoundsException: Index: 0, Size: 0
+at org.apache.hadoop.hive.ql.exec.FetchOperator.getNextRow(FetchOperator.java:507)
+at org.apache.hadoop.hive.ql.exec.FetchOperator.pushRow(FetchOperator.java:414)
+at org.apache.hadoop.hive.ql.exec.FetchTask.fetch(FetchTask.java:138)
+at org.apache.hadoop.hive.ql.Driver.getResults(Driver.java:1655)
+at org.apache.hadoop.hive.cli.CliDriver.processLocalCmd(CliDriver.java:227)
+at org.apache.hadoop.hive.cli.CliDriver.processCmd(CliDriver.java:159)
+at org.apache.hadoop.hive.cli.CliDriver.processLine(CliDriver.java:370)
+at org.apache.hadoop.hive.cli.CliDriver.executeDriver(CliDriver.java:756)
+at org.apache.hadoop.hive.cli.CliDriver.run(CliDriver.java:675)
+at org.apache.hadoop.hive.cli.CliDriver.main(CliDriver.java:615)
+at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
+at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+at java.lang.reflect.Method.invoke(Method.java:497)
+at org.apache.hadoop.util.RunJar.run(RunJar.java:221)
+at org.apache.hadoop.util.RunJar.main(RunJar.java:136)
+Caused by: java.lang.IndexOutOfBoundsException: Index: 0, Size: 0
+at java.util.ArrayList.rangeCheck(ArrayList.java:653)
+at java.util.ArrayList.get(ArrayList.java:429)
+at oracle.kv.impl.api.table.ArrayValueImpl.get(ArrayValueImpl.java:97)
+at oracle.kv.hadoop.hive.table.TableSerDe.objectInspector(TableSerDe.java:458)
+at oracle.kv.hadoop.hive.table.TableSerDe.deserialize(TableSerDe.java:286)
+at org.apache.hadoop.hive.ql.exec.FetchOperator.getNextRow(FetchOperator.java:488)
+... 15 more
+</pre>
+[#24900]
+</li>
+</ol>
+<h3><a name="Packaging">Packaging and Documentation Changes:</a></h3>
+<ol>
+<li>
+Java examples have been removed from the product downloads. Examples are
+now provided in an independent download from the product web page.
+</li>
+</ol>
+<h3><a name="Deprecation">Deprecated Features</a></h3>
+<ol>
+<li>
+The interfaces and classes related to support of Avro have been deprecated
+in favor of the use of tables and the table API.
+All Avro features are available more simply using the table API. The
+interfaces and code supporting Avro will continue remain available for
+some time, but users are encouraged to migrate to the table API.
+<p>
+The interfaces and classes affected are mostly in the oracle.kv.avro
+package. Interfaces that use those classes are also affected.
+</li>
+</ol>
+<!-- ============================================================ -->
+<hr>
+<h3 align="center"><u>Changes in 12cR1.3.5.2</u></h3>
+<h3><a name="NewFeatures352">New Features</a></h3>
 <ol>
 <li>
 Added support for gathering key distribution statistics. To enable
@@ -112,7 +329,7 @@ review <a href="http://docs.oracle.com/cd/NOSQL/html/AdminGuide/offheap.html">
 Managing the Off-heap Cache</a> for details.
 </li>
 </ol>
-<h3><a name="BugFixes">Bug and Performance Fixes</a></h3>
+<h3><a name="BugFixes352">Bug and Performance Fixes</a></h3>
 <ol>
 <li>
 In earlier versions, a LOB read operation with
@@ -153,7 +370,7 @@ a table without permission if the user had permission to access other
 tables in the store.
 </li>
 </ol>
-<h3><a name="Utilities">Utility Changes</a></h3>
+<h3><a name="Utilities352">Utility Changes</a></h3>
 <ol>
 <li>
 There were several changes made to the ping command to make it easier to
@@ -393,7 +610,7 @@ In addition to the changes made in <code>oracle.kv.hadoop.table</code> and
 <code>oracle.kv.hadoop.hive.table</code> to support security, example code and
 detailed documentation has also been provided that explains and walks you through
 the details of executing a MapReduce job or Hive/Big Data SQL query against table
-data in a secure store; which can found, respectively, in the sections of
+data in a secure store; which can be found, respectively, in the sections of
 <a href="examples/hadoop/table/package-summary.html"> <code>The Table API MapReduce Cookbook</code></a>
 and
 <a href="examples/hadoop/hive/table/package-summary.html"> <code>The Table API Hive Cookbook</code></a>.
@@ -2691,7 +2908,7 @@ command will continue to work in this release.
 <h3><a name="UtilityAndDocChanges218">Utility and Documentation Changes</a></h3>
 <ol>
 <li>In this release, the sample code provided by the utility
-  class <a href="examples/schema/WriteOperations.html"> <code>WriteOperations</code></a>
+  class <code>WriteOperations</code>
   (located in the <code>examples</code> directory) now includes methods that
   perform write operations for <em>large objects</em> (or <em>LOB</em>,
   see <a href="javadoc/oracle/kv/lob/KVLargeObject.html"> <code>KVLargeObject</code></a>). The
@@ -2699,7 +2916,7 @@ command will continue to work in this release.
   LOB operation when
   a  <a href="javadoc/oracle/kv/FaultException.html"> <code>FaultException</code></a>
   is encountered. Prior to this release,
-  the <a href="examples/schema/WriteOperations.html"> <code>WriteOperations</code></a>
+  the <code>WriteOperations</code>
   utility only provided retry methods for objects that are not large
   objects. [#21966]
 </li>

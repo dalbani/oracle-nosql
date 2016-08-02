@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,9 +43,9 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 
 import oracle.kv.impl.util.FastExternalizable;
 
@@ -59,19 +59,21 @@ public class ResultIndexKeys implements FastExternalizable {
 
     private final byte[] primaryKeyBytes;
     private final byte[] indexKeyBytes;
+    private final long expirationTime;
 
     public ResultIndexKeys(byte[] primaryKeyBytes,
-                            byte[] indexKeyBytes) {
+                           byte[] indexKeyBytes,
+                           long expirationTime) {
         this.primaryKeyBytes = primaryKeyBytes;
         this.indexKeyBytes = indexKeyBytes;
+        this.expirationTime = expirationTime;
     }
 
     /**
      * FastExternalizable constructor.  Must call superclass constructor
      * first to read common elements.
      */
-    @SuppressWarnings("unused")
-    public ResultIndexKeys(ObjectInput in, short serialVersion)
+    public ResultIndexKeys(DataInput in, short serialVersion)
         throws IOException {
 
         int keyLen = in.readShort();
@@ -80,6 +82,7 @@ public class ResultIndexKeys implements FastExternalizable {
         keyLen = in.readShort();
         indexKeyBytes = new byte[keyLen];
         in.readFully(indexKeyBytes);
+        expirationTime = Result.readExpirationTime(in, serialVersion);
     }
 
     /**
@@ -87,13 +90,14 @@ public class ResultIndexKeys implements FastExternalizable {
      * write common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         out.writeShort(primaryKeyBytes.length);
         out.write(primaryKeyBytes);
         out.writeShort(indexKeyBytes.length);
         out.write(indexKeyBytes);
+        Result.writeExpirationTime(out, expirationTime, serialVersion);
     }
 
     public byte[] getPrimaryKeyBytes() {
@@ -102,5 +106,9 @@ public class ResultIndexKeys implements FastExternalizable {
 
     public byte[] getIndexKeyBytes() {
         return indexKeyBytes;
+    }
+
+    public long getExpirationTime() {
+        return expirationTime;
     }
 }

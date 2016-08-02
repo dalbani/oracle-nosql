@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -87,7 +87,7 @@ public class RemoveAdminPlan extends AbstractPlan {
         final Admin admin = planner.getAdmin();
         final Parameters parameters = admin.getCurrentParameters();
 
-        Set<AdminId> victimIds = new HashSet<AdminId>();
+        Set<AdminId> victimIds = new HashSet<>();
 
         /*
          * Determine the Admins to remove based on the input parameters.
@@ -185,11 +185,6 @@ public class RemoveAdminPlan extends AbstractPlan {
     @Override
     public String getDefaultName() {
         return "Remove Admin Replica";
-    }
-
-    @Override
-    void stripForDisplay() {
-        /* Nothing worth stripping */
     }
 
     @Override

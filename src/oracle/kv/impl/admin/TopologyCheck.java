@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -58,19 +58,25 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import oracle.kv.impl.admin.TopologyCheckUtils.SNServices;
+import oracle.kv.impl.admin.VerifyConfiguration.CompareParamsResult;
 import oracle.kv.impl.admin.VerifyConfiguration.Problem;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
+import oracle.kv.impl.admin.param.GroupNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.plan.AbstractPlan;
 import oracle.kv.impl.admin.plan.PortTracker;
 import oracle.kv.impl.admin.plan.task.ChangeServiceAddresses;
+import oracle.kv.impl.admin.plan.task.RelocateAN;
 import oracle.kv.impl.admin.plan.task.RelocateRN;
 import oracle.kv.impl.admin.plan.task.Task.State;
 import oracle.kv.impl.admin.plan.task.UpdateAdminParams;
 import oracle.kv.impl.admin.plan.task.UpdateRepNodeParams;
 import oracle.kv.impl.admin.plan.task.Utils;
 import oracle.kv.impl.admin.topo.Validations.InsufficientRNs;
+import oracle.kv.impl.arb.admin.ArbNodeAdminAPI;
+import oracle.kv.impl.fault.CommandFaultException;
 import oracle.kv.impl.fault.OperationFaultException;
 import oracle.kv.impl.param.LoadParameters;
 import oracle.kv.impl.param.ParameterMap;
@@ -79,15 +85,21 @@ import oracle.kv.impl.param.ParameterUtils;
 import oracle.kv.impl.rep.admin.RepNodeAdminAPI;
 import oracle.kv.impl.security.login.LoginManager;
 import oracle.kv.impl.sna.StorageNodeAgentAPI;
+import oracle.kv.impl.tif.TextIndexFeederManager;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepGroup;
 import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.RepNode;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
+import oracle.kv.impl.topo.ResourceId.ResourceType;
 import oracle.kv.impl.topo.StorageNodeId;
 import oracle.kv.impl.topo.Topology;
+import oracle.kv.impl.util.ConfigurableService.ServiceStatus;
 import oracle.kv.impl.util.registry.RegistryUtils;
+import oracle.kv.util.ErrorMessage;
 
 import com.sleepycat.je.rep.ReplicationNetworkConfig;
 import com.sleepycat.je.rep.ReplicationNode;
@@ -99,7 +111,7 @@ import com.sleepycat.je.rep.utilint.HostPortPair;
  * layout metadata (the topology, the remote SN config files, and the JEHA
  * group db) are consistent with each other.
  *
- * Both RNs and Admins are checked.
+ * Both RNs, ANs and Admins are checked.
  *
  * The class provides repair methods that can fix some inconsistencies.
  */
@@ -137,7 +149,7 @@ public class TopologyCheck {
      * RN to SN mappings, and Admin to SN mappings as determined by JEHA rep
      * group dbs.
      */
-    private final Map<ResourceId, JEHAInfo> jeHAGroupDBInfo;
+    private final Map<ResourceId, JEHAInfo> jeHAGroupInfo;
 
     private final Logger logger;
 
@@ -147,8 +159,8 @@ public class TopologyCheck {
      */
     public TopologyCheck(Logger logger, Topology topo, Parameters params) {
         this.logger = logger;
-        snRemoteParams = new HashMap<StorageNodeId, SNServices>();
-        jeHAGroupDBInfo = new HashMap<ResourceId, JEHAInfo>();
+        snRemoteParams = new HashMap<>();
+        jeHAGroupInfo = new HashMap<>();
         topoGroupedBySN = TopologyCheckUtils.groupServicesBySN(topo, params);
     }
 
@@ -171,6 +183,17 @@ public class TopologyCheck {
     }
 
     /**
+     * Return the union of ANs that are referenced by the SN's config.xml and
+     * those referenced by the AdminDB/topology.
+     */
+    public Set<ArbNodeId> getPossibleANs(StorageNodeId snId) {
+        Set<ArbNodeId> ansToCheck = new HashSet<ArbNodeId>();
+        ansToCheck.addAll(snRemoteParams.get(snId).getAllARBs());
+        ansToCheck.addAll(topoGroupedBySN.get(snId).getAllARBs());
+        return ansToCheck;
+    }
+
+    /**
      * Check whether this RN should be on this SN, and optionally should be
      * enabled. Recommend a fix if
      * - the RN's location information is inconsistent, or
@@ -183,7 +206,7 @@ public class TopologyCheck {
      *
      * @param admin the admin
      * @param snId the ID of the storage node to check
-     * @param rnId the ID of the RN to check
+     * @param resId the ID of the RN or AN to check
      * @param calledByDeployNewRN if true, the caller was deploying a new RN,
      * so if we don't see the RN in the JE HA info we know it does not appear
      * anywhere
@@ -196,14 +219,27 @@ public class TopologyCheck {
      * @throws NotBoundException
      * @throws RemoteException
      */
-    public Remedy checkRNLocation(Admin admin,
-                                  StorageNodeId snId,
-                                  RepNodeId rnId,
-                                  boolean calledByDeployNewRN,
-                                  boolean makeRNEnabled,
-                                  StorageNodeId oldSNId,
-                                  String newMountPoint)
-        throws RemoteException, NotBoundException {
+    public Remedy checkLocation(Admin admin,
+            StorageNodeId snId,
+            ResourceId resId,
+            boolean calledByDeployNewRN,
+            boolean makeRNEnabled,
+            StorageNodeId oldSNId,
+            String newMountPoint)
+       throws RemoteException, NotBoundException {
+
+        final boolean isRN;
+        if (resId.getType().isRepNode()) {
+            isRN = true;
+        } else if (resId.getType().isArbNode()) {
+            isRN = false;
+        } else {
+            throw new IllegalArgumentException("Unexpected resource ID: " +
+                                               resId);
+        }
+
+        final int groupId;
+        groupId = Utils.getRepGroupId(resId).getGroupId();
 
         /*
          * Check that the topo, JE HA, and SN are consistent about the RN's
@@ -217,8 +253,14 @@ public class TopologyCheck {
         TOPO_STATUS topoStatus = TOPO_STATUS.GONE;
         SNServices servicesOnThisSN = topoGroupedBySN.get(snId);
         if (servicesOnThisSN != null) {
-            if (servicesOnThisSN.getAllRepNodeIds().contains(rnId)) {
-                topoStatus = TOPO_STATUS.HERE;
+            if (isRN)  {
+                if (servicesOnThisSN.getAllRepNodeIds().contains(resId)) {
+                    topoStatus = TOPO_STATUS.HERE;
+                }
+            } else {
+                if (servicesOnThisSN.getAllARBs().contains(resId)) {
+                    topoStatus = TOPO_STATUS.HERE;
+                }
             }
         }
 
@@ -237,19 +279,17 @@ public class TopologyCheck {
         }
 
         /* Does the SN say that the RN is present? */
-        CONFIG_STATUS configStatus;
-        if (snRemoteParams.get(snId).contains(rnId)) {
+        CONFIG_STATUS configStatus = CONFIG_STATUS.GONE;
+        if (snRemoteParams.get(snId).contains(resId)) {
             configStatus = CONFIG_STATUS.HERE;
-        } else {
-            configStatus = CONFIG_STATUS.GONE;
         }
 
         /* c. Get JEHA group metadata */
-        JEHAInfo jeHAInfo = jeHAGroupDBInfo.get(rnId);
+        JEHAInfo jeHAInfo = jeHAGroupInfo.get(resId);
         if (jeHAInfo == null) {
-            populateRNJEHAGroupDB(admin, new RepGroupId(rnId.getGroupId()));
+            populateJEHAGroup(admin, new RepGroupId(groupId));
         }
-        jeHAInfo = jeHAGroupDBInfo.get(rnId);
+        jeHAInfo = jeHAGroupInfo.get(resId);
 
         /*
          * Now that all inputs are assembled, generate a RNLocationInput that
@@ -271,9 +311,9 @@ public class TopologyCheck {
                  */
                 if (readAllSNRemoteParams(admin.getCurrentTopology(),
                                           admin.getLoginManager())) {
-                    boolean foundRN = searchOtherSNs(snId, rnId);
+                    boolean found = searchOtherSNs(snId, resId);
                     OTHERSN_STATUS otherSNStatus;
-                    if (foundRN) {
+                    if (found) {
                         otherSNStatus = OTHERSN_STATUS.HERE;
                     } else {
                         otherSNStatus = OTHERSN_STATUS.GONE;
@@ -295,11 +335,9 @@ public class TopologyCheck {
              * Great, we have definitive JE HA status. Use that to drive the
              * repairs to make topo and config match JE HA.
              */
-            JEHA_STATUS jeHAStatus;
+            JEHA_STATUS jeHAStatus = JEHA_STATUS.GONE;
             if (jeHAInfo.getSNId().equals(snId)) {
                 jeHAStatus = JEHA_STATUS.HERE;
-            } else {
-                jeHAStatus = JEHA_STATUS.GONE;
             }
 
             remedyKey = new RNLocationInput(topoStatus, configStatus,
@@ -323,14 +361,19 @@ public class TopologyCheck {
          * re-enable and restart the RN.
          */
         if (remedyFactory.equals(OkayRemedy.FACTORY) && makeRNEnabled) {
-            if (topoStatus.equals(TOPO_STATUS.HERE) &&
-                admin.getCurrentParameters().get(rnId).isDisabled()) {
+            Parameters params = admin.getCurrentParameters();
+            boolean isDisabled =
+                isRN ?
+                params.get((RepNodeId)resId).isDisabled() :
+                params.get((ArbNodeId)resId).isDisabled();
+
+            if (topoStatus.equals(TOPO_STATUS.HERE) && isDisabled) {
                 remedyFactory = CreateRNRemedy.FACTORY;
             }
         }
 
         return remedyFactory.createRemedy(
-            this, remedyKey, snId, rnId, jeHAInfo, oldSNId, newMountPoint);
+            this, remedyKey, snId, resId, jeHAInfo, oldSNId, newMountPoint);
     }
 
     /**
@@ -345,8 +388,8 @@ public class TopologyCheck {
         /*
          * Find all the Admins and ask them for the JEHA Group info.
          */
-        populateAdminJEHAGroupDB(admin);
-        JEHAInfo jeHAInfo = jeHAGroupDBInfo.get(adminId);
+        populateAdminJEHAGroup(admin);
+        JEHAInfo jeHAInfo = jeHAGroupInfo.get(adminId);
 
         if (jeHAInfo == null) {
             /*
@@ -414,8 +457,8 @@ public class TopologyCheck {
         /*
          * Find all the Admins and ask them for the JEHA Group info.
          */
-        populateAdminJEHAGroupDB(admin);
-        JEHAInfo jeHAInfo = jeHAGroupDBInfo.get(adminId);
+        populateAdminJEHAGroup(admin);
+        JEHAInfo jeHAInfo = jeHAGroupInfo.get(adminId);
 
         if (jeHAInfo == null) {
             /* There isn't an Admin master */
@@ -458,10 +501,10 @@ public class TopologyCheck {
     }
 
     /**
-     * @return true if this RN is in the config file of an SN other than this
+     * @return true if this RN/AN is in the config file of an SN other than this
      * one.
      */
-    private boolean searchOtherSNs(StorageNodeId snId, RepNodeId rnId) {
+    private boolean searchOtherSNs(StorageNodeId snId, ResourceId resId) {
         for (Map.Entry<StorageNodeId, SNServices> e :
                  snRemoteParams.entrySet()) {
 
@@ -470,20 +513,20 @@ public class TopologyCheck {
                 continue;
             }
 
-            if (e.getValue().contains(rnId)) {
-                /* Found a different SN that has this RN */
+            if (e.getValue().contains(resId)) {
+                /* Found a different SN that has this RN/AN */
                 return true;
             }
         }
 
-        /* Didn't find this RN on any other SN */
+        /* Didn't find this RN/AN on any other SN */
         return false;
     }
 
     /**
      * Try to get the JE HA repgroup db information for this shard.
      */
-    private void populateRNJEHAGroupDB(Admin admin, RepGroupId rgId) {
+    private void populateJEHAGroup(Admin admin, RepGroupId rgId) {
 
         /*
          * Assemble a set of sockets to query by adding all the helper
@@ -522,15 +565,15 @@ public class TopologyCheck {
 
         ReplicationNetworkConfig repNetConfig = admin.getRepNetConfig();
         /* Armed with the helper sockets, see if we can find a JE Master */
-        Set<ReplicationNode> groupDB =
-            TopologyCheckUtils.getJEHAGroupDB(rgId.getGroupName(),
-                                              JE_HA_TIMEOUT_MS,
-                                              logger,
-                                              helperSockets,
-                                              repNetConfig);
+        Set<ReplicationNode> group =
+            TopologyCheckUtils.getJEHAGroup(rgId.getGroupName(),
+                                            JE_HA_TIMEOUT_MS,
+                                            logger,
+                                            helperSockets,
+                                            repNetConfig);
 
         StringBuilder helperHosts = new StringBuilder();
-        for (ReplicationNode rNode : groupDB) {
+        for (ReplicationNode rNode : group) {
             if (helperHosts.length() > 0) {
                 helperHosts.append(",");
             }
@@ -538,7 +581,7 @@ public class TopologyCheck {
                                                       rNode.getPort()));
         }
 
-        for (ReplicationNode rNode : groupDB) {
+        for (ReplicationNode rNode : group) {
             StorageNodeId foundSNId = TopologyCheckUtils.translateToSNId
                 (topo, params, snCheckSet, rNode.getHostName(),
                  rNode.getPort());
@@ -550,11 +593,20 @@ public class TopologyCheck {
                  */
                 logger.severe(CHECK + " couldn't find SN for " +
                               rNode.getHostName() + ":" + rNode.getPort());
+            } else if (TextIndexFeederManager.isTIFNode(rNode.getName())) {
+                /* skip parse the node name if a TIF node*/
+                continue;
             } else {
-                jeHAGroupDBInfo.put(RepNodeId.parse(rNode.getName()),
-                                    new JEHAInfo(foundSNId,
-                                                 rNode,
-                                                 helperHosts.toString()));
+                ResourceId rid = null;
+                try {
+                    rid = RepNodeId.parse(rNode.getName());
+                } catch (IllegalArgumentException ignore) {
+                    rid = ArbNodeId.parse(rNode.getName());
+                }
+                jeHAGroupInfo.put(rid,
+                                  new JEHAInfo(foundSNId,
+                                               rNode,
+                                               helperHosts.toString()));
             }
         }
     }
@@ -562,7 +614,7 @@ public class TopologyCheck {
     /**
      * Try to get the JE HA repgroup db information for the Admin group.
      */
-    private void populateAdminJEHAGroupDB(Admin admin) {
+    private void populateAdminJEHAGroup(Admin admin) {
 
         /*
          * Assemble a set of sockets to query by adding all the helper
@@ -592,15 +644,15 @@ public class TopologyCheck {
         String groupName = Admin.getAdminRepGroupName(kvstoreName);
         ReplicationNetworkConfig repNetConfig = admin.getRepNetConfig();
         /* Armed with the helper sockets, see if we can find a JE Master */
-        Set<ReplicationNode> groupDB =
-            TopologyCheckUtils.getJEHAGroupDB(groupName,
-                                              JE_HA_TIMEOUT_MS,
-                                              logger,
-                                              helperSockets,
-                                              repNetConfig);
+        Set<ReplicationNode> group =
+            TopologyCheckUtils.getJEHAGroup(groupName,
+                                            JE_HA_TIMEOUT_MS,
+                                            logger,
+                                            helperSockets,
+                                            repNetConfig);
 
         StringBuilder helperHosts = new StringBuilder();
-        for (ReplicationNode rNode : groupDB) {
+        for (ReplicationNode rNode : group) {
             if (helperHosts.length() > 0) {
                 helperHosts.append(",");
             }
@@ -609,7 +661,7 @@ public class TopologyCheck {
         }
 
         Topology topo = admin.getCurrentTopology();
-        for (ReplicationNode rNode : groupDB) {
+        for (ReplicationNode rNode : group) {
             StorageNodeId foundSNId = TopologyCheckUtils.translateToSNId
                 (topo, params, snCheckSet, rNode.getHostName(),
                  rNode.getPort());
@@ -622,10 +674,10 @@ public class TopologyCheck {
                 logger.severe(CHECK + " couldn't find SN for " +
                               rNode.getHostName() + ":" + rNode.getPort());
             } else {
-                jeHAGroupDBInfo.put(AdminId.parse(rNode.getName()),
-                                    new JEHAInfo(foundSNId,
-                                                 rNode,
-                                                 helperHosts.toString()));
+                jeHAGroupInfo.put(AdminId.parse(rNode.getName()),
+                                  new JEHAInfo(foundSNId,
+                                               rNode,
+                                               helperHosts.toString()));
             }
         }
     }
@@ -974,17 +1026,96 @@ public class TopologyCheck {
     }
 
     /**
+     * Remove the AN from the admin db and config.xml of this SN.
+     */
+    private boolean repairWithClearAN(ClearAdminConfigRemedy remedy,
+                                      AbstractPlan plan) {
+        Admin admin = plan.getAdmin();
+        StorageNodeId snId = remedy.getSNId();
+        ArbNodeId anId = remedy.getANId();
+        Topology topo = admin.getCurrentTopology();
+        RepGroupId rgId = new RepGroupId(anId.getGroupId());
+        if (remedy.getRNLocationInput().presentInSNConfig) {
+            logger.info(CHECK + " trying to remove " + anId + " from " +
+                        snId + " config");
+            RegistryUtils regUtils = new RegistryUtils(topo,
+                                                       admin.getLoginManager());
+            try {
+                StorageNodeAgentAPI sna = regUtils.getStorageNodeAgent(snId);
+                sna.destroyArbNode(anId, true /*deleteData*/);
+            } catch (NotBoundException | RemoteException re) {
+                logger.info(CHECK + " couldn't reach " + snId + " to remove "
+                            + anId + " " + re);
+                return false;
+            }
+        }
+
+        if (remedy.getRNLocationInput().presentInTopo) {
+
+            /* Update helper hosts on peers. */
+            Parameters params = admin.getCurrentParameters();
+            String helpers =
+                TopologyCheckUtils.findPeerHelpers(anId, params, topo);
+            /* See if any peer RNs need their helper hosts updated */
+            Set<RepNodeParams> needsUpdate = new HashSet<RepNodeParams>();
+            RepGroup rg = topo.get(rgId);
+            for (RepNode rn : rg.getRepNodes()) {
+                if (!rn.getStorageNodeId().equals(snId)) {
+                     RepNodeParams rnp = params.get(rn.getResourceId());
+                     if (helperMismatch(rnp.getJEHelperHosts(), helpers)) {
+                         RepNodeParams newrnp = new RepNodeParams(rnp);
+                         newrnp.setJEHelperHosts(helpers);
+                         needsUpdate.add(newrnp);
+                     }
+                }
+            }
+
+            topo.remove(anId);
+            logger.info(CHECK + " trying to remove " + anId +
+                    " from topo and params");
+            admin.saveTopoAndRemoveAN(topo, plan.getDeployedInfo(),
+                                      anId, plan);
+            topo = admin.getCurrentTopology();
+            if (needsUpdate.size() > 0) {
+                admin.saveParams(needsUpdate,
+                                 Collections.<AdminParams>emptySet(),
+                                 Collections.<ArbNodeParams>emptySet());
+            }
+
+            /* Send topology changes to all nodes.*/
+            try {
+                if (!Utils.broadcastTopoChangesToRNs(plan.getLogger(),
+                                                     topo,
+                                                     "remove AN repair " + anId,
+                                                     admin.getParams().
+                                                     getAdminParams(),
+                                                     plan)) {
+                    return false;
+                }
+            } catch (InterruptedException e) {
+                return false;
+            }
+            logger.info("Removed AN " + anId);
+        }
+
+        return true;
+    }
+
+    /**
      * Change the admin db to make this RN refer to the SN which JE HA thinks
      * is correct.  Note that the remedy's oldSNId may be null if we don't know
      * what to revert it to.
      */
-    private boolean repairRevertRN(RevertRNRemedy remedy, AbstractPlan plan) {
+    private boolean repairRevert(RevertRNRemedy remedy, AbstractPlan plan) {
 
         Admin admin = plan.getAdmin();
 
         /* Change the topology back to the "old" SN */
         final RepNodeId rnId = remedy.getRNId();
         final StorageNodeId oldSNId = remedy.getOldSNId();
+        final ArbNodeId anId = remedy.getANId();
+        final ResourceId resId = remedy.getResourceId();
+
         StorageNodeId correctSNId = null;
         String correctJEHAHostPort = null;
         String correctHelpers = null;
@@ -1008,9 +1139,9 @@ public class TopologyCheck {
             int haPort = portTracker.getNextPort(oldSNId);
             String haHostname = params.get(oldSNId).getHAHostname();
             correctJEHAHostPort = HostPortPair.getString(haHostname, haPort);
-            correctHelpers = TopologyCheckUtils.findPeerRNHelpers(rnId,
-                                                                  params,
-                                                                  topo);
+            correctHelpers = TopologyCheckUtils.findPeerHelpers(resId,
+                                                                params,
+                                                                topo);
             correctHelpers += "," + correctJEHAHostPort;
         }
 
@@ -1020,35 +1151,68 @@ public class TopologyCheck {
             return false;
         }
 
-        RepNode rn = topo.get(rnId);
+        ChangedParams updated = null;
         boolean topoUpdated = false;
-        if (!rn.getStorageNodeId().equals(correctSNId)) {
-            logger.info(CHECK + " updating topology so " + correctSNId +
-                        " owns " + rnId);
-            RepNode updatedRN = new RepNode(correctSNId);
-            RepGroup rg = topo.get(rn.getRepGroupId());
-            rg.update(rn.getResourceId(),updatedRN);
-            topoUpdated = true;
+        if (rnId != null) {
+            RepNode rn = topo.get(rnId);
+            if (!rn.getStorageNodeId().equals(correctSNId)) {
+                logger.info(CHECK + " updating topology so " + correctSNId +
+                            " owns " + rnId);
+                RepNode updatedRN = new RepNode(correctSNId);
+                RepGroup rg = topo.get(rn.getRepGroupId());
+                rg.update(rn.getResourceId(),updatedRN);
+                topoUpdated = true;
+            }
+
+             /* Revert the RN's params, and any peer params */
+            updated =
+                correctRNParams(topo,
+                                params,
+                                rnId,
+                                correctSNId,
+                                correctJEHAHostPort,
+                                correctHelpers,
+                                remedy.getNewMountPoint(),
+                                correctSNId.equals(remedy.getSNId()),
+                                admin.getLoginManager());
+        } else {
+            /* Work on AN */
+            ArbNode an = topo.get(anId);
+            if (!an.getStorageNodeId().equals(correctSNId)) {
+                logger.info(CHECK + " updating topology so " + correctSNId +
+                            " owns " + anId);
+                ArbNode updatedAN = new ArbNode(correctSNId);
+                RepGroup rg = topo.get(an.getRepGroupId());
+                rg.update(an.getResourceId(), updatedAN);
+                topoUpdated = true;
+            }
+
+            updated =
+                correctANParams(topo,
+                                params,
+                                anId,
+                                correctSNId,
+                                correctJEHAHostPort,
+                                correctHelpers);
+
         }
-
-        /* Revert the RN's params, and any peer params */
-        Set<RepNodeParams> needsUpdate =
-            correctRNParams(topo,
-                            params,
-                            rnId,
-                            correctSNId,
-                            correctJEHAHostPort,
-                            correctHelpers,
-                            remedy.getNewMountPoint(),
-                            correctSNId.equals(remedy.getSNId()),
-                            admin.getLoginManager());
-
         /* See which RNs might need to be prodded to refresh their params */
         boolean peersNeedUpdate = false;
         boolean rnNeedsUpdate = false;
+        Set<RepNodeParams> needsUpdate = updated.getRNP();
         for (RepNodeParams updatedRNP : needsUpdate) {
             if (updatedRNP.getRepNodeId().equals(rnId)) {
                 rnNeedsUpdate = true;
+            } else {
+                peersNeedUpdate = true;
+            }
+        }
+
+        Set<ArbNodeParams> anUpdate = updated.getANP();
+        boolean anNeedsUpdate = false;
+        for (ArbNodeParams updatedANP : anUpdate) {
+            if (updatedANP.getArbNodeId().equals(anId)) {
+                anNeedsUpdate = true;
             } else {
                 peersNeedUpdate = true;
             }
@@ -1058,7 +1222,8 @@ public class TopologyCheck {
         if (topoUpdated) {
             admin.saveTopoAndParams(topo, plan.getDeployedInfo(),
                                     needsUpdate,
-                                    Collections.<AdminParams>emptySet(), plan);
+                                    Collections.<AdminParams>emptySet(),
+                                    anUpdate, plan);
             try {
                 Utils.broadcastTopoChangesToRNs
                     (logger, admin.getCurrentTopology(),
@@ -1070,8 +1235,9 @@ public class TopologyCheck {
             }
         } else {
             if (!needsUpdate.isEmpty()) {
-                plan.getAdmin().saveParams
-                    (needsUpdate, Collections.<AdminParams>emptySet());
+                plan.getAdmin().saveParams(
+                    needsUpdate, Collections.<AdminParams>emptySet(),
+                    anUpdate);
             }
         }
 
@@ -1087,14 +1253,23 @@ public class TopologyCheck {
             }
         }
 
+        /*
+         * Restart the AN on the correct SN, make sure it houses the AN with
+         * the correct params.
+         */
+        if (anNeedsUpdate) {
+            try {
+                RelocateAN.startAN(plan, correctSNId, anId);
+            } catch (Exception e) {
+                logger.info(CHECK + " couldn't start " + anId);
+            }
+        }
+
         /* Update params at peers, if needed */
         if (peersNeedUpdate) {
             try {
-                Utils.refreshParamsOnPeers(plan, rnId);
-            } catch (RemoteException e) {
-                logger.info(this + " couldn't update helper hosts at peers");
-                return false;
-            } catch (NotBoundException e) {
+                Utils.refreshParamsOnPeers(plan, resId);
+            } catch (Exception e) {
                 logger.info(this + " couldn't update helper hosts at peers");
                 return false;
             }
@@ -1117,20 +1292,41 @@ public class TopologyCheck {
     }
 
     /**
-     * Remove the RN from this SN.
+     * Start the AN on this SN.
      */
-    private boolean repairRemoveRN(RemoveRNRemedy remedy, AbstractPlan plan) {
+    private boolean repairStartAN(CreateRNRemedy remedy, AbstractPlan plan) {
 
         try {
-            return RelocateRN.destroyRepNode(plan,
-                                             System.currentTimeMillis(),
-                                             remedy.getSNId(),
-                                             remedy.getRNId());
-        } catch (InterruptedException e) {
-            logger.info(CHECK + " couldn't remove " + remedy.getRNId() +
-                        " from " + remedy.getSNId() + " because of " + e);
+            RelocateAN.startAN(plan, remedy.getSNId(), remedy.getANId());
+        } catch (Exception e) {
             return false;
         }
+        return true;
+    }
+
+    /**
+     * Remove the RN or AN from this SN.
+     */
+    private boolean repairRemove(RemoveRNRemedy remedy, AbstractPlan plan) {
+
+        try {
+            if (remedy.getRNId() != null) {
+                return Utils.destroyRepNode(plan,
+                                            System.currentTimeMillis(),
+                                            remedy.getSNId(),
+                                            remedy.getRNId());
+            }
+            return Utils.destroyArbNode(plan.getAdmin(),
+                                        plan.getLogger(),
+                                        remedy.getSNId(),
+                                        remedy.getANId());
+        } catch (InterruptedException e) {
+            ResourceId rid =
+                remedy.getRNId() != null ? remedy.getRNId() : remedy.getANId();
+            logger.info(CHECK + " couldn't remove " + rid +
+                        " from " + remedy.getSNId() + " because of " + e);
+        }
+        return false;
     }
 
     /**
@@ -1150,27 +1346,136 @@ public class TopologyCheck {
     }
 
     /**
+     * Repair the AN parameters to correct inconsistencies.
+     */
+    private boolean repairANParams(AbstractPlan plan, ArbNodeId anId) {
+        try {
+            return repairANParamsInternal(plan, anId);
+        } catch (NotBoundException | RemoteException e) {
+            logger.info(CHECK + " couldn't correct parameters for" + anId +
+                        " because of " + e);
+            return false;
+        }
+    }
+
+    private boolean repairANParamsInternal(AbstractPlan plan,
+                                          ArbNodeId anId)
+        throws NotBoundException, RemoteException {
+
+        /* Get admin DB parameters */
+        final Admin admin = plan.getAdmin();
+        final Parameters dbParams = admin.getCurrentParameters();
+        final ArbNodeParams anDbParams = dbParams.get(anId);
+        final Topology topo = admin.getCurrentTopology();
+        final ArbNode thisRn = topo.get(anId);
+        final StorageNodeId snId = thisRn.getStorageNodeId();
+
+        /* Get SN configuration parameters */
+        final RegistryUtils regUtils =
+            new RegistryUtils(topo, plan.getLoginManager());
+        final StorageNodeAgentAPI sna = regUtils.getStorageNodeAgent(snId);
+        final LoadParameters configParams = sna.getParams();
+        final CompareParamsResult snCompare =
+            VerifyConfiguration.compareParams(configParams,
+                                              anDbParams.getMap());
+
+        /* Get in-memory parameters from the AN */
+        LoadParameters serviceParams = null;
+        try {
+            final ArbNodeAdminAPI ana = regUtils.getArbNodeAdmin(anId);
+            serviceParams = ana.getParams();
+        } catch (RemoteException | NotBoundException e) {
+            plan.getLogger().info("Problem calling " + anId + ": " + e);
+        }
+
+        /*
+         * Check if parameters file needs to be updated, if the AN needs to
+         * read them, and if the AN needs to be restarted.
+         */
+        final CompareParamsResult serviceCompare;
+        final CompareParamsResult combinedCompare;
+        if (serviceParams == null) {
+            serviceCompare = CompareParamsResult.NO_DIFFS;
+            combinedCompare = snCompare;
+        } else {
+            serviceCompare = VerifyConfiguration.compareServiceParams(
+                snId, anId, serviceParams, dbParams);
+            combinedCompare = VerifyConfiguration.combineCompareParamsResults(
+                snCompare, serviceCompare);
+        }
+        if (combinedCompare == CompareParamsResult.MISSING) {
+            final String msg = "some parameters were missing";
+            plan.getLogger().log(
+                Level.INFO, "Couldn''t update parameters for {0} because {1}",
+                new Object[] { anId, msg });
+            return false;
+        }
+
+        if (combinedCompare == CompareParamsResult.NO_DIFFS) {
+            return true;
+        }
+
+        if (snCompare != CompareParamsResult.NO_DIFFS) {
+            plan.getLogger().info("Updating AN config parameters");
+            sna.newArbNodeParameters(anDbParams.getMap());
+        }
+        if (serviceCompare == CompareParamsResult.DIFFS) {
+            plan.getLogger().info("Notify AN of new parameters");
+            regUtils.getArbNodeAdmin(anId).newParameters();
+        } else {
+
+            /* Stop running node in preparation for restarting it */
+            if (serviceCompare == CompareParamsResult.DIFFS_RESTART) {
+
+                try {
+                    Utils.stopAN(plan, snId, anId);
+                } catch (OperationFaultException e) {
+                    throw new CommandFaultException(
+                        e.getMessage(), e, ErrorMessage.NOSQL_5400,
+                        CommandResult.PLAN_CANCEL);
+                }
+            }
+
+            /*
+             * Restart the node, or start it if it was not running and is
+             * not disabled
+             */
+            if ((serviceCompare == CompareParamsResult.DIFFS_RESTART) ||
+                ((serviceParams == null) && !anDbParams.isDisabled())) {
+                try {
+                    Utils.startAN(plan, snId, anId);
+                    Utils.waitForNodeState(plan, anId, ServiceStatus.RUNNING);
+                } catch (Exception e) {
+                    throw new CommandFaultException(
+                        e.getMessage(), e, ErrorMessage.NOSQL_5400,
+                        CommandResult.PLAN_CANCEL);
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
      * Generate a set of correct RN params for all nodes of this shard. Set the
      * heap/cache, mountpoints, and helper hosts correctly.
      * @param loginManager
      */
-    private Set<RepNodeParams> correctRNParams(Topology topo,
-                                               Parameters params,
-                                               RepNodeId rnId,
-                                               StorageNodeId correctSNId,
-                                               String correctJEHAHostPort,
-                                               String correctHelpers,
-                                               String newMountPoint,
-                                               boolean correctSNIsNewSN,
-                                               LoginManager loginManager) {
+    private ChangedParams correctRNParams(Topology topo,
+                                          Parameters params,
+                                          RepNodeId rnId,
+                                          StorageNodeId correctSNId,
+                                          String correctJEHAHostPort,
+                                          String correctHelpers,
+                                          String newMountPoint,
+                                          boolean correctSNIsNewSN,
+                                          LoginManager loginManager) {
         /*
          * Do the params point at the right SN? If not, make a copy of the
          * RepNodeParams and fix its snId, and other attributes.
          */
         RepNodeParams rnp = params.get(rnId);
         RepNodeParams fixedRNP = new RepNodeParams(rnp);
-        boolean paramsChanged = false;
-        Set<RepNodeParams> needUpdate = new HashSet<RepNodeParams>();
+        boolean addFixedParams = false;
 
         if (!rnp.getStorageNodeId().equals(correctSNId)) {
             fixedRNP.setStorageNodeId(correctSNId);
@@ -1191,35 +1496,64 @@ public class TopologyCheck {
                 RepNodeParams remoteRNP = new RepNodeParams(rMap);
                 fixedRNP.setMountPoint(remoteRNP.getMountPointString());
             }
-            paramsChanged = true;
+            addFixedParams = true;
 
             logger.info(CHECK + " repair of repNodeParams for " +
                         correctSNId + "/" + rnId + " set storagedir " +
                         fixedRNP.getMountPointString());
         }
 
+        return correctCommonParams(params, rnp, addFixedParams, fixedRNP, rnId,
+                                   topo, correctJEHAHostPort, correctHelpers);
+    }
+
+    private ChangedParams correctCommonParams(Parameters params,
+                                              GroupNodeParams commonParams,
+                                              boolean addFixedParams,
+                                              GroupNodeParams fixedParams,
+                                              ResourceId resId,
+                                              Topology topo,
+                                              String correctJEHAHostPort,
+                                              String correctHelpers) {
+
+        Set<RepNodeParams> needUpdate = new HashSet<RepNodeParams>();
+        Set<ArbNodeParams> arbNeedUpdate = new HashSet<ArbNodeParams>();
+
         /* Is its HA address correct? */
-        if (!rnp.getJENodeHostPort().equals(correctJEHAHostPort)) {
-            fixedRNP.setJENodeHostPort(correctJEHAHostPort);
-            paramsChanged = true;
+        if (!commonParams.getJENodeHostPort().equals(correctJEHAHostPort)) {
+            fixedParams.setJENodeHostPort(correctJEHAHostPort);
+            addFixedParams = true;
         }
 
         /* Are the helpers correct? */
-        if (helperMismatch(rnp.getJEHelperHosts(), correctHelpers)) {
-            fixedRNP.setJEHelperHosts(correctHelpers);
-            paramsChanged = true;
+        if (helperMismatch(commonParams.getJEHelperHosts(), correctHelpers)) {
+            fixedParams.setJEHelperHosts(correctHelpers);
+            addFixedParams = true;
         }
 
         /* Note that we always assume that this RN should be enabled */
-        if (rnp.isDisabled()) {
-            fixedRNP.setDisabled(false);
-            paramsChanged = true;
+        if (commonParams.isDisabled()) {
+            fixedParams.setDisabled(false);
+            addFixedParams = true;
+        }
+
+        /* Get the rep group id */
+        RepGroupId rgId;
+        if (resId.getType() == ResourceType.REP_NODE) {
+            rgId = topo.get((RepNodeId)resId).getRepGroupId();
+            if (addFixedParams) {
+                needUpdate.add((RepNodeParams)fixedParams);
+            }
+        } else {
+            rgId = topo.get((ArbNodeId)resId).getRepGroupId();
+            if (addFixedParams) {
+                arbNeedUpdate.add((ArbNodeParams)fixedParams);
+            }
         }
 
         /* See if any peer RNs need their helper hosts updated */
-        RepNode rn = topo.get(rnId);
-        for (RepNode peer : topo.get(rn.getRepGroupId()).getRepNodes()) {
-            if (peer.getResourceId().equals(rnId)) {
+        for (RepNode peer : topo.get(rgId).getRepNodes()) {
+            if (peer.getResourceId().equals(resId)) {
                 continue;
             }
             RepNodeParams peerRNP = params.get(peer.getResourceId());
@@ -1231,10 +1565,49 @@ public class TopologyCheck {
             }
         }
 
-        if (paramsChanged) {
-            needUpdate.add(fixedRNP);
+        /* See if any peer ANs need their helper hosts updated */
+        for (ArbNode peer : topo.get(rgId).getArbNodes()) {
+            if (peer.getResourceId().equals(resId)) {
+                continue;
+            }
+            ArbNodeParams peerANP = params.get(peer.getResourceId());
+            if (helperMismatch(peerANP.getJEHelperHosts(),
+                               correctHelpers)) {
+                ArbNodeParams newANP = new ArbNodeParams(peerANP);
+                newANP.setJEHelperHosts(correctHelpers);
+                arbNeedUpdate.add(newANP);
+            }
         }
-        return needUpdate;
+
+        return new ChangedParams(arbNeedUpdate, needUpdate);
+    }
+
+    /**
+     * Generate a set of correct AN params for all nodes of this shard.
+     */
+    private ChangedParams correctANParams(Topology topo,
+                                          Parameters params,
+                                          ArbNodeId anId,
+                                          StorageNodeId correctSNId,
+                                          String correctJEHAHostPort,
+                                          String correctHelpers) {
+        /*
+         * Do the params point at the right SN? If not, make a copy of the
+         * params and fix its snId, and other attributes.
+         */
+        ArbNodeParams anp = params.get(anId);
+        ArbNodeParams fixedANP = new ArbNodeParams(anp);
+        boolean addFixedParams = false;
+        if (!anp.getStorageNodeId().equals(correctSNId)) {
+            fixedANP.setStorageNodeId(correctSNId);
+            addFixedParams = true;
+
+            logger.info(CHECK + " repair of arbNodeParams for " +
+                        correctSNId + "/" + anId);
+        }
+
+        return correctCommonParams(params, anp, addFixedParams, fixedANP, anId,
+                                   topo, correctJEHAHostPort, correctHelpers);
     }
 
     /**
@@ -1637,11 +2010,11 @@ public class TopologyCheck {
         }
     }
 
-    /** A factory for creating remedies for RN problems. */
+    /** A factory for creating remedies for RN or AN problems. */
     abstract static class RNRemedyFactory {
         abstract Remedy createRemedy(
             TopologyCheck topoCheck, RNLocationInput rnLocationInput,
-            StorageNodeId snId, RepNodeId rnId, JEHAInfo jeHAInfo,
+            StorageNodeId snId, ResourceId resId, JEHAInfo jeHAInfo,
             StorageNodeId oldSNId, String newMountPoint);
     }
 
@@ -1651,9 +2024,9 @@ public class TopologyCheck {
             @Override
             OkayRemedy createRemedy(
                 TopologyCheck topoCheck, RNLocationInput rnLocationInput,
-                StorageNodeId snId, RepNodeId rnId, JEHAInfo jeHAInfo,
+                StorageNodeId snId, ResourceId resId, JEHAInfo jeHAInfo,
                 StorageNodeId oldSNId, String newMountPoint) {
-                return new OkayRemedy(rnId, jeHAInfo);
+                return new OkayRemedy(resId, jeHAInfo);
             }
         };
         private final ResourceId resourceId;
@@ -1685,9 +2058,9 @@ public class TopologyCheck {
             @Override
             NoFixRemedy createRemedy(
                 TopologyCheck topoCheck, RNLocationInput rnLocationInput,
-                StorageNodeId snId, RepNodeId rnId, JEHAInfo jeHAInfo,
+                StorageNodeId snId, ResourceId resId, JEHAInfo jeHAInfo,
                 StorageNodeId oldSNId, String newMountPoint) {
-                return new NoFixRemedy(rnLocationInput, snId, rnId, jeHAInfo,
+                return new NoFixRemedy(rnLocationInput, snId, resId, jeHAInfo,
                                        oldSNId);
             }
         };
@@ -1766,19 +2139,22 @@ public class TopologyCheck {
         final TopologyCheck topoCheck;
         final RNLocationInput rNLocationInput;
         final StorageNodeId snId;
-        final RepNodeId rnId;
+        final ResourceId resId;
         final JEHAInfo jeHAInfo;
+        final int repGroupId;
+
         RNRemedy(TopologyCheck topoCheck, RNLocationInput rNLocationInput,
-                 StorageNodeId snId, RepNodeId rnId, JEHAInfo jeHAInfo) {
+                 StorageNodeId snId, ResourceId resId, JEHAInfo jeHAInfo) {
             this.topoCheck = topoCheck;
             this.rNLocationInput = rNLocationInput;
             this.snId = snId;
-            checkNull("rnId", rnId);
-            this.rnId = rnId;
+            checkNull("resId", resId);
+            this.resId = resId;
             this.jeHAInfo = jeHAInfo;
+            repGroupId = Utils.getRepGroupId(resId).getGroupId();
         }
         @Override
-        ResourceId getResourceId() { return rnId; }
+        ResourceId getResourceId() { return resId; }
         @Override
         final boolean apply(AbstractPlan plan) {
             final boolean result = applyInternal(plan);
@@ -1789,14 +2165,22 @@ public class TopologyCheck {
              */
             if (result && !isOkay()) {
                 topoCheck.ensureAdminDBAndRNParams(
-                    plan, new RepGroupId(rnId.getGroupId()));
+                    plan, new RepGroupId(repGroupId));
             }
             return result;
         }
         abstract boolean applyInternal(AbstractPlan plan);
         RNLocationInput getRNLocationInput() { return rNLocationInput; }
         StorageNodeId getSNId() { return snId; }
-        RepNodeId getRNId() { return rnId; }
+
+        RepNodeId getRNId() {
+            return resId.getType().isRepNode() ? (RepNodeId)resId : null;
+        }
+
+        ArbNodeId getANId() {
+            return resId.getType().isArbNode() ? (ArbNodeId)resId : null;
+        }
+
         JEHAInfo getJEHAInfo() { return jeHAInfo; }
         @Override
         void toStringInternal(StringBuilder builder) {
@@ -1806,7 +2190,7 @@ public class TopologyCheck {
             if (snId != null) {
                 builder.append(", snId=").append(snId);
             }
-            builder.append(", rnId=").append(rnId);
+            builder.append(", resId=").append(resId);
             if (rNLocationInput != null) {
                 builder.append(", rNLocationInput=").append(rNLocationInput);
             }
@@ -1819,21 +2203,21 @@ public class TopologyCheck {
             @Override
             ClearAdminConfigRemedy createRemedy(
                 TopologyCheck topoCheck, RNLocationInput rnLocationInput,
-                StorageNodeId snId, RepNodeId rnId, JEHAInfo jeHAInfo,
+                StorageNodeId snId, ResourceId resId, JEHAInfo jeHAInfo,
                 StorageNodeId oldSNId, String newMountPoint) {
                 return new ClearAdminConfigRemedy(
-                    topoCheck, rnLocationInput, snId, rnId, jeHAInfo);
+                    topoCheck, rnLocationInput, snId, resId, jeHAInfo);
             }
         };
         ClearAdminConfigRemedy(TopologyCheck topoCheck,
                                RNLocationInput rnLocationInput,
-                               StorageNodeId snId, RepNodeId rnId,
+                               StorageNodeId snId, ResourceId resId,
                                JEHAInfo jeHAInfo) {
-            super(topoCheck, rnLocationInput, snId, rnId, jeHAInfo);
+            super(topoCheck, rnLocationInput, snId, resId, jeHAInfo);
         }
         @Override
         String problemDescription() {
-            return rnId + " is present in Admin metadata and on " + snId +
+            return resId + " is present in Admin metadata and on " + snId +
                 " configuration but has not been created. Must be removed" +
                 " from metadata";
         }
@@ -1841,7 +2225,10 @@ public class TopologyCheck {
         boolean canFix() { return true; }
         @Override
         boolean applyInternal(AbstractPlan plan) {
-            return topoCheck.repairWithClearRN(this, plan);
+            if (resId.getType().isRepNode()) {
+                return topoCheck.repairWithClearRN(this, plan);
+            }
+            return topoCheck.repairWithClearAN(this, plan);
         }
     }
 
@@ -1851,26 +2238,29 @@ public class TopologyCheck {
             @Override
             CreateRNRemedy createRemedy(
                 TopologyCheck topoCheck, RNLocationInput rnLocationInput,
-                StorageNodeId snId, RepNodeId rnId, JEHAInfo jeHAInfo,
+                StorageNodeId snId, ResourceId resId, JEHAInfo jeHAInfo,
                 StorageNodeId oldSNId, String newMountPoint) {
                 return new CreateRNRemedy(
-                    topoCheck, rnLocationInput, snId, rnId, jeHAInfo);
+                    topoCheck, rnLocationInput, snId, resId, jeHAInfo);
             }
         };
         CreateRNRemedy(TopologyCheck topoCheck,
                        RNLocationInput rnLocationInput, StorageNodeId snId,
-                       RepNodeId rnId, JEHAInfo jeHAInfo) {
-            super(topoCheck, rnLocationInput, snId, rnId, jeHAInfo);
+                       ResourceId resId, JEHAInfo jeHAInfo) {
+            super(topoCheck, rnLocationInput, snId, resId, jeHAInfo);
         }
         @Override
         String problemDescription() {
-            return "Must create or start " + rnId + " on this SN.";
+            return "Must create or start " + resId + " on this SN.";
         }
         @Override
         boolean canFix() { return true; }
         @Override
         boolean applyInternal(AbstractPlan plan) {
-            return topoCheck.repairStartRN(this, plan);
+            if (resId.getType().isRepNode()) {
+                return topoCheck.repairStartRN(this, plan);
+            }
+            return topoCheck.repairStartAN(this, plan);
         }
     }
 
@@ -1880,20 +2270,20 @@ public class TopologyCheck {
             @Override
             DisableRNRemedy createRemedy(
                 TopologyCheck topoCheck, RNLocationInput rnLocationInput,
-                StorageNodeId snId, RepNodeId rnId, JEHAInfo jeHAInfo,
+                StorageNodeId snId, ResourceId resId, JEHAInfo jeHAInfo,
                 StorageNodeId oldSNId, String newMountPoint) {
                 return new DisableRNRemedy(
-                    topoCheck, rnLocationInput, snId, rnId, jeHAInfo);
+                    topoCheck, rnLocationInput, snId, resId, jeHAInfo);
             }
         };
         DisableRNRemedy(TopologyCheck topoCheck,
                         RNLocationInput rnLocationInput, StorageNodeId snId,
-                        RepNodeId rnId, JEHAInfo jeHAInfo) {
-            super(topoCheck, rnLocationInput, snId, rnId, jeHAInfo);
+                        ResourceId resId, JEHAInfo jeHAInfo) {
+            super(topoCheck, rnLocationInput, snId, resId, jeHAInfo);
         }
         @Override
         String problemDescription() {
-            return rnId + " should be stopped and disabled on " + snId;
+            return resId + " should be stopped and disabled on " + snId;
         }
         @Override
         boolean applyInternal(AbstractPlan plan) {
@@ -1907,26 +2297,26 @@ public class TopologyCheck {
             @Override
             RemoveRNRemedy createRemedy(
                 TopologyCheck topoCheck, RNLocationInput rnLocationInput,
-                StorageNodeId snId, RepNodeId rnId, JEHAInfo jeHAInfo,
+                StorageNodeId snId, ResourceId resId, JEHAInfo jeHAInfo,
                 StorageNodeId oldSNId, String newMountPoint) {
                 return new RemoveRNRemedy(
-                    topoCheck, rnLocationInput, snId, rnId, jeHAInfo);
+                    topoCheck, rnLocationInput, snId, resId, jeHAInfo);
             }
         };
         RemoveRNRemedy(TopologyCheck topoCheck,
                        RNLocationInput rnLocationInput, StorageNodeId snId,
-                       RepNodeId rnId, JEHAInfo jeHAInfo) {
-            super(topoCheck, rnLocationInput, snId, rnId, jeHAInfo);
+                       ResourceId resId, JEHAInfo jeHAInfo) {
+            super(topoCheck, rnLocationInput, snId, resId, jeHAInfo);
         }
         @Override
         String problemDescription() {
-            return rnId + " must be removed from " + snId;
+            return resId + " must be removed from " + snId;
         }
         @Override
         boolean canFix() { return true; }
         @Override
         boolean applyInternal(AbstractPlan plan) {
-            return topoCheck.repairRemoveRN(this, plan);
+            return topoCheck.repairRemove(this, plan);
         }
     }
 
@@ -1940,10 +2330,10 @@ public class TopologyCheck {
             @Override
             RevertRNRemedy createRemedy(
                 TopologyCheck topoCheck, RNLocationInput rnLocationInput,
-                StorageNodeId snId, RepNodeId rnId, JEHAInfo jeHAInfo,
+                StorageNodeId snId, ResourceId resId, JEHAInfo jeHAInfo,
                 StorageNodeId oldSNId, String newMountPoint) {
                 return new RevertRNRemedy(
-                    topoCheck, rnLocationInput, snId, rnId, jeHAInfo,
+                    topoCheck, rnLocationInput, snId, resId, jeHAInfo,
                     oldSNId, newMountPoint);
             }
         };
@@ -1951,21 +2341,21 @@ public class TopologyCheck {
         final String newMountPoint;
         RevertRNRemedy(TopologyCheck topoCheck,
                        RNLocationInput rnLocationInput, StorageNodeId snId,
-                       RepNodeId rnId, JEHAInfo jeHAInfo,
+                       ResourceId resId, JEHAInfo jeHAInfo,
                        StorageNodeId oldSNId, String newMountPoint) {
-            super(topoCheck, rnLocationInput, snId, rnId, jeHAInfo);
+            super(topoCheck, rnLocationInput, snId, resId, jeHAInfo);
             this.oldSNId = oldSNId;
             this.newMountPoint = newMountPoint;
         }
         @Override
         String problemDescription() {
-            return rnId + " must be moved back to its original hosting SN";
+            return resId + " must be moved back to its original hosting SN";
         }
         @Override
         boolean canFix() { return true; }
         @Override
         boolean applyInternal(AbstractPlan plan) {
-            return topoCheck.repairRevertRN(this, plan);
+            return topoCheck.repairRevert(this, plan);
         }
         @Override
         void toStringInternal(StringBuilder builder) {
@@ -1991,7 +2381,7 @@ public class TopologyCheck {
         }
         @Override
         String problemDescription() {
-            return "Change " + rnId + " parameters to match saved values or" +
+            return "Change " + resId + " parameters to match saved values or" +
                 " its zone type";
         }
         @Override
@@ -1999,6 +2389,25 @@ public class TopologyCheck {
         @Override
         boolean applyInternal(AbstractPlan plan) {
             return topoCheck.repairRNParams(this, plan);
+        }
+    }
+
+    /**
+     * Update the AN parameters to fix differences.
+     */
+    public static class UpdateANParamsRemedy extends RNRemedy {
+        public UpdateANParamsRemedy(TopologyCheck topoCheck, ArbNodeId anId) {
+            super(topoCheck, null, null, anId, null);
+        }
+        @Override
+        String problemDescription() {
+            return "Change " + resId + " parameters to match saved values.";
+        }
+        @Override
+        boolean canFix() { return true; }
+        @Override
+        boolean applyInternal(AbstractPlan plan) {
+            return topoCheck.repairANParams(plan, (ArbNodeId)resId);
         }
     }
 
@@ -2099,7 +2508,16 @@ public class TopologyCheck {
             aid = new AdminId(adminMap.getOrZeroInt(ParameterState.AP_ID));
         }
 
-        return new SNServices(snId, allRNs, aid, remoteParams);
+        List<ParameterMap> arbMaps =
+            remoteParams.getAllMaps(ParameterState.ARBNODE_TYPE);
+
+        Set<ArbNodeId> allARBs = new HashSet<ArbNodeId>();
+        for (ParameterMap map : arbMaps) {
+            ArbNodeId arbId = ArbNodeId.parse(map.getName());
+            allARBs.add(arbId);
+        }
+
+        return new SNServices(snId, allRNs, allARBs, aid, remoteParams);
     }
 
     /**
@@ -2138,5 +2556,21 @@ public class TopologyCheck {
                 " RepNode=" + jeReplicationNode +
                 " helpers=" + groupWideHelperHosts;
         }
+    }
+
+    class ChangedParams {
+        private final Set<ArbNodeParams> anParams;
+        private final Set<RepNodeParams> rnParams;
+        ChangedParams(Set<ArbNodeParams> anp, Set<RepNodeParams> rnp) {
+            anParams = anp;
+            rnParams = rnp;
+        }
+        Set<ArbNodeParams> getANP() {
+            return anParams;
+        }
+        Set<RepNodeParams> getRNP() {
+            return rnParams;
+        }
+
     }
 }

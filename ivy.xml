@@ -1,8 +1,8 @@
 <!-- ======================================================================
 External dependencies.  This is an Ivy file that is used by the ivy-resolve
-target in build.xml.  As dependencies are added they must be added here.
-See updatelibs.xml for information about adding new libraries to the
-repository on sleepycat-scm.us.oracle.com.
+target in build.xml.  As dependencies are added they must be added to the
+appropriate section in this file.  See updatelibs.xml for information about
+adding new libraries to the repository on sleepycat-scm.us.oracle.com.
 ======================================================================  -->
 <ivy-module version="2.0"
             xmlns:m="http://ant.apache.org/ivy/maven">
@@ -24,46 +24,126 @@ repository on sleepycat-scm.us.oracle.com.
          from publicBuild to default configuration means to use the
          dependency's default configuration for our non-standard
          publicBuild configuration. -->
-    <!-- jetty version 7.4.0.v20110414 -->
-    <dependency org="org.eclipse.jetty" name="jetty-continuation" rev="7.4.0.v20110414"/>
-    <dependency org="org.eclipse.jetty" name="jetty-http" rev="7.4.0.v20110414"/>
+
+    <!-- ===============================================================
+         Client and server dependencies - Included in release packages
+         for use with kvclient.jar, and with CE and EE versions of
+         kvstore.jar
+         =============================================================== -->
+
+    <!-- Avro -->
+    <dependency org="org.apache.avro" name="avro" rev="1.7.6"/>
+
+    <!-- Jackson (used by Avro) -->
+    <dependency org="org.codehaus.jackson" name="jackson-core-asl" rev="1.9.3"/>
+    <dependency org="org.codehaus.jackson" name="jackson-mapper-asl"
+                rev="1.9.3"/>
+
+    <!-- antlr-complete for ONQL -->
+    <dependency org="antlr" name="antlr" rev="4.4"/>
+
+    <!-- ===============================================================
+         CE and EE server dependencies - Included in release packages
+         for use with CE and EE versions of kvstore.jar
+         =============================================================== -->
+
+    <!-- je -->
+    <dependency org="com.sleepycat" name="je" rev="7.0.5"/>
+
+    <!-- jline (used by CLI and query shell) -->
+    <dependency org="jline" name="jline" rev="2.11"/>
+
+    <!-- jsch for diagnostics project. -->
+    <dependency org="com.jcraft" name="jsch" rev="0.1.51"/>
+
+    <!-- Elasticsearch libraries. -->
+    <dependency org="org.elasticsearch" name="elasticsearch" rev="2.0.0"/>
+    <dependency org="org.apache.lucene" name="lucene-analyzers-common"
+		rev="5.2.1"/>
+    <dependency org="org.apache.lucene" name="lucene-core" rev="5.2.1"/>
+    <dependency org="org.apache.lucene" name="lucene-highlighter" rev="5.2.1"/>
+    <dependency org="org.apache.lucene" name="lucene-join" rev="5.2.1"/>
+    <dependency org="org.apache.lucene" name="lucene-memory" rev="5.2.1"/>
+    <dependency org="org.apache.lucene" name="lucene-queries" rev="5.2.1"/>
+    <dependency org="org.apache.lucene" name="lucene-queryparser" rev="5.2.1"/>
+    <dependency org="org.apache.lucene" name="lucene-spatial" rev="5.2.1"/>
+    <dependency org="org.apache.lucene" name="lucene-suggest" rev="5.2.1"/>
+    <dependency org="log4j" name="apache-log4j-extras" rev="1.2.17"/>
+    <dependency org="com.ning" name="compress-lzf" rev="1.0.2"/>
+    <dependency org="com.carrotsearch" name="hppc" rev="0.7.1"/>
+    <dependency org="com.fasterxml.jackson.core" name="jackson-core"
+		rev="2.5.3"/>
+    <dependency org="net.java.dev.jna" name="jna" rev="4.1.0"/>
+    <dependency org="joda-time" name="joda-time" rev="2.8.2"/>
+    <dependency org="com.twitter" name="jsr166e" rev="1.1.0"/>
+    <dependency org="io.netty" name="netty" rev="3.10.5.Final"/>
+    <dependency org="com.tdunning" name="t-digest" rev="3.0"/>
+    <dependency org="com.google.guava" name="guava" rev="18.0"/>
+
+    <!-- jetty for web admin -->
+    <dependency org="org.eclipse.jetty" name="jetty-continuation"
+                rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-http"
+                rev="7.4.0.v20110414"/>
     <dependency org="org.eclipse.jetty" name="jetty-io" rev="7.4.0.v20110414"/>
-    <dependency org="org.eclipse.jetty" name="jetty-server" rev="7.4.0.v20110414"/>
-    <dependency org="org.eclipse.jetty" name="jetty-servlet" rev="7.4.0.v20110414"/>
-    <dependency org="org.eclipse.jetty" name="jetty-util" rev="7.4.0.v20110414"/>
-    <dependency org="org.eclipse.jetty" name="jetty-security" rev="7.4.0.v20110414"/>
-    <dependency org="org.eclipse.jetty" name="jetty-server" rev="7.4.0.v20110414"/>
-    <dependency org="org.eclipse.jetty" name="jetty-webapp" rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-security"
+                rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-server"
+                rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-servlet"
+                rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-util"
+                rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-webapp"
+                rev="7.4.0.v20110414"/>
     <dependency org="org.eclipse.jetty" name="jetty-xml" rev="7.4.0.v20110414"/>
     <dependency org="javax.servlet" name="servlet-api" rev="2.5"/>
-    <!-- gwt version 2.4.0 -->
-    <dependency org="com.google.gwt" name="gwt-user" rev="2.4.0"/>
+
+    <!-- gwt for web admin runtime -->
     <dependency org="com.google.gwt" name="gwt-servlet" rev="2.4.0"/>
-    <dependency org="com.google.gwt" name="gwt-dev" rev="2.4.0"/>
-    <dependency org="javax.validation" name="validation-api" rev="1.0.0.GA">
-      <artifact name="validation-api"/>
-      <artifact name="validation-api" m:classifier="sources"/>
-    </dependency>
-    <!-- je -->
-    <dependency org="com.sleepycat" name="je" rev="6.4.15"/>
-    <!-- ojdbc6 current version 060812 -->
-    <dependency org="com.oracle" name="jdbc" rev="060812"/>
+
+    <!-- ===============================================================
+         EE-specific server dependencies - Included in release packages
+         for use with EE kvstore.jar
+         =============================================================== -->
+
+    <!-- Dependencies for Oracle wallet -->
     <!-- oraclepki current version 060812 -->
     <dependency org="com.oracle" name="oraclepki" rev="060812"/>
     <!-- osdt_cert current version 060812 -->
     <dependency org="com.oracle" name="osdt_cert" rev="060812"/>
     <!-- osdt_core current version 060812 -->
     <dependency org="com.oracle" name="osdt_core" rev="060812"/>
-    <!-- commons-logging for tests and examples -->
+
+    <!-- coherence current version 3.7.1 -->
+    <dependency org="com.tangosol" name="coherence" rev="12.1.2"/>
+
+    <!-- JDMK jars for SNMP runtime support -->
+    <dependency org="com.sun.jdmk" name="jdmkrt" rev="06302012"/>
+
+    <!-- ===============================================================
+         CE and EE tool dependencies - Required to build kvtool.jar
+         internally
+         =============================================================== -->
+
+    <!-- Oracle Storage Cloud Service dependencies to support
+         import/export, both at build time and to access the service at
+         runtime -->
+    <dependency org="oracle.cloud.storage" name="oracle.cloud.storage.api"
+                rev="13.0.0"/>
+    <dependency org="oracle.cloud.storage" name="jettison" rev="1.1"/>
+    <dependency org="oracle.cloud.storage" name="jersey-client" rev="1.13"/>
+    <dependency org="oracle.cloud.storage" name="jersey-core" rev="1.13"/>
+
+    <!-- ===============================================================
+         CE and EE server build-time dependencies - Required to build
+         the server, both internally and in CE distributions
+         =============================================================== -->
+
+    <!-- Dependencies for compiling Hive and Hadoop support -->
+    <!-- commons-logging -->
     <dependency org="commons-logging" name="commons-logging" rev="1.0.4"
                 conf="publicBuild->default"/>
-    <!-- commons-collections, commons-configuration, log4j, and slf4j
-        for Hadoop/Hive table integration tests -->
-    <dependency org="commons-collections" name="commons-collections" rev="3.2.1"/>
-    <dependency org="commons-configuration" name="commons-configuration" rev="1.10"/>
-    <dependency org="log4j" name="log4j" rev="1.2.17"/>
-    <dependency org="org.slf4j" name="slf4j-api" rev="1.7.7"/>
-    <dependency org="org.apache.hadoop" name="hadoop-auth" rev="2.3.0-cdh5.1.0"/>
     <!-- hadoop -->
     <dependency org="org.apache.hadoop" name="hadoop-common"
                 rev="2.3.0-cdh5.1.0" conf="publicBuild->default"/>
@@ -79,30 +159,63 @@ repository on sleepycat-scm.us.oracle.com.
     <dependency org="org.apache.hive" name="hive-metastore"
                 rev="0.12.0-cdh5.1.0" conf="publicBuild->default"/>
 
-    <!-- coherence current version 3.7.1 -->
-    <dependency org="com.tangosol" name="coherence" rev="12.1.2"/>
+    <!-- eclipse jdt for ant warnings target -->
+    <dependency org="jdt-core" name="jdt-core" rev="3.11.0"
+                conf="publicBuild->default"/>
+
+    <!-- ===============================================================
+         Internal build dependencies - Required for internal builds
+         =============================================================== -->
+
+    <!-- ojdbc6 for external tables -->
+    <dependency org="com.oracle" name="jdbc" rev="060812"/>
+
+    <!-- JDMK jars for SNMP build-time support -->
+    <dependency org="com.sun.jdmk" name="jdmktk" rev="06302012"/>
+
+    <!-- gwt for building web admin -->
+    <dependency org="com.google.gwt" name="gwt-user" rev="2.4.0"/>
+    <dependency org="com.google.gwt" name="gwt-dev" rev="2.4.0"/>
+    <dependency org="javax.validation" name="validation-api" rev="1.0.0.GA">
+      <artifact name="validation-api"/>
+      <artifact name="validation-api" m:classifier="sources"/>
+    </dependency>
+
+    <!-- commons-collections, commons-configuration, log4j, and slf4j
+         for Hadoop/Hive table integration tests -->
+    <dependency org="commons-collections" name="commons-collections"
+                rev="3.2.1"/>
+    <dependency org="commons-configuration" name="commons-configuration"
+                rev="1.10"/>
+    <dependency org="log4j" name="log4j" rev="1.2.17"/>
+    <dependency org="org.slf4j" name="slf4j-api" rev="1.7.7"/>
+    <dependency org="org.apache.hadoop" name="hadoop-auth"
+                rev="2.3.0-cdh5.1.0"/>
+
     <!-- ycsb -->
     <dependency org="com.yahoo" name="ycsb" rev="0.1X.20140204"/>
+
     <!-- junit -->
     <dependency org="junit" name="junit" rev="4.11"/>
     <!-- hamcrest - a junit dependency -->
     <dependency org="org.hamcrest" name="hamcrest-core" rev="1.3"/>
+
     <!-- checkstyle -->
     <dependency org="com.puppycrawl.tools" name="checkstyle" rev="5.7"/>
-    <!-- antlr for checkstyle -->
-   <dependency org="antlr" name="antlr" rev="2.7.7"/>
-    <!-- guava collections for checkstyle (replaces google-collections) -->
-    <dependency org="com.google.guava" name="guava" rev="18.0"/>
+    <!-- antlr for checkstyle, different version from one for DDL -->
+    <dependency org="antlr" name="antlr" rev="2.7.7"/>
     <!-- commons-beanutils-core for checkstyle -->
     <dependency org="commons-beanutils"	name="commons-beanutils-core"
                 rev="1.8.3"/>
     <!-- commons-cli for checkstyle -->
     <dependency org="commons-cli" name="commons-cli" rev="1.2"/>
+
     <!-- findbugs -->
     <dependency org="com.google.code.findbugs" name="findbugs" rev="2.0.0"/>
     <dependency org="com.google.code.findbugs" name="annotations" rev="2.0.0"/>
     <dependency org="com.google.code.findbugs" name="bcel" rev="2.0.0"/>
-    <dependency org="com.google.code.findbugs" name="jFormatString" rev="2.0.0"/>
+    <dependency org="com.google.code.findbugs" name="jFormatString"
+                rev="2.0.0"/>
     <dependency org="com.google.code.findbugs" name="jsr305" rev="2.0.0"/>
     <dependency org="com.google.code.findbugs" name="findbugs-ant" rev="2.0.0"/>
     <!-- asm for findbugs -->
@@ -115,32 +228,44 @@ repository on sleepycat-scm.us.oracle.com.
     <dependency org="dom4j" name="dom4j" rev="1.6.1"/>
     <!-- jaxen for findbugs -->
     <dependency org="jaxen" name="jaxen" rev="1.1.1"/>
-    <!-- Avro -->
-    <dependency org="org.apache.avro" name="avro" rev="1.7.6"/>
-    <!-- Jackson (used by Avro) -->
-    <dependency org="org.codehaus.jackson" name="jackson-core-asl" rev="1.9.3"/>
-    <dependency org="org.codehaus.jackson" name="jackson-mapper-asl"
-                rev="1.9.3"/>
-    <!-- jline (used by CLI) -->
-    <dependency org="jline" name="jline" rev="2.11"/>
-    <!-- JDMK jars for SNMP support -->
-    <dependency org="com.sun.jdmk" name="jdmkrt" rev="06302012"/>
-    <dependency org="com.sun.jdmk" name="jdmktk" rev="06302012"/>
+
     <!-- EasyMock (mock object support for JUnit testing) -->
     <dependency org="org.easymock" name="easymock" rev="3.1"/>
     <dependency org="cglib" name="cglib-nodep" rev="2.2.2"/>
     <dependency org="org.objenesis" name="objenesis" rev="1.2"/>
-    <dependency org="org.jacoco" name="jacoco" rev="0.6.3"/>
-    <!-- antlr for DDL.  Different version from that required for checkstyle -->
-    <dependency org="antlr" name="antlr" rev="4.4"/>
-    <!-- jsch for diagnostics project. -->
-    <dependency org="com.jcraft" name="jsch" rev="0.1.51"/>
-    <!-- eclipse jdt for ant warnings target -->
-    <dependency org="jdt-core" name="jdt-core" rev="3.11.0"
-                conf="publicBuild->default"/>
+    <dependency org="org.jacoco" name="jacoco" rev="0.7.5"/>
+
     <!-- hadoop minikdc and apache ds for Kerberos unit test -->
     <dependency org="org.apache.hadoop" name="hadoop-minikdc" rev="2.3.0"/>
     <dependency org="org.apache.directory.server" name="apacheds-service"
                 rev="2.0.0-M15"/>
+
+    <!-- Elasticsearch build time -->
+    <dependency org="org.apache.lucene" name="lucene-backward-codecs"
+		rev="5.2.1"/>
+    <dependency org="org.apache.lucene" name="lucene-expressions" rev="5.2.1"/>
+    <dependency org="org.apache.lucene" name="lucene-grouping" rev="5.2.1"/>
+    <dependency org="org.apache.lucene" name="lucene-misc" rev="5.2.1"/>
+    <dependency org="org.apache.lucene" name="lucene-sandbox" rev="5.2.1"/>
+    <dependency org="org.antlr" name="antlr-runtime" rev="3.5">
+      <exclude org="org.antlr" module="stringtemplate" name="*" type="*"
+	       ext="*" conf="" matcher="exact"/>
+    </dependency>
+    <dependency org="org.ow2.asm" name="asm" rev="4.1"/>
+    <dependency org="org.ow2.asm" name="asm-commons" rev="4.1">
+      <exclude org="org.ow2.asm" module="asm-tree" name="*" type="*"
+	       ext="*" conf="" matcher="exact"/>
+    </dependency>
+    <dependency org="com.fasterxml.jackson.dataformat"
+		name="jackson-dataformat-smile" rev="2.5.3"/>
+    <dependency org="com.fasterxml.jackson.dataformat"
+		name="jackson-dataformat-yaml" rev="2.5.3"/>
+    <dependency org="com.fasterxml.jackson.dataformat"
+		name="jackson-dataformat-cbor" rev="2.5.3"/>
+    <dependency org="org.joda" name="joda-convert" rev="1.2"/>
+    <dependency org="com.vividsolutions" name="jts" rev="1.13">
+      <exclude org="xerces" module="xercesImpl" name="*" type="*"
+	       ext="*" conf="" matcher="exact"/>
+    </dependency>
   </dependencies>
 </ivy-module>

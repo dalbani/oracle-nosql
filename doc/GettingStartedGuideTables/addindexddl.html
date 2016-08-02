@@ -9,12 +9,12 @@
     <link rel="start" href="index.html" title="Getting Started with Oracle NoSQL Database Tables" />
     <link rel="up" href="ddl_overview.html" title="Appendix A. Table Data Definition Language Overview" />
     <link rel="prev" href="deletetableddl.html" title="DROP TABLE" />
-    <link rel="next" href="deleteindexddl.html" title="DROP INDEX" />
+    <link rel="next" href="create_text_index.html" title="CREATE FULL TEXT INDEX" />
   </head>
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
@@ -23,7 +23,7 @@
         <tr>
           <td width="20%" align="left"><a accesskey="p" href="deletetableddl.html">Prev</a> </td>
           <th width="60%" align="center">Appendix A. Table Data Definition Language Overview</th>
-          <td width="20%" align="right"> <a accesskey="n" href="deleteindexddl.html">Next</a></td>
+          <td width="20%" align="right"> <a accesskey="n" href="create_text_index.html">Next</a></td>
         </tr>
       </table>
       <hr />
@@ -42,7 +42,7 @@
         </p>
       <pre class="programlisting">CREATE INDEX [IF NOT EXISTS] <span class="emphasis"><em>index-name</em></span> ON <span class="emphasis"><em>table-name</em></span> (<span class="emphasis"><em>field-name</em></span>)</pre>
       <p>
-            When indexing a map field, the previous syntax is acceptible,
+            When indexing a map field, the previous syntax is acceptable,
             as are any of the following:
         </p>
       <pre class="programlisting">CREATE INDEX [IF NOT EXISTS] <span class="emphasis"><em>index-name</em></span> ON <span class="emphasis"><em>table-name</em></span> (KEYOF(<span class="emphasis"><em>field-name</em></span>))</pre>
@@ -119,7 +119,7 @@
         </p>
       <p>
             For a description of using indexes with non-scalar data types,
-            see <a class="xref" href="indexnonscalar.html" title="Chapter 8. Indexing Non-Scalar Data Types">Indexing Non-Scalar Data Types</a>.
+            see <a class="xref" href="indexnonscalar.html" title="Chapter 9. Indexing Non-Scalar Data Types">Indexing Non-Scalar Data Types</a>.
         </p>
     </div>
     <div class="navfooter">
@@ -130,14 +130,14 @@
           <td width="20%" align="center">
             <a accesskey="u" href="ddl_overview.html">Up</a>
           </td>
-          <td width="40%" align="right"> <a accesskey="n" href="deleteindexddl.html">Next</a></td>
+          <td width="40%" align="right"> <a accesskey="n" href="create_text_index.html">Next</a></td>
         </tr>
         <tr>
           <td width="40%" align="left" valign="top">DROP TABLE </td>
           <td width="20%" align="center">
             <a accesskey="h" href="index.html">Home</a>
           </td>
-          <td width="40%" align="right" valign="top"> DROP INDEX</td>
+          <td width="40%" align="right" valign="top"> CREATE FULL TEXT INDEX</td>
         </tr>
       </table>
     </div>

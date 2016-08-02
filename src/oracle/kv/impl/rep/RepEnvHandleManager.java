@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -509,10 +509,9 @@ public class RepEnvHandleManager implements ParameterListener {
      * Predicate to determine whether the environment handle should be renewed
      * without restarting the process as a result of the exception.
      *
-     * Only the InsufficientLogException, RollbackException and
-     * MasterReplicaTransitionException subclasses of EFE result in the handle
-     * actually being renewed in the process. All other EFEs result in a
-     * process exit.
+     * Only the InsufficientLogException and RollbackException subclasses of
+     * EFE result in the handle actually being renewed in the process. All
+     * other EFEs result in a process exit.
      */
     private boolean isRenewable(DatabaseException exception) {
         return exception instanceof InsufficientLogException ||

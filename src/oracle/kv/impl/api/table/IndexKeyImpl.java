@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -52,8 +52,35 @@ import oracle.kv.table.FieldValue;
 import oracle.kv.table.Index;
 import oracle.kv.table.IndexKey;
 
+/**
+ * The RecordDef associated with an IndexKeyImpl is that of its table.
+ *
+ * Note: there are 4 ways of defining a index field over a map. For each kind
+ * of map index, the user must build an IndexKey is a different way, in order
+ * to probe the index. These 4 different ways are listed below:
+ *
+ * - Indexing a specific map key:
+ *   The IndexKey contains a MapValue with 1 entry: the key of the entry is the
+ *   key name used in the index definition, and the associated value is the
+ *   search value.
+ *
+ * - Indexing the map keys:
+ *   The IndexKey contains a MapValue with 1 entry: the key of the entry is the
+ *   search key, and the associated value is the NullValue
+ *
+ * - Indexing the map values:
+ *   The IndexKey contains a MapValue with 1 entry: the key of the entry is the
+ *   "[]" string and the associated value is the search value
+ *
+ * - Indexing map entries:
+ *   The IndexKey contains a MapValue with 2 entries: The 1st entry contains the
+ *   search key and a NullValue, and the 2nd entry contains the "[]" string and
+ *   the search value
+ */
 public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
+
     private static final long serialVersionUID = 1L;
+
     final IndexImpl index;
 
     /**
@@ -95,7 +122,7 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
          * handle the complexities of map indexes.
          */
 
-        FieldDef ft = getDefinition(name);
+        FieldDef ft = getFieldDef(name);
         if (ft == null) {
             throw new IllegalArgumentException("No such field in record: " +
                                                name);
@@ -141,8 +168,8 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
     }
 
     @Override
-    FieldDef getField(String fieldName) {
-        FieldDef def = getDefinition().getField(fieldName);
+    FieldDefImpl getFieldDef(String fieldName) {
+        FieldDefImpl def = getDefinition().getField(fieldName);
         if (def != null && index.containsField(fieldName)) {
             return def;
         }
@@ -170,11 +197,11 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
      * only return the first component.
      */
     @Override
-    protected List<String> getFieldsInternal() {
+    public List<String> getFieldNamesInternal() {
         List<IndexField> indexFields = index.getIndexFields();
         List<String> list = new ArrayList<String>(indexFields.size());
         for (IndexField indexField : indexFields)  {
-            list.add(indexField.getComponents().get(0));
+            list.add(indexField.getSteps().get(0));
         }
         return list;
     }
@@ -226,17 +253,12 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
         return index.getTableImpl();
     }
 
-    FieldValue putComplex(String fieldName, FieldDef.Type type,
-                          FieldValue value) {
-        return putComplex(index.createIndexField(fieldName), type, value);
+    public FieldValue putComplex(TablePath path, FieldValue value) {
+        return putComplex(path.iterator(), value, false/*createTableRow*/);
     }
 
-    /**
-     * Puts a potentially nested value into an index key.  This exists for the
-     * CLI to allow it to put nested values by name vs via JSON.
-     */
-    public FieldValue putComplexField(String fieldName, FieldValue value) {
-        return putComplex(fieldName, value.getType(), value);
+    public FieldValue putComplex(String fieldName, FieldValue value) {
+        return putComplex(index.createIndexField(fieldName), value);
     }
 
     /**
@@ -264,7 +286,7 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
      * FieldValue and validate.
      */
     @Override
-    void validate() {
+    public void validate() {
         int numFound = 0;
         int i = 0;
         for (IndexField field : index.getIndexFields()) {
@@ -304,8 +326,9 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
          * found until use of the IndexKey.
          */
         if (numFound != numValues()) {
-            throw new IllegalArgumentException
-                ("IndexKey contains a field that is not part of the Index");
+            throw new IllegalArgumentException(
+                "IndexKey contains a field that is not part of the Index\n" +
+                "numFound = " + numFound + " numValue = " + numValues());
         }
     }
 
@@ -329,12 +352,14 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
     }
 
     private int compare(IndexKeyImpl other) {
+
         FieldMap fieldMap = getDefinition().getFieldMap();
+
         for (String fieldName : index.getFieldsInternal()) {
             FieldValueImpl val =
-                getComplex(new TableImpl.TableField(fieldMap, fieldName));
+                getComplex(new TablePath(fieldMap, fieldName));
             FieldValueImpl otherVal =
-                other.getComplex(new TableImpl.TableField(fieldMap, fieldName));
+                other.getComplex(new TablePath(fieldMap, fieldName));
             if (val != null) {
                 if (otherVal == null) {
                     return 1;
@@ -356,10 +381,11 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
     }
 
     /**
-     * Return true if all fields in the index are specified.
+     * Return true if all fields in the index are specified. This method
+     * should be called only after the key has been validated.
      */
-    boolean isComplete() {
-        return (size() == getNumFields());
+    public boolean isComplete() {
+        return (numValues() == getNumFields());
     }
 
     /**
@@ -381,9 +407,11 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
      * removed from the map.
      */
     public boolean incrementIndexKey() {
+
         FieldValue[] values = new FieldValue[index.numFields()];
         int fieldIndex = 0;
         List<IndexField> indexFields = index.getIndexFields();
+
         for (IndexField field : indexFields) {
             values[fieldIndex] = getComplex(field);
             if (values[fieldIndex] == null || values[fieldIndex].isNull()) {
@@ -407,6 +435,7 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
          * key.
          */
         FieldValueImpl fvi = ((FieldValueImpl)values[fieldIndex]).getNextValue();
+
         while (fvi == null) {
             fvi = ((FieldValueImpl)values[fieldIndex]).getMinimumValue();
 
@@ -417,7 +446,7 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
             if (ifield.isMapKey()) {
                 clearMap(ifield);
             }
-            putComplex(indexFields.get(fieldIndex), fvi.getType(), fvi);
+            putComplex(indexFields.get(fieldIndex), fvi);
 
             /*
              * Move to next more significant field if it exists
@@ -434,7 +463,6 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
         }
         assert fvi != null && fieldIndex >= 0;
 
-
         /*
          * If the field is a map key, remove the existing key.
          */
@@ -443,7 +471,7 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
             clearMap(ifield);
         }
 
-        putComplex(indexFields.get(fieldIndex), fvi.getType(), fvi);
+        putComplex(indexFields.get(fieldIndex), fvi);
         return true;
     }
 
@@ -457,5 +485,28 @@ public class IndexKeyImpl extends RecordValueImpl implements IndexKey {
                 ("Did not find a map in IndexKey in path: " + indexField);
         }
         ((MapValueImpl)fv).clearMap();
+    }
+
+    @Override
+    public void toStringBuilder(StringBuilder sb) {
+
+        sb.append('{');
+        int i = 0;
+
+        for (IndexField field : index.getIndexFields()) {
+            FieldValueImpl val = getComplex(field);
+            if (val != null) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                sb.append('\"');
+                sb.append(field.getPathName());
+                sb.append('\"');
+                sb.append(':');
+                val.toStringBuilder(sb);
+                i++;
+            }
+        }
+        sb.append('}');
     }
 }

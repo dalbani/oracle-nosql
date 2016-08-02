@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -59,6 +59,19 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import com.sleepycat.je.Database;
+import com.sleepycat.je.DatabaseEntry;
+import com.sleepycat.je.DbInternal;
+import com.sleepycat.je.EnvironmentFailureException;
+import com.sleepycat.je.SecondaryAssociation;
+import com.sleepycat.je.SecondaryConfig;
+import com.sleepycat.je.SecondaryDatabase;
+import com.sleepycat.je.Transaction;
+import com.sleepycat.je.TransactionConfig;
+import com.sleepycat.je.rep.NoConsistencyRequiredPolicy;
+import com.sleepycat.je.rep.ReplicatedEnvironment;
+import com.sleepycat.je.rep.StateChangeEvent;
+
 import oracle.kv.Key;
 import oracle.kv.Key.BinaryKeyIterator;
 import oracle.kv.impl.api.table.IndexImpl;
@@ -77,29 +90,14 @@ import oracle.kv.impl.rep.table.MaintenanceThread.PrimaryCleanerThread;
 import oracle.kv.impl.rep.table.MaintenanceThread.SecondaryCleanerThread;
 import oracle.kv.impl.rep.table.SecondaryInfoMap.DeletedTableInfo;
 import oracle.kv.impl.rep.table.SecondaryInfoMap.SecondaryInfo;
+import oracle.kv.impl.tif.TextIndexFeederManager;
 import oracle.kv.impl.test.TestHook;
-import oracle.kv.impl.test.TestHookExecute;
 import oracle.kv.impl.topo.PartitionId;
 import oracle.kv.impl.util.DatabaseUtils;
 import oracle.kv.impl.util.StateTracker;
 import oracle.kv.impl.util.TxnUtil;
 import oracle.kv.table.Index;
 import oracle.kv.table.Table;
-
-import com.sleepycat.je.Database;
-import com.sleepycat.je.DatabaseEntry;
-import com.sleepycat.je.DatabaseNotFoundException;
-import com.sleepycat.je.DbInternal;
-import com.sleepycat.je.Environment;
-import com.sleepycat.je.EnvironmentFailureException;
-import com.sleepycat.je.SecondaryAssociation;
-import com.sleepycat.je.SecondaryConfig;
-import com.sleepycat.je.SecondaryDatabase;
-import com.sleepycat.je.Transaction;
-import com.sleepycat.je.TransactionConfig;
-import com.sleepycat.je.rep.NoConsistencyRequiredPolicy;
-import com.sleepycat.je.rep.ReplicatedEnvironment;
-import com.sleepycat.je.rep.StateChangeEvent;
 
 /**
  * Manages the secondary database handles for the rep node.
@@ -144,7 +142,7 @@ public class TableManager extends MetadataManager<TableMetadata>
      * the threadLock held.
      */
     private final Map<String, SecondaryDatabase> secondaryDbMap =
-                                new HashMap<String, SecondaryDatabase>();
+                                                            new HashMap<>();
 
     /* Thread used to asynchronously open secondary database handles */
     private UpdateThread updateThread = null;
@@ -304,6 +302,12 @@ public class TableManager extends MetadataManager<TableMetadata>
         }
 
         final SecondaryInfoMap secondaryInfoMap = getSecondaryInfoMap(repEnv);
+
+        /* If there is an issue reading the info object, punt */
+        if (secondaryInfoMap == null) {
+            return false;
+        }
+
         final DeletedTableInfo info =
                                 secondaryInfoMap.getDeletedTableInfo(tableName);
         if (info != null) {
@@ -424,16 +428,7 @@ public class TableManager extends MetadataManager<TableMetadata>
             final Iterator<SecondaryDatabase> itr =
                                         secondaryDbMap.values().iterator();
             while (itr.hasNext()) {
-
-                final SecondaryDatabase db = itr.next();
-                if (db == null) {
-                    continue;
-                }
-
-                if (!closeSecondaryDb(db)) {
-                    /* Break out on an env failure */
-                    return;
-                }
+                closeSecondaryDb(itr.next());
                 itr.remove();
             }
         } finally {
@@ -443,20 +438,15 @@ public class TableManager extends MetadataManager<TableMetadata>
     }
 
     /**
-     * Closes the specified secondary DB. Returns false if the environment is
-     * closed or invalid, otherwise true.
+     * Closes the specified secondary DB. Returns true if the close was
+     * successful or db is null.
      *
      * @param db secondary database to close
-     * @return false if the environment is closed
+     * @return true if successful or db is null
      */
     private boolean closeSecondaryDb(SecondaryDatabase db) {
-        final Environment env = db.getEnvironment();
-
-        if ((env == null) || !env.isValid()) {
-            return false;
-        }
-        TxnUtil.close(logger, db, "secondary");
-        return true;
+        return (db == null) ? true :
+                              TxnUtil.close(logger, db, "secondary") == null;
     }
 
     /* -- From SecondaryAssociation -- */
@@ -519,7 +509,7 @@ public class TableManager extends MetadataManager<TableMetadata>
             return Collections.EMPTY_SET;
         }
         final List<SecondaryDatabase> secondaries =
-                        new ArrayList<SecondaryDatabase>(matchedIndexes.size());
+                        new ArrayList<>(matchedIndexes.size());
 
         /*
          * Get the DB for each of the matched DB. Opening of the DBs is async
@@ -611,7 +601,7 @@ public class TableManager extends MetadataManager<TableMetadata>
         } else {
             logger.log(Level.INFO, "Metadata update attempted at replica");
         }
-        logger.log(Level.INFO, "Metadata update failed, current seq number " +
+        logger.log(Level.INFO, "Metadata update failed, current seq number {0}",
                    md.getSequenceNumber());
         /* Update failed, return the current seq # */
         return md.getSequenceNumber();
@@ -621,7 +611,8 @@ public class TableManager extends MetadataManager<TableMetadata>
      * Persists the specified table metadata and updates the secondary DB
      * handles. The metadata is persisted only if this node is the master.
      *
-     * @return true if the update was successful, or false if in shutdown
+     * @return true if the update was successful, or false if in shutdown or
+     * unable to restart text index feeder.
      */
     private boolean update(final TableMetadata newMetadata,
                            ReplicatedEnvironment repEnv) {
@@ -638,6 +629,13 @@ public class TableManager extends MetadataManager<TableMetadata>
         /* Update the cached version and update the DB handles */
         tableMetadata = newMetadata;
         updateDbHandles(repEnv, true);
+
+        /* Notify the text index feeder, if there is one. */
+        TextIndexFeederManager tifm = repNode.getTextIndexFeederManager();
+        if (tifm != null) {
+            tifm.newTableMetadata(newMetadata);
+        }
+
         return true;
     }
 
@@ -725,9 +723,9 @@ public class TableManager extends MetadataManager<TableMetadata>
 
         // TODO - optimize if the MD has not changed?
 
-        final Map<String, TableEntry> slm = new HashMap<String, TableEntry>();
-        final Map<Long, TableImpl> ilm = new HashMap<Long, TableImpl>();
-        final Map<String, Long> r2nilm = new HashMap<String, Long>();
+        final Map<String, TableEntry> slm = new HashMap<>();
+        final Map<Long, TableImpl> ilm = new HashMap<>();
+        final Map<String, Long> r2nilm = new HashMap<>();
 
         for (Table table : tableMd.getTables().values()) {
             final TableImpl tableImpl = (TableImpl)table;
@@ -849,9 +847,8 @@ public class TableManager extends MetadataManager<TableMetadata>
      */
     private static class TableEntry {
         private final int keySize;
-        private final Set<String> secondaries = new HashSet<String>();
-        private final Map<String, TableEntry> children =
-                                            new HashMap<String, TableEntry>();
+        private final Set<String> secondaries = new HashSet<>();
+        private final Map<String, TableEntry> children = new HashMap<>();
 
         TableEntry(TableImpl table) {
             /* For child tables subtract the key count from parent */
@@ -863,7 +860,7 @@ public class TableManager extends MetadataManager<TableMetadata>
             /* For each index, save the secondary DB name */
             for (Index index :
                 table.getIndexes(Index.IndexType.SECONDARY).values()) {
-                
+
                 secondaries.add(createDbName(index.getName(),
                                              index.getTable().getFullName()));
             }
@@ -1110,13 +1107,13 @@ public class TableManager extends MetadataManager<TableMetadata>
      * The table MD is also checked for changes, such as indexes dropped and
      * tables that need their data deleted.
      */
-    private class UpdateThread extends Thread {
+    class UpdateThread extends Thread {
 
-        private final TableMetadata tableMd;
-        private final ReplicatedEnvironment repEnv;
+        final TableMetadata tableMd;
+        final ReplicatedEnvironment repEnv;
         private final boolean reuseExistingHandles;
 
-        private Database infoDb = null;
+        Database infoDb = null;
 
         private volatile boolean stop = false;
 
@@ -1214,15 +1211,13 @@ public class TableManager extends MetadataManager<TableMetadata>
              * metadata. This is used to determine what databases to open and if
              * an index has been dropped.
              */
-            final Map<String, IndexImpl> indexes =
-                                            new HashMap<String, IndexImpl>();
+            final Map<String, IndexImpl> indexes = new HashMap<>();
 
             /*
              * Set tables which are being removed but first need their data
              * deleted.
              */
-            final Set<TableImpl> deletedTables = new HashSet<TableImpl>();
-            final Map<String, Table> currentTables = tableMd.getTables();
+            final Set<TableImpl> deletedTables = new HashSet<>();
 
             for (Table table : tableMd.getTables().values()) {
                 scanTable((TableImpl)table, indexes, deletedTables);
@@ -1235,16 +1230,20 @@ public class TableManager extends MetadataManager<TableMetadata>
             /*
              * Update the secondary map with any indexes that have been dropped
              * and removed tables. Changes to the secondary map can only be
-             * made by the master.
+             * made by the master. This call will also remove the database.
+             * This call will not affect secondaryDbMap which is dealt with
+             * below.
              */
             if (repEnv.getState().isMaster()) {
-                SecondaryInfoMap.check(currentTables, indexes, deletedTables,
-                                       infoDb, logger);
+                SecondaryInfoMap.check(tableMd.getTables(), indexes,
+                                       deletedTables, this, logger);
             }
 
-            int errors = 0;
-
-            /* Remove secondary DBs for dropped indexes */
+            /*
+             * Remove entries from secondaryDbMap for dropped indexes.
+             * The call to SecondaryInfoMap.check above will close the DB
+             * when the master, so this will close the DB on the replica.
+             */
             final Iterator<Entry<String, SecondaryDatabase>> itr =
                                            secondaryDbMap.entrySet().iterator();
 
@@ -1256,37 +1255,13 @@ public class TableManager extends MetadataManager<TableMetadata>
                 final String dbName = entry.getKey();
 
                 if (!indexes.containsKey(dbName)) {
-                    final SecondaryDatabase db = entry.getValue();
-
-                    if (db != null) {
-                        try {
-                            closeSecondaryDb(db);
-                            TestHookExecute.doHookIfSet(BEFORE_REMOVE_HOOK, 1);
-                            if (repEnv.getState().isMaster()) {
-                                logger.log(Level.INFO,
-                                       "Secondary database {0} is not " +
-                                       "defined in table metadata " +
-                                       "seq# {1} and is being removed.",
-                                       new Object[]{dbName,
-                                                  tableMd.getSequenceNumber()});
-                                repEnv.removeDatabase(null, dbName);
-                            }
-                        } catch (DatabaseNotFoundException ignore) {
-                            /* Already gone */
-                        } catch (RuntimeException re) {
-                            DatabaseUtils.handleException(re, logger, dbName);
-                            /* Log the exception and go on, leaving the db in
-                             * the map for next time.
-                             */
-                            errors++;
-                            continue;
-                        } finally {
-                            TestHookExecute.doHookIfSet(AFTER_REMOVE_HOOK, 1);
-                        }
+                    if (closeSecondaryDb(entry.getValue())) {
+                        itr.remove();
                     }
-                    itr.remove();
                 }
             }
+
+            int errors = 0;
 
             /*
              * For each index open its secondary DB
@@ -1419,7 +1394,7 @@ public class TableManager extends MetadataManager<TableMetadata>
 
             for (Index index :
             	table.getIndexes(Index.IndexType.SECONDARY).values()) {
-            	
+
                 indexes.put(createDbName(index.getName(),
                                          table.getFullName()),
                             (IndexImpl)index);
@@ -1495,7 +1470,7 @@ public class TableManager extends MetadataManager<TableMetadata>
          * Returns true if the thread has been stopped or the env has been
          * invalidated.
          */
-        private boolean isStopped() {
+        boolean isStopped() {
             return stop || !repEnv.isValid();
         }
 
@@ -1513,6 +1488,20 @@ public class TableManager extends MetadataManager<TableMetadata>
                 /* Should not happen. */
                 throw new IllegalStateException(ie);
             }
+        }
+
+        /**
+         * Closes the specified secondary database. Returns true if the close
+         * succeeded, or the database was not open.
+         *
+         * @param dbName the name of the secondary DB to close
+         * @return true on success
+         */
+        boolean closeSecondary(String dbName) {
+            if (isStopped()) {
+                return false;
+            }
+            return closeSecondaryDb(secondaryDbMap.get(dbName));
         }
     }
 }

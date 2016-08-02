@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -141,9 +141,9 @@ public interface RepNodeAdmin extends VersionedRemote {
                           AuthContext authCtx,
                           short serialVersion)
         throws RemoteException;
-    
+
     /**
-     * Added and then deprecated in R3 purely to support the creation of a 
+     * Added and then deprecated in R3 purely to support the creation of a
      * SecureProxy.
      */
     @Deprecated
@@ -211,8 +211,8 @@ public interface RepNodeAdmin extends VersionedRemote {
         throws RemoteException;
 
     /**
-     * Added and then deprecated in R3 purely to support the creation of a 
-     * SecureProxy. 
+     * Added and then deprecated in R3 purely to support the creation of a
+     * SecureProxy.
      * Informs the RepNode about an update to the topology of the store.
      *
      * @param topoInfo describes the changes to be applied
@@ -402,6 +402,17 @@ public interface RepNodeAdmin extends VersionedRemote {
                                          AuthContext authCtx,
                                          short serialVersion)
         throws RemoteException;
+
+    /**
+    *
+    * @since 4.0
+    */
+   public boolean deleteMember(String groupName,
+                               String fullName,
+                               String targetHelperHosts,
+                               AuthContext authCtx,
+                               short serialVersion)
+       throws RemoteException;
 
     /**
      * To be removed after R2 compatibility period.
@@ -657,7 +668,7 @@ public interface RepNodeAdmin extends VersionedRemote {
                                     AuthContext authCtx,
                                     short serialVersion)
         throws RemoteException;
-    
+
     /**
      * To be removed after R2 compatibility period.
      * @deprecated

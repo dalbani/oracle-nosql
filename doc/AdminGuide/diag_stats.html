@@ -7,14 +7,14 @@
     <link rel="stylesheet" href="gettingStarted.css" type="text/css" />
     <meta name="generator" content="DocBook XSL Stylesheets V1.73.2" />
     <link rel="start" href="index.html" title="Oracle NoSQL Database Administrator's Guide" />
-    <link rel="up" href="diag_util.html" title="Appendix E. Diagnostics Utility" />
+    <link rel="up" href="diag_util.html" title="Appendix F. Diagnostics Utility" />
     <link rel="prev" href="diag_verify.html" title="Verifying Storage Node configuration" />
-    <link rel="next" href="thirdpartylicenses.html" title="Appendix F. Third Party Licenses" />
+    <link rel="next" href="thirdpartylicenses.html" title="Appendix G. Third Party Licenses" />
   </head>
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
@@ -22,7 +22,7 @@
         </tr>
         <tr>
           <td width="20%" align="left"><a accesskey="p" href="diag_verify.html">Prev</a> </td>
-          <th width="60%" align="center">Appendix E. Diagnostics Utility</th>
+          <th width="60%" align="center">Appendix F. Diagnostics Utility</th>
           <td width="20%" align="right"> <a accesskey="n" href="thirdpartylicenses.html">Next</a></td>
         </tr>
       </table>
@@ -36,145 +36,118 @@
           </div>
         </div>
       </div>
-      <p> 
+      <p>
          If enabled, your KVStore automatically gathers key distribution
-         statistics.
+         statistics. 
       </p>
       <p> 
-         To enable statistics gathering and create the four tables needed to
-         store the key distribution data, perform the following steps:
+         Oracle NoSQL Database uses four system tables to store key distribution data.
+         System tables are internally managed and maintained by Oracle NoSQL Database. They are
+         read-only when security is enabled on the store. Regardless of
+         security, the schema for system tables is immutable. The name of system
+         tables is defined with the prefix <code class="literal">SYS$</code>. You are not
+         allowed to create any other table name using this reserved prefix.
       </p>
-      <div class="orderedlist">
-        <ol type="1">
+      <p> 
+         The four system tables used to store key distribution data are:
+      </p>
+      <div class="itemizedlist">
+        <ul type="disc">
           <li>
             <p> 
-               Set the <code class="literal">rnStatisticsEnabled</code> parameter to
-               true to enable statistics gathering:
+               SYS$IndexStatsLease 
             </p>
-            <pre class="programlisting">plan change-parameters -wait -all-rns 
--params "rnStatisticsEnabled=true"</pre>
           </li>
           <li>
             <p>
-               Run the CreateStatisticTables script located in the
-                  <code class="literal">lib</code> directory of the release package to
-               create the four tables needed to store the key distribution data.
-               The file, <code class="literal">CreateStatisticTables.kvs</code>, would
-               then contain content like this:
+               SYS$PartitionStatsLease
             </p>
-            <pre class="programlisting">#Create table "TableStatsPartition".
-execute 
-"create table if not exists TableStatsPartition(
-tableName string,
-partitionId integer,
-shardId integer,
-count long,
-avgKeySize integer,
-primary key (tableName, partitionId)
-)";
-
-#Create table "TableStatsIndex".
-execute 
-"create table if not exists TableStatsIndex(
-tableName string,
-indexName string,
-shardId integer,
-count long,
-avgKeySize integer,
-primary key (tableName, indexName, shardId)
-)";
-
-#Create table "PartitionStatsLease".
-execute 
-"create table if not exists PartitionStatsLease(
-partitionId integer,
-leasingRN string,
-leaseExpiry string,
-lastUpdated string,
-primary key (partitionId)
-)";
-
-#Create table "IndexStatsLease".
-execute 
-"create table if not exists IndexStatsLease(
-tableName string,
-indexName string,
-shardId integer,
-leasingRN string,
-leaseExpiry string,
-lastUpdated string,
-primary key (tableName, indexName, shardId)
-)"; </pre>
           </li>
-        </ol>
+          <li>
+            <p> 
+               SYS$TableStatsIndex
+            </p>
+          </li>
+          <li>
+            <p> 
+               SYS$TableStatsPartition 
+            </p>
+          </li>
+        </ul>
       </div>
       <p>
-         <code class="literal"> TableStatsPartition</code> stores the distribution of
-         primary keys and table <code class="literal">TableStatsIndex</code> stores the
-         distribution of index keys. All four tables are forbidden to modify,
-         delete and insert.
+         <code class="literal">SYS$TableStatsPartition</code> stores the distribution of
+         primary keys and table <code class="literal">SYS$TableStatsIndex</code> stores
+         the distribution of index keys. All four tables are forbidden to
+         modify, delete and insert. 
       </p>
       <p>
-         You can query any of the four tables to get key distribution data or
-         review the gathering process. 
+         To enable statistics gathering you need to set the
+            <code class="literal">rnStatisticsEnabled</code> parameter to true:
+      </p>
+      <pre class="programlisting">plan change-parameters -wait -all-rns 
+-params "rnStatisticsEnabled=true"</pre>
+      <p> 
+         Then, you can query any of the four tables to get key distribution
+         data or review the gathering process.
       </p>
       <p>
          To modify the behavior of the utility, use the following
-         parameters:
+         parameters: 
       </p>
       <div class="itemizedlist">
         <ul type="disc">
           <li>
             <p>
-               rnStatisticsEnabled 
+               rnStatisticsEnabled
             </p>
             <p> 
-               Used to enable or disable the statistics gathering. 
-               The default value is true, which enables statistics gathering.
+               Used to enable or disable the statistics gathering. The
+               default value is true, which enables statistics gathering.
             </p>
           </li>
           <li>
             <p> 
-               rnStatisticsGatherInterval 
+               rnStatisticsGatherInterval
             </p>
             <p>
-               Specifies the interval time between updates of table
-               level statistics. The default value is 24 hours.
+               Specifies the interval time between updates of table level
+               statistics. The default value is 24 hours. 
             </p>
           </li>
           <li>
-            <p>
+            <p> 
                rnStatisticsLeaseDuration 
             </p>
-            <p> 
-               Specifies the duration of a lease. A Replication Node must 
+            <p>
+               Specifies the duration of a lease. A Replication Node must
                hold a lease associated with a partition or a shard-index before
-               it can update the associated statistics. The default value is 10 minutes.
+               it can update the associated statistics. The default value is 10
+               minutes. 
             </p>
           </li>
           <li>
-            <p> 
+            <p>
                rnStatisticsLowActivePeriod
             </p>
             <p> 
-               Specifies the period for which activity must be below
-               the threshold defined by 
-               <code class="literal">rnStatisticsRequestThreshold</code> before
-               statistics gathering activity is initiated.
-               The default value is 2 minutes.
+               Specifies the period for which activity must be below the
+               threshold defined by
+                  <code class="literal">rnStatisticsRequestThreshold</code> before
+               statistics gathering activity is initiated. The default value is
+               2 minutes. 
             </p>
           </li>
           <li>
             <p>
-               rnStatisticsRequestThreshold 
+               rnStatisticsRequestThreshold
             </p>
             <p>
                Specifies the threshold number of requests used to initiate
-               statistics gathering. Statistics gathering is initiated if
-               the sampled number of requests is below this threshold
-               over the period defined by 
-               <code class="literal">rnStatisticsLowActivePeriod</code>.
-               The default value is 2 requests.
+               statistics gathering. Statistics gathering is initiated if the
+               sampled number of requests is below this threshold over the
+               period defined by <code class="literal">rnStatisticsLowActivePeriod</code>.
+               The default value is 2 requests. 
             </p>
           </li>
         </ul>
@@ -195,7 +168,7 @@ primary key (tableName, indexName, shardId)
           <td width="20%" align="center">
             <a accesskey="h" href="index.html">Home</a>
           </td>
-          <td width="40%" align="right" valign="top"> Appendix F. Third Party Licenses</td>
+          <td width="40%" align="right" valign="top"> Appendix G. Third Party Licenses</td>
         </tr>
       </table>
     </div>

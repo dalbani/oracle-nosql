@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,10 +45,10 @@ package oracle.kv;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
 import java.io.ObjectInputStream;
-import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
 import java.util.List;
 
@@ -152,7 +152,7 @@ public class KeyRange implements FastExternalizable {
      *
      * FastExternalizable constructor.
      */
-    public KeyRange(ObjectInput in,
+    public KeyRange(DataInput in,
                     @SuppressWarnings("unused") short serialVersion)
         throws IOException {
 
@@ -181,7 +181,7 @@ public class KeyRange implements FastExternalizable {
      * FastExternalizable writer.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         int flags = 0;

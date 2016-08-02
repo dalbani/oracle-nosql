@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,7 +43,6 @@
 
 package oracle.kv.impl.admin.plan;
 
-import static oracle.kv.impl.admin.plan.Planner.CHANGE_ZONE_TYPE_VERSION;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -57,7 +56,6 @@ import java.util.logging.Logger;
 import oracle.kv.impl.admin.Admin;
 import oracle.kv.impl.admin.AdminServiceParams;
 import oracle.kv.impl.admin.CommandResult;
-import oracle.kv.impl.admin.IllegalCommandException;
 import oracle.kv.impl.admin.param.AdminParams;
 import oracle.kv.impl.admin.param.GlobalParams;
 import oracle.kv.impl.admin.param.Parameters;
@@ -66,33 +64,48 @@ import oracle.kv.impl.admin.plan.task.AddPartitions;
 import oracle.kv.impl.admin.plan.task.BroadcastMetadata;
 import oracle.kv.impl.admin.plan.task.BroadcastTopo;
 import oracle.kv.impl.admin.plan.task.CheckRNMemorySettings;
+import oracle.kv.impl.admin.plan.task.DeployNewARB;
+import oracle.kv.impl.admin.plan.task.CreateSystemTableTask;
 import oracle.kv.impl.admin.plan.task.DeployNewRN;
 import oracle.kv.impl.admin.plan.task.DeployShard;
 import oracle.kv.impl.admin.plan.task.MigratePartition;
+import oracle.kv.impl.admin.plan.task.NewArbNodeParameters;
+import oracle.kv.impl.admin.plan.task.NewNthANParameters;
 import oracle.kv.impl.admin.plan.task.NewNthRNParameters;
 import oracle.kv.impl.admin.plan.task.NewRepNodeParameters;
 import oracle.kv.impl.admin.plan.task.ParallelBundle;
+import oracle.kv.impl.admin.plan.task.RelocateAN;
 import oracle.kv.impl.admin.plan.task.RelocateRN;
+import oracle.kv.impl.admin.plan.task.RemoveAN;
 import oracle.kv.impl.admin.plan.task.Task;
 import oracle.kv.impl.admin.plan.task.UpdateAdminParams;
-import oracle.kv.impl.admin.plan.task.UpdateDatacenter;
 import oracle.kv.impl.admin.plan.task.UpdateDatacenter.UpdateDatacenterV2;
-import oracle.kv.impl.admin.plan.task.UpdateHelperHost;
+import oracle.kv.impl.admin.plan.task.UpdateHelperHostV2;
+import oracle.kv.impl.admin.plan.task.UpdateNthANHelperHost;
 import oracle.kv.impl.admin.plan.task.UpdateNthRNHelperHost;
 import oracle.kv.impl.admin.plan.task.UpdateRepNodeParams;
 import oracle.kv.impl.admin.plan.task.Utils;
 import oracle.kv.impl.admin.plan.task.WaitForAdminState;
-import oracle.kv.impl.admin.plan.task.WaitForRepNodeState;
+import oracle.kv.impl.admin.plan.task.WaitForNodeState;
 import oracle.kv.impl.admin.topo.TopologyCandidate;
 import oracle.kv.impl.admin.topo.TopologyDiff;
+import oracle.kv.impl.admin.topo.TopologyDiff.RelocatedAN;
 import oracle.kv.impl.admin.topo.TopologyDiff.RelocatedPartition;
 import oracle.kv.impl.admin.topo.TopologyDiff.RelocatedRN;
 import oracle.kv.impl.admin.topo.TopologyDiff.ShardChange;
+import oracle.kv.impl.api.table.TableBuilder;
+import oracle.kv.impl.api.table.TableMetadata;
 import oracle.kv.impl.fault.CommandFaultException;
 import oracle.kv.impl.metadata.Metadata.MetadataType;
+import oracle.kv.impl.rep.stats.IndexLeaseManager;
+import oracle.kv.impl.rep.stats.PartitionLeaseManager;
+import oracle.kv.impl.rep.stats.PartitionScan;
+import oracle.kv.impl.rep.stats.TableIndexScan;
 import oracle.kv.impl.security.metadata.SecurityMetadata;
 import oracle.kv.impl.security.util.SecurityUtils;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.DatacenterType;
@@ -165,7 +178,9 @@ class TopoTaskGenerator {
          * two RNs in the same mount point.
          */
         makeRelocatedRNTasks();
-        makeCreateRNTasks();
+        makeRelocatedANTasks();
+        makeCreateRNandARBTasks();
+        makeRemoveANTasks();
 
         /*
          * Broadcast all of the above topo changes now so any migrations run
@@ -189,9 +204,46 @@ class TopoTaskGenerator {
          * Since all RNs are expected to be active now, broadcast the security
          * metadata to them, so that the login authentication is able to work.
          */
-        plan.addTask(new BroadcastMetadata<SecurityMetadata>(plan, secMd));
+        plan.addTask(new BroadcastMetadata<>(plan, secMd));
 
         makePartitionTasks();
+
+        makeCreateStatsTableTasks();
+    }
+
+    /**
+     * Make tasks to create stats tables
+     */
+    private void makeCreateStatsTableTasks() {
+        final TableMetadata md =
+                plan.getAdmin().getMetadata(TableMetadata.class,
+                                            MetadataType.TABLE);
+
+        /* Add task to create stats table IndexStatsLease */
+        addTableTask(IndexLeaseManager.getTableBuilder(), md);
+
+        /* Add task to create stats table PartitionStatsLease */
+        addTableTask(PartitionLeaseManager.getTableBuilder(), md);
+
+        /* Add task to create stats table TableStatsPartition */
+        addTableTask(PartitionScan.getTableBuilder(), md);
+
+        /* Add task to create stats table TableStatsIndex */
+        addTableTask(TableIndexScan.getTableBuilder(), md);
+    }
+
+    /**
+     * Adds a task for the specified table if it is not present in the
+     * table metadata.
+     */
+    private void addTableTask(TableBuilder tableBuilder, TableMetadata md) {
+        String tableName = tableBuilder.getName();
+        String parentName =
+                tableBuilder.getParent() == null? null :
+                    tableBuilder.getParent().getFullName();
+        if(md == null || !md.tableExists(tableName, parentName)) {
+            plan.addTask(new CreateSystemTableTask(plan, tableBuilder));
+        }
     }
 
     /*
@@ -225,30 +277,14 @@ class TopoTaskGenerator {
     private void makeDatacenterUpdates(Topology target, Datacenter dc) {
         final DatacenterId dcId = dc.getResourceId();
 
-        final boolean typeChangeSupported =
-            plan.getAdmin().checkAdminGroupVersion(CHANGE_ZONE_TYPE_VERSION,
-                                                   offlineZones);
-
-        if (diff.typeChanged(dcId) && !typeChangeSupported) {
-            throw new IllegalCommandException(
-                          "All Admins must be updated to software version " +
-                          CHANGE_ZONE_TYPE_VERSION.getNumericVersionString() +
-                          " or greater in order to change the zone type",
-                          ErrorMessage.NOSQL_5200,
-                          CommandResult.NO_CLEANUP_JOBS);
-        }
-
         /*
          * Add a task to check to see if the zone attributes are up to date.
          * Add the task unconditionally, so it's checked at plan execution
          * time.
          */
-        if (typeChangeSupported) {
-            plan.addTask(new UpdateDatacenterV2(plan, dcId, dc.getRepFactor(),
-                                                dc.getDatacenterType()));
-        } else {
-            plan.addTask(new UpdateDatacenter(plan, dcId, dc.getRepFactor()));
-        }
+        plan.addTask(new UpdateDatacenterV2(plan, dcId, dc.getRepFactor(),
+                                            dc.getDatacenterType(),
+                                            dc.getAllowArbiters()));
 
         /* If the type did not change we are done */
         if (!diff.typeChanged(dcId)) {
@@ -280,7 +316,7 @@ class TopoTaskGenerator {
                 target.getStorageNodeMap().get(ap.getStorageNodeId());
 
             if (sn == null) {
-                final String msg = 
+                final String msg =
                         "Inconsistency between the parameters and the " +
                         "topology, " + ap.getStorageNodeId() + " was not " +
                         "found in parameters";
@@ -341,8 +377,8 @@ class TopoTaskGenerator {
                      */
                     if (!zoneIsOffline && dc.getDatacenterType().isPrimary()) {
                         waitTasks[i].addTask(
-                                new WaitForRepNodeState(plan, rnId,
-                                                        ServiceStatus.RUNNING));
+                                new WaitForNodeState(plan, rnId,
+                                                     ServiceStatus.RUNNING));
                     }
                     i++;
                 }
@@ -356,9 +392,9 @@ class TopoTaskGenerator {
     }
 
     /**
-     * Create tasks to execute all the RN creations.
+     * Create tasks to execute all the RN and AN creations.
      */
-    private void makeCreateRNTasks() {
+    private void makeCreateRNandARBTasks() {
 
         Topology target = candidate.getTopology();
 
@@ -383,6 +419,17 @@ class TopoTaskGenerator {
                     ErrorMessage.NOSQL_5200, CommandResult.NO_CLEANUP_JOBS);
             }
 
+            if (change.getRelocatedANs().size() > 0) {
+                final String msg =
+                    "New shard " + candidateShard + " to be deployed on " +
+                    snSetDescription + ", should not host existing ANs " +
+                    change.getRelocatedANs();
+                throw new CommandFaultException(
+                    msg, new IllegalStateException(msg),
+                    ErrorMessage.NOSQL_5200, CommandResult.NO_CLEANUP_JOBS);
+            }
+
+
             /* Make the shard. */
             plan.addTask(new DeployShard(plan,
                                          planShardIdx,
@@ -396,7 +443,7 @@ class TopoTaskGenerator {
              * remaining nodes, including any non-electable ones
              */
             final List<RepNodeId> newRnIds =
-                new ArrayList<RepNodeId>(change.getNewRNs());
+                new ArrayList<>(change.getNewRNs());
             for (final Iterator<RepNodeId> i = newRnIds.iterator();
                  i.hasNext(); ) {
                 final RepNodeId rnId = i.next();
@@ -417,6 +464,14 @@ class TopoTaskGenerator {
                                              newMountPoint));
             }
 
+            /* Add new arbiter nodes. */
+            for (final ArbNodeId proposedARBId : change.getNewANs()) {
+                ArbNode arb = target.get(proposedARBId);
+                plan.addTask(new DeployNewARB(plan,
+                                             arb.getStorageNodeId(),
+                                             planShardIdx));
+            }
+
             /*
              * After the RNs have been created and stored in the topology
              * update their helper hosts.
@@ -425,6 +480,17 @@ class TopoTaskGenerator {
                 plan.addTask(new UpdateNthRNHelperHost(plan, planShardIdx, i));
                 plan.addTask(new NewNthRNParameters(plan, planShardIdx, i));
             }
+
+            /*
+             * After the ANs have been created and stored in the topology
+             * update their helper hosts.
+             */
+            for (int i = 0; i < change.getNewANs().size(); i++) {
+                plan.addTask(new UpdateNthANHelperHost(plan, planShardIdx, i));
+                plan.addTask(new NewNthANParameters(plan, planShardIdx, i));
+            }
+
+
         }
 
         /* These are the shards that existed before, but have new RNs */
@@ -446,18 +512,23 @@ class TopoTaskGenerator {
                                              newMountPoint));
             }
 
+            /* Make all the new ANs that will go on this new shard */
+            for (ArbNodeId proposedANId : change.getValue().getNewANs()) {
+                ArbNode an = target.get(proposedANId);
+                plan.addTask(new DeployNewARB(plan,
+                                             an.getStorageNodeId(),
+                                             rgId));
+            }
+
             /*
              * After the new RNs have been created and stored in the topology
              * update the helper hosts for all the RNs in the shard, including
              * the ones that existed before.
              */
-            for(RepNode member : target.get(rgId).getRepNodes()) {
-                RepNodeId rnId = member.getResourceId();
-                plan.addTask(new UpdateHelperHost(plan, rnId, rgId));
-                plan.addTask(new NewRepNodeParameters(plan, rnId));
-            }
+            makeUpdateHelperParamsTasks(rgId);
         }
     }
+
 
     /**
      * Create tasks to move an RN from one SN to another.
@@ -491,7 +562,7 @@ class TopoTaskGenerator {
      */
     private void makeRelocatedRNTasks() {
 
-        Set<StorageNodeId> sourceSNs = new HashSet<StorageNodeId>();
+        Set<StorageNodeId> sourceSNs = new HashSet<>();
         for (Map.Entry<RepGroupId, ShardChange> change :
              diff.getChangedShards().entrySet()) {
 
@@ -524,6 +595,73 @@ class TopoTaskGenerator {
         }
     }
 
+
+    private void makeRelocatedANTasks() {
+
+        for (Map.Entry<RepGroupId, ShardChange> change :
+             diff.getChangedShards().entrySet()) {
+
+            boolean addedTask = false;
+
+            RepGroupId rgId = change.getKey();
+
+            for (RelocatedAN reloc : change.getValue().getRelocatedANs()) {
+                ArbNodeId anId = reloc.getArbId();
+                StorageNodeId oldSNId = reloc.getOldSNId();
+                StorageNodeId newSNId = reloc.getNewSNId();
+
+                /*
+                 * Stop the AN, update its params and topo, update the helper
+                 * host parameters in the SN configuration for all members
+                 * of the group, update its HA group
+                 * address, redeploy it on the new SN, and delete the AN from
+                 * the original SN once the new AN has come up.
+                 * Also ask the original SN to delete the files from
+                 * the environment.
+                 */
+                plan.addTask(new RelocateAN(plan, oldSNId, newSNId, anId));
+                addedTask = true;
+            }
+
+            if (addedTask) {
+                /*
+                 * After the new ANs have been removed the topology
+                 * update the helper hosts for all the RNs in the shard.
+                 */
+                makeUpdateHelperParamsTasks(rgId);
+            }
+        }
+    }
+
+    private void makeRemoveANTasks() {
+
+        for (Map.Entry<RepGroupId, ShardChange> change :
+             diff.getChangedShards().entrySet()) {
+
+            boolean addedTask = false;
+            RepGroupId rgId = change.getKey();
+
+            for (ArbNodeId anId : change.getValue().getRemovedANs()) {
+
+                /*
+                 * Stop the AN, update its params and topo, update the helper
+                 * host parameters in the SN configuration for all members
+                 * of the group, update its HA group address.
+                 */
+                plan.addTask(new RemoveAN(plan, anId));
+                addedTask = true;
+            }
+
+            if (addedTask) {
+                /*
+                 * After the new ANs have been removed the topology
+                 * update the helper hosts for all the RNs in the shard.
+                 */
+                makeUpdateHelperParamsTasks(rgId);
+            }
+        }
+    }
+
     /**
      * Partition related tasks. For a brand new deployment, add all the
      * partitions. For redistributions, generate one task per migrated
@@ -535,7 +673,7 @@ class TopoTaskGenerator {
         if (diff.getNumCreatedPartitions() > 0) {
             List<RepGroupId> newShards = diff.getNewShards();
             List<Integer> partitionCount =
-                new ArrayList<Integer>(newShards.size());
+                new ArrayList<>(newShards.size());
             for (int i = 0; i < newShards.size(); i++) {
                 ShardChange change = diff.getShardChange(newShards.get(i));
                 int newParts = change.getNumNewPartitions();
@@ -568,6 +706,23 @@ class TopoTaskGenerator {
             }
         }
         plan.addTask(bundle);
+    }
+
+    private void makeUpdateHelperParamsTasks(RepGroupId rgId)
+    {
+        Topology target = candidate.getTopology();
+
+        for (RepNode member : target.get(rgId).getRepNodes()) {
+            RepNodeId rnId = member.getResourceId();
+            plan.addTask(new UpdateHelperHostV2(plan, rnId, rgId));
+            plan.addTask(new NewRepNodeParameters(plan, rnId));
+        }
+
+        for (ArbNode member : target.get(rgId).getArbNodes()) {
+            ArbNodeId anId = member.getResourceId();
+            plan.addTask(new UpdateHelperHostV2(plan, anId, rgId));
+            plan.addTask(new NewArbNodeParameters(plan, anId));
+        }
     }
 
     /**

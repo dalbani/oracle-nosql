@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,9 +43,9 @@
 
 package oracle.kv.impl.security.util;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 import java.io.Serializable;
 
 import oracle.kv.impl.util.FastExternalizable;
@@ -68,7 +68,7 @@ public class SNKrbInstance implements Serializable, FastExternalizable {
     /**
      * FastExternalizable constructor.
      */
-    public SNKrbInstance(ObjectInput in,
+    public SNKrbInstance(DataInput in,
                          @SuppressWarnings("unused") short serialVersion)
         throws IOException {
 
@@ -85,7 +85,7 @@ public class SNKrbInstance implements Serializable, FastExternalizable {
     }
 
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         out.writeUTF(instanceName);

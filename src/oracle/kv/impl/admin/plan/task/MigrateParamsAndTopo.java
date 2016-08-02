@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,19 +43,25 @@
 
 package oracle.kv.impl.admin.plan.task;
 
+import java.io.IOException;
+import java.io.ObjectInputStream;
 import java.util.HashSet;
 import java.util.Set;
 
 import oracle.kv.impl.admin.NonfatalAssertionException;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.plan.PortTracker;
 import oracle.kv.impl.admin.plan.TopologyPlan;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepGroup;
 import oracle.kv.impl.topo.RepNode;
 import oracle.kv.impl.topo.RepNodeId;
+import oracle.kv.impl.topo.ResourceId;
 import oracle.kv.impl.topo.StorageNodeId;
 import oracle.kv.impl.topo.Topology;
 
@@ -83,10 +89,11 @@ import com.sleepycat.persist.model.Persistent;
  * are no changes to the topology found, we will broadcast the entire topology
  * instead of just the delta.
  *
- * version 0: original.
- * version 1: Changed inheritance chain.
+ * version 0: original
+ * version 1: changed inheritance chain
+ * version 2: added changedArbNodeParams field
  */
-@Persistent(version=1)
+@Persistent(version=2)
 public class MigrateParamsAndTopo extends SingleJobTask {
 
     private static final long serialVersionUID = 1L;
@@ -103,6 +110,7 @@ public class MigrateParamsAndTopo extends SingleJobTask {
      */
     private Set<RepNodeParams> changedRepNodeParams;
     private Set<AdminParams> changedAdminParams;
+    private Set<ArbNodeParams> changedArbNodeParams;
 
     public MigrateParamsAndTopo(TopologyPlan plan,
                                 StorageNodeId oldNode,
@@ -117,6 +125,7 @@ public class MigrateParamsAndTopo extends SingleJobTask {
 
         changedAdminParams = new HashSet<AdminParams>();
         changedRepNodeParams = new HashSet<RepNodeParams>();
+        changedArbNodeParams = new HashSet<ArbNodeParams>();
     }
 
     /*
@@ -150,10 +159,12 @@ public class MigrateParamsAndTopo extends SingleJobTask {
                                               plan.getDeployedInfo(),
                                               changedRepNodeParams,
                                               changedAdminParams,
+                                              changedArbNodeParams,
                                               plan);
         } else {
             plan.getAdmin().saveParams(changedRepNodeParams,
-                                       changedAdminParams);
+                                       changedAdminParams,
+                                       changedArbNodeParams);
         }
         /* Send topology changes to all nodes.*/
         if (!Utils.broadcastTopoChangesToRNs(plan.getLogger(),
@@ -235,17 +246,48 @@ public class MigrateParamsAndTopo extends SingleJobTask {
                 changedRepNodeParams.add(rnp);
             }
         }
+
+        for (ArbNodeParams anp: parameters.getArbNodeParams()) {
+
+            if (anp.getStorageNodeId().equals(oldNode)) {
+
+                anp.setStorageNodeId(newNode);
+                int haPort = portTracker.getNextPort(newNode);
+
+                // TODO: clean this up in the future so that setting the
+                // ha hostnameport is consistent with the way other
+                // fields are set.
+
+                String nodeHostPort = newNodeHAHostname + ":" + haPort;
+                plan.getLogger().info("transferring HA port for " +
+                                      anp.getArbNodeId() +
+                                      " from " + anp.getJENodeHostPort() + " to "
+                                      + nodeHostPort);
+                anp.setJENodeHostPort(nodeHostPort);
+                anp.setJEHelperHosts
+                   (findRNHelpers(parameters,anp.getArbNodeId()));
+                changedArbNodeParams.add(anp);
+            }
+        }
     }
 
     /**
      * Generate helper hosts by appending all the nodeHostPort values for all
      * other members of this HA repGroup.
      */
-    private String findRNHelpers(Parameters parameters, RepNodeId rnId) {
+    private String findRNHelpers(Parameters parameters, ResourceId resId) {
 
         Topology topo = plan.getTopology();
-        RepNode targetRN = topo.get(rnId);
-        RepGroup rg = topo.get(targetRN.getRepGroupId());
+        RepNodeId rnId = null;
+        ArbNodeId anId = null;
+        RepGroup rg;
+        if (resId instanceof RepNodeId) {
+            rnId = (RepNodeId)resId;
+            rg = topo.get(topo.get(rnId).getRepGroupId());
+        } else {
+            anId = (ArbNodeId)resId;
+            rg = topo.get(topo.get(anId).getRepGroupId());
+        }
 
         StringBuilder helperHosts = new StringBuilder();
         for (RepNode rn : rg.getRepNodes()) {
@@ -260,6 +302,20 @@ public class MigrateParamsAndTopo extends SingleJobTask {
             RepNodeParams peerParams = parameters.get(rn.getResourceId());
             helperHosts.append(peerParams.getJENodeHostPort());
         }
+
+        for (ArbNode an : rg.getArbNodes()) {
+            if (an.getResourceId().equals(anId)) {
+                continue;
+            }
+
+            if (helperHosts.length() != 0) {
+                helperHosts.append(",");
+            }
+
+            ArbNodeParams peerParams = parameters.get(an.getResourceId());
+            helperHosts.append(peerParams.getJENodeHostPort());
+        }
+
         return helperHosts.toString();
     }
 
@@ -285,9 +341,9 @@ public class MigrateParamsAndTopo extends SingleJobTask {
     }
 
     /**
-     * Find all RepNodes that refer to the old node, and update the topology
-     * to refer to the new node.Push the topology changes to all nodes
-     * in the system.
+     * Find all RepNodes and ArbNodes that refer to the old node, and update
+     * the topology to refer to the new node. Push the topology changes to all
+     * nodes in the system.
      */
     private void transferTopoToNewNode() {
 
@@ -300,11 +356,30 @@ public class MigrateParamsAndTopo extends SingleJobTask {
                     rg.update(rn.getResourceId(),updatedRN);
                 }
             }
+            for (ArbNode an : rg.getArbNodes()) {
+                if (an.getStorageNodeId().equals(oldNode)) {
+                    ArbNode updatedAN = new ArbNode(newNode);
+                    rg.update(an.getResourceId(),updatedAN);
+                }
+            }
         }
     }
 
     @Override
     public boolean continuePastError() {
         return false;
+    }
+
+    /**
+     * Initialize the changedArbNodeParams if it is null because it was created
+     * by a version from before the field was added.
+     */
+    private void readObject(ObjectInputStream in)
+        throws IOException, ClassNotFoundException {
+
+        in.defaultReadObject();
+        if (changedArbNodeParams == null) {
+            changedArbNodeParams = new HashSet<>();
+        }
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -47,6 +47,7 @@ import java.rmi.RemoteException;
 
 import oracle.kv.impl.admin.CommandServiceAPI;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
@@ -110,6 +111,13 @@ public class ChangeServiceAddresses extends SingleJobTask {
             if (rnp.getStorageNodeId().equals(newNode)) {
                 Utils.changeHAAddress(plan.getTopology(), params, adminParams,
                                       rnp.getRepNodeId(), oldNode, newNode,
+                                      plan, plan.getLogger());
+            }
+        }
+        for (ArbNodeParams anp: params.getArbNodeParams()) {
+            if (anp.getStorageNodeId().equals(newNode)) {
+                Utils.changeHAAddress(plan.getTopology(), params, adminParams,
+                                      anp.getArbNodeId(), oldNode, newNode,
                                       plan, plan.getLogger());
             }
         }

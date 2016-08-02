@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,6 +48,7 @@ import oracle.kv.impl.admin.plan.MetadataPlan;
 import oracle.kv.impl.api.table.FieldMap;
 import oracle.kv.impl.api.table.TableImpl;
 import oracle.kv.impl.api.table.TableMetadata;
+import oracle.kv.table.TimeToLive;
 
 import com.sleepycat.persist.model.Persistent;
 
@@ -61,13 +62,15 @@ public class EvolveTable extends UpdateMetadata<TableMetadata> {
     private /*final*/ String tableName;
     private /*final*/ int tableVersion;
     private /*final*/ FieldMap fieldMap;
+    private /*final*/ TimeToLive ttl;
 
     /**
      */
     public EvolveTable(MetadataPlan<TableMetadata> plan,
                        String tableName,
                        int tableVersion,
-                       FieldMap fieldMap) {
+                       FieldMap fieldMap,
+                       TimeToLive ttl) {
         super(plan);
 
         /*
@@ -76,6 +79,7 @@ public class EvolveTable extends UpdateMetadata<TableMetadata> {
         this.tableName = tableName;
         this.fieldMap = fieldMap;
         this.tableVersion = tableVersion;
+        this.ttl = ttl;
 
         final TableMetadata md = plan.getMetadata();
         if (md == null || md.getTable(tableName) == null) {
@@ -103,7 +107,7 @@ public class EvolveTable extends UpdateMetadata<TableMetadata> {
                 ("Cannot find table to evolve: " + tableName);
         }
 
-        if (md.evolveTable(table, tableVersion, fieldMap)) {
+        if (md.evolveTable(table, tableVersion, fieldMap, ttl)) {
             plan.getAdmin().saveMetadata(md, plan);
         }
         return md;

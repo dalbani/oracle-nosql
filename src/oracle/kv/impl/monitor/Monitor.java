@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,6 +45,7 @@ package oracle.kv.impl.monitor;
 
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -390,9 +391,11 @@ public class Monitor implements ParameterListener {
 
         public void removeView(View v) {
             for (Set<View> viewset : metricMap.values()) {
-                for (View view : viewset) {
+                final Iterator<View> iter = viewset.iterator();
+                while (iter.hasNext()) {
+                    final View view = iter.next();
                     if (view.getClass() == v.getClass()) {
-                        viewset.remove(view);
+                        iter.remove();
                     }
                 }
             }
@@ -421,11 +424,13 @@ public class Monitor implements ParameterListener {
         } else {
             /* removing */
             logger.info("Removing CSV view");
-            for (View view : views) {
+            final Iterator<View> iter = views.iterator();
+            while (iter.hasNext()) {
+                final View view = iter.next();
                 if (view instanceof CSVFileView) {
                     metricToViewMap.removeView(view);
                     view.close();
-                    views.remove(view);
+                    iter.remove();
                 }
             }
         }

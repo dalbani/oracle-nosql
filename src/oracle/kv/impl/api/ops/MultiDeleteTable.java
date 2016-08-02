@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,23 +44,10 @@
 package oracle.kv.impl.api.ops;
 
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.util.Collections;
-import java.util.List;
+import java.io.DataInput;
 
-import oracle.kv.Direction;
 import oracle.kv.KeyRange;
 import oracle.kv.impl.api.table.TargetTables;
-import oracle.kv.impl.rep.migration.MigrationStreamHandle;
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.security.TablePrivilege;
-import oracle.kv.impl.topo.PartitionId;
-
-import com.sleepycat.je.Cursor;
-import com.sleepycat.je.DatabaseEntry;
-import com.sleepycat.je.LockMode;
-import com.sleepycat.je.OperationStatus;
-import com.sleepycat.je.Transaction;
 
 /**
  * A multi-delete table operation over table(s) in the same partition.
@@ -80,10 +67,10 @@ public class MultiDeleteTable extends MultiTableOperation {
     private final int batchSize;
 
     /*
-     * This is only used by table data removal to track the last key
-     * deleted in order to use it as the resumeKey for batch deletes.
+     * This is only used on the server side by table data removal to track the
+     * last key deleted in order to use it as the resumeKey for batch deletes.
      */
-    private byte[] lastDeleted;
+    private transient byte[] lastDeleted;
 
     /**
      * Construct a multi-get operation, used by client.
@@ -100,7 +87,7 @@ public class MultiDeleteTable extends MultiTableOperation {
     /**
      * FastExternalizable constructor.
      */
-    protected MultiDeleteTable(ObjectInput in, short serialVersion)
+    protected MultiDeleteTable(DataInput in, short serialVersion)
         throws IOException {
 
         super(OpCode.MULTI_DELETE_TABLE, in, serialVersion);
@@ -116,11 +103,11 @@ public class MultiDeleteTable extends MultiTableOperation {
      * state.  KeyRange does not apply.  Note: KeyRange might
      * be used by a more general-purpose delete mechanism if ever exposed.
      */
-    protected MultiDeleteTable(byte[] parentKey,
-                               long targetTableId,
-                               boolean majorPathComplete,
-                               int batchSize,
-                               byte[] resumeKey) {
+    public MultiDeleteTable(byte[] parentKey,
+                            long targetTableId,
+                            boolean majorPathComplete,
+                            int batchSize,
+                            byte[] resumeKey) {
         super(OpCode.MULTI_DELETE_TABLE, parentKey,
               new TargetTables(targetTableId), null);
         this.majorPathComplete = majorPathComplete;
@@ -128,91 +115,23 @@ public class MultiDeleteTable extends MultiTableOperation {
         this.resumeKey = resumeKey;
     }
 
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          final OperationHandler operationHandler) {
+    byte[] getResumeKey() {
+        return resumeKey;
+    }
 
-        verifyTableAccess(operationHandler);
+    boolean getMajorPathComplete() {
+        return majorPathComplete;
+    }
 
-        /*
-         * This should really be an int but it needs to be accessible from
-         * the inner class below which mean it just be final.  A single-element
-         * array is used to make this possible.
-         */
-        final int[] nDeletions = new int[1];
-
-        final boolean moreElements = iterateTable
-            (operationHandler,
-             txn,
-             partitionId,
-             majorPathComplete,
-             Direction.FORWARD,
-             batchSize,
-             resumeKey,
-             OperationHandler.CURSOR_READ_COMMITTED,
-             LockMode.READ_UNCOMMITTED_ALL,
-             new OperationHandler.ScanVisitor() {
-
-                 @Override
-                 public int visit(Cursor cursor,
-                                  DatabaseEntry keyEntry,
-                                  DatabaseEntry dataEntry) {
-
-                     /*
-                      * 1.  check to see if key is part of table
-                      * 2.  if so, delete the record.
-                      */
-                     int match = keyInTargetTable(operationHandler,
-                                                  keyEntry,
-                                                  dataEntry,
-                                                  cursor);
-                     if (match > 0) {
-                         lastDeleted = keyEntry.getData();
-
-                         /*
-                          * There is no need to get the record to lock it
-                          * in the delete path.  If the record is gone the
-                          * delete below will fail.
-                          */
-                         if (cursor.delete() == OperationStatus.SUCCESS) {
-                             int num = 1;
-                             /*
-                              * If this is a client-driven operation the
-                              * migration stream needs to be considered.
-                              */
-                             if (isClientOperation()) {
-                                 MigrationStreamHandle.get().
-                                     addDelete(keyEntry, cursor);
-
-                                 num += deleteAncestorKeys(cursor, keyEntry);
-                             }
-                             nDeletions[0] += num;
-                         }
-                     }
-                     return match;
-                 }
-             });
-
-        assert (!moreElements || batchSize > 0);
-        return new Result.MultiDeleteResult(getOpCode(), nDeletions[0]);
+    int getBatchSize() {
+        return batchSize;
     }
 
     public byte[] getLastDeleted() {
         return lastDeleted;
     }
 
-    /*
-     * The internal table removal code will set a non-zero batchSize.
-     */
-    private boolean isClientOperation() {
-        return batchSize == 0;
-    }
-
-    @Override
-    public List<? extends KVStorePrivilege>
-        tableAccessPrivileges(long tableId) {
-        return Collections.singletonList(
-            new TablePrivilege.DeleteTable(tableId));
+    void setLastDeleted(byte[] lastDeleted) {
+        this.lastDeleted = lastDeleted;
     }
 }

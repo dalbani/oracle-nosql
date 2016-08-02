@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -771,6 +771,33 @@ public class RepNodeAdminImpl
                                                          targetNodeName,
                                                          targetHelperHosts,
                                                          newNodeHostPort);
+                    return true;
+                } catch (UnknownMasterException e) {
+                    return false;
+                }
+            }
+        });
+    }
+
+    @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.INTLOPER })
+    public boolean deleteMember(final String groupName,
+                                final String targetNodeName,
+                                final String targetHelperHosts,
+                                AuthContext authCtx,
+                                short serialVersion)
+        throws RemoteException {
+
+        return faultHandler.execute
+            (new ProcessFaultHandler.Operation<Boolean, RemoteException>() {
+
+            @Override
+            public Boolean execute() {
+                assertRunning();
+                try {
+                    repNodeService.deleteMember(groupName,
+                                                targetNodeName,
+                                                targetHelperHosts);
                     return true;
                 } catch (UnknownMasterException e) {
                     return false;

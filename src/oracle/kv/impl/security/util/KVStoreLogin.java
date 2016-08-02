@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -49,6 +49,7 @@ import static oracle.kv.KVSecurityConstants.AUTH_KRB_KEYTAB_PROPERTY;
 import static oracle.kv.KVSecurityConstants.AUTH_PWDFILE_PROPERTY;
 import static oracle.kv.KVSecurityConstants.AUTH_USERNAME_PROPERTY;
 import static oracle.kv.KVSecurityConstants.AUTH_WALLET_PROPERTY;
+import static oracle.kv.KVSecurityConstants.CMD_PASSWORD_NOPROMPT_PROPERTY;
 import static oracle.kv.KVSecurityConstants.KRB_MECH_NAME;
 import static oracle.kv.KVSecurityConstants.SECURITY_FILE_PROPERTY;
 import static oracle.kv.KVSecurityConstants.TRANSPORT_PROPERTY;
@@ -64,6 +65,8 @@ import java.lang.reflect.UndeclaredThrowableException;
 import java.util.HashSet;
 import java.util.Properties;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.CallbackHandler;
@@ -203,6 +206,15 @@ public class KVStoreLogin {
         }
     }
 
+    private boolean loadNoPasswordPromptProperty() {
+        if (securityProps == null) {
+            return false;
+        }
+        final String input =
+            securityProps.getProperty(CMD_PASSWORD_NOPROMPT_PROPERTY);
+       return checkBooleanField(input, false /* default */);
+    }
+
     /**
      * We delay the instantiation of ShellInputReader as late as when it is
      * really needed, because a background task will stop if it tries to
@@ -232,19 +244,35 @@ public class KVStoreLogin {
      */
     public LoginCredentials makeShellLoginCredentials()
         throws IOException {
+        final boolean noPasswdPrompt = loadNoPasswordPromptProperty();
         if (userName == null) {
+            if (noPasswdPrompt) {
+                throw new IllegalArgumentException(
+                    "Must specify user name when password prompting is" +
+                    " disabled");
+            }
             userName = getReader().readLine("Login as:");
         }
 
         if (isKerberosMech()) {
-            return buildKerberosCreds(userName, securityProps,
-                new PasswordCallbackHandler(userName, getReader()));
+            PasswordCallbackHandler pwdHandler = null;
+            if (!noPasswdPrompt) {
+                pwdHandler = new PasswordCallbackHandler(userName, getReader());
+            }
+            return buildKerberosCreds(userName, securityProps, pwdHandler);
         }
 
         char[] passwd = retrievePassword(userName, securityProps);
         if (passwd == null) {
+            if (noPasswdPrompt) {
+                throw new IllegalArgumentException(
+                    "Failed to retrieve password " + userName +
+                    " from password store, but password must be present" +
+                    " when password prompting is disabled");
+            }
             passwd = getReader().readPassword(userName + "'s password:");
         }
+
         return new PasswordCredentials(userName, passwd);
     }
 
@@ -529,6 +557,25 @@ public class KVStoreLogin {
                        kvstore.login(creds);
                    }
                 };
+    }
+
+    /*
+     * Check given string to boolean value. Throw IllegalArgumentException
+     * if given string is a invalid boolean value.
+     */
+    public static boolean checkBooleanField(String input,
+                                            boolean defaultValue) {
+        if (input == null) {
+            return defaultValue;
+        }
+        final Pattern pattern =
+            Pattern.compile("true|false", Pattern.CASE_INSENSITIVE);
+        final Matcher matcher = pattern.matcher(input);
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException(
+                "Invalid input for boolean field: " + input);
+        }
+        return Boolean.parseBoolean(input);
     }
 
     /**

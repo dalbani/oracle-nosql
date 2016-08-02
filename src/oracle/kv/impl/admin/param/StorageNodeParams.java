@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -67,6 +67,7 @@ import static oracle.kv.impl.param.ParameterState.SN_ADMIN_SO_BACKLOG;
 import static oracle.kv.impl.param.ParameterState.SN_ADMIN_SO_CONNECT_TIMEOUT;
 import static oracle.kv.impl.param.ParameterState.SN_ADMIN_SO_READ_TIMEOUT;
 import static oracle.kv.impl.param.ParameterState.SN_COMMENT;
+import static oracle.kv.impl.param.ParameterState.SN_ALLOW_ARBITERS;
 import static oracle.kv.impl.param.ParameterState.SN_LINK_EXEC_WAIT;
 import static oracle.kv.impl.param.ParameterState.SN_LOGIN_SO_BACKLOG;
 import static oracle.kv.impl.param.ParameterState.SN_LOGIN_SO_CONNECT_TIMEOUT;
@@ -762,6 +763,15 @@ public class StorageNodeParams implements ParamsWithMap, Serializable {
         return map.getOrDefault(COMMON_CAPACITY).asInt();
     }
 
+    public boolean getAllowArbiters() {
+        return map.getOrDefault(SN_ALLOW_ARBITERS).asBoolean();
+    }
+
+    public void setAllowArbiters(boolean hostArbiters) {
+        map.setParameter(SN_ALLOW_ARBITERS,
+                         (hostArbiters ? "true" : "false"));
+    }
+
     public boolean getMasterBalance() {
         return map.getOrDefault(COMMON_MASTER_BALANCE).asBoolean();
     }
@@ -890,6 +900,11 @@ public class StorageNodeParams implements ParamsWithMap, Serializable {
                                     int gcThreadThreshold,
                                     int gcThreadPercent) {
 
+        if (capacity == 0) {
+            /* Return gcThreadFloor for zero capacity SNs */
+            return gcThreadFloor;
+        }
+
         /* Enforce the condition that gcThreadFloor is <= gcThreadThreshold */
         int floor = (gcThreadFloor < gcThreadThreshold) ? gcThreadFloor :
             gcThreadThreshold;
@@ -956,13 +971,15 @@ public class StorageNodeParams implements ParamsWithMap, Serializable {
      */
     public RNHeapAndCacheSize calculateRNHeapAndCache(ParameterMap policyMap,
                                                       int numRNsOnSN,
-                                                      int rnCachePercent) {
+                                                      int rnCachePercent,
+                                                      int numANsOnSN) {
         return calculateRNHeapAndCache(policyMap,
                                        getCapacity(),
                                        numRNsOnSN,
                                        getMemoryMB(),
                                        getRNHeapPercent(),
-                                       rnCachePercent);
+                                       rnCachePercent,
+                                       numANsOnSN);
     }
 
     public static RNHeapAndCacheSize
@@ -971,7 +988,8 @@ public class StorageNodeParams implements ParamsWithMap, Serializable {
                                 int numRNsOnSN,
                                 int memoryMB,
                                 int rnHeapPercent,
-                                int rnCachePercent) {
+                                int rnCachePercent,
+                                int numARBsOnSN) {
 
         String jvmArgs = policyMap.getOrDefault(ParameterState.JVM_MISC).
             asString();
@@ -993,8 +1011,8 @@ public class StorageNodeParams implements ParamsWithMap, Serializable {
             return NO_CACHE_AND_HEAP_SPEC;
         }
 
-        /* Convert to bytes. */
-        long snaMem = memoryMB; // must be a long!
+        /* Convert to bytes -- must be a long. */
+        long snaMem = memoryMB - numARBsOnSN * ParameterState.AN_HEAP_MB_MIN;
         final long memoryForHeapBytes =
             ((snaMem << 20) * rnHeapPercent) / 100L;
 
@@ -1005,6 +1023,10 @@ public class StorageNodeParams implements ParamsWithMap, Serializable {
          */
         int divisor = ((numRNsOnSN != 0) && (numRNsOnSN > capacity)) ?
             numRNsOnSN : capacity;
+        /* Account for zero capacity SN */
+        if (divisor == 0) {
+            divisor = 1;
+        }
 
         /*
          * The heap has to be >= 2MB, per the JVM spec and >= our mandated
@@ -1055,6 +1077,10 @@ public class StorageNodeParams implements ParamsWithMap, Serializable {
         }
 
         return new RNHeapAndCacheSize(perRNHeap, perRNCacheBytes);
+    }
+
+    public static long calculateANHeapSizeMB() {
+        return ParameterState.AN_HEAP_MB_MIN;
     }
 
     /** Choices for compressed OOPs settings. */
@@ -1160,5 +1186,23 @@ public class StorageNodeParams implements ParamsWithMap, Serializable {
 
     public int getLoginCacheSize() {
         return map.getOrDefault(ParameterState.COMMON_LOGIN_CACHE_SIZE).asInt();
+    }
+
+    public String getSearchClusterMembers() {
+        return map.getOrDefault
+            (ParameterState.SN_SEARCH_CLUSTER_MEMBERS).asString();
+    }
+
+    public void setSearchClusterMembers(String members) {
+        map.setParameter(ParameterState.SN_SEARCH_CLUSTER_MEMBERS, members);
+    }
+
+    public String getSearchClusterName() {
+        return map.getOrDefault
+            (ParameterState.SN_SEARCH_CLUSTER_NAME).asString();
+    }
+
+    public void setSearchClusterName(String name) {
+        map.setParameter(ParameterState.SN_SEARCH_CLUSTER_NAME, name);
     }
 }

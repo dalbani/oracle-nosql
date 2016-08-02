@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -47,11 +47,8 @@ import java.util.Arrays;
 
 import oracle.kv.table.FieldDef;
 import oracle.kv.table.FieldValue;
-import oracle.kv.table.FixedBinaryDef;
 import oracle.kv.table.FixedBinaryValue;
 
-import org.apache.avro.Schema;
-import org.apache.avro.generic.GenericData;
 import org.codehaus.jackson.Base64Variants;
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.BinaryNode;
@@ -59,10 +56,13 @@ import org.codehaus.jackson.node.BinaryNode;
 import com.sleepycat.persist.model.Persistent;
 
 @Persistent(version=1)
-class FixedBinaryValueImpl extends FieldValueImpl
+public class FixedBinaryValueImpl extends FieldValueImpl
     implements FixedBinaryValue {
+
     private static final long serialVersionUID = 1L;
+
     private byte[] value;
+
     private final FixedBinaryDefImpl def;
 
     FixedBinaryValueImpl(byte[] value, FixedBinaryDefImpl def) {
@@ -76,24 +76,18 @@ class FixedBinaryValueImpl extends FieldValueImpl
         def = null;
     }
 
-    @Override
-    public byte[] get() {
-        return value;
-    }
-
-    @Override
-    public FixedBinaryDef getDefinition() {
-        return def;
-    }
-
-    @Override
-    public FieldDef.Type getType() {
-        return FieldDef.Type.FIXED_BINARY;
-    }
+    /*
+     * Public api methods from Object and FieldValue
+     */
 
     @Override
     public FixedBinaryValueImpl clone() {
         return new FixedBinaryValueImpl(value, def);
+    }
+
+   @Override
+    public int hashCode() {
+        return Arrays.hashCode(value);
     }
 
     @Override
@@ -104,11 +98,6 @@ class FixedBinaryValueImpl extends FieldValueImpl
                     Arrays.equals(value, otherImpl.get()));
         }
         return false;
-    }
-
-    @Override
-    public int hashCode() {
-        return Arrays.hashCode(value);
     }
 
     /**
@@ -125,13 +114,18 @@ class FixedBinaryValueImpl extends FieldValueImpl
     }
 
     @Override
-    public JsonNode toJsonNode() {
-        return new BinaryNode(value);
+    public String toString() {
+        return Base64Variants.getDefaultVariant().encode(value, false);
     }
 
     @Override
-    public void toStringBuilder(StringBuilder sb) {
-        sb.append(Base64Variants.getDefaultVariant().encode(value, true));
+    public FieldDef.Type getType() {
+        return FieldDef.Type.FIXED_BINARY;
+    }
+
+    @Override
+    public FixedBinaryDefImpl getDefinition() {
+        return def;
     }
 
     @Override
@@ -145,17 +139,34 @@ class FixedBinaryValueImpl extends FieldValueImpl
     }
 
     @Override
-    public String toString() {
-        return Base64Variants.getDefaultVariant().encode(value, false);
+    public boolean isAtomic() {
+        return true;
     }
 
-    /**
-     * Overrides the FieldValueImpl method to make sure that the correct schema
-     * is used when constructing the GenericEnumSymbol instance.
+    /*
+     * Public api methods from FixedBinaryValue
+     */
+
+    @Override
+    public byte[] get() {
+        return value;
+    }
+
+    /*
+     * FieldValueImpl internal api methods
      */
     @Override
-    Object toAvroValue(Schema schema) {
-        Schema toUse = getUnionSchema(schema, Schema.Type.FIXED);
-        return new GenericData.Fixed(toUse, get());
+    public byte[] getBytes() {
+        return value;
+    }
+
+    @Override
+    public JsonNode toJsonNode() {
+        return new BinaryNode(value);
+    }
+
+    @Override
+    public void toStringBuilder(StringBuilder sb) {
+        sb.append(Base64Variants.getDefaultVariant().encode(value, true));
     }
 }

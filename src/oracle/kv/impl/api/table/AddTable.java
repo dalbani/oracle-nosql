@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -46,6 +46,7 @@ package oracle.kv.impl.api.table;
 import java.util.List;
 
 import oracle.kv.impl.security.ResourceOwner;
+import oracle.kv.table.TimeToLive;
 
 /**
  * A TableChange to create/add a new table
@@ -56,12 +57,15 @@ class AddTable extends TableChange {
     private final String name;
     private final String parentName;
     private final List<String> primaryKey;
+    private final List<Integer> primaryKeySizes;
     private final List<String> shardKey;
     private final FieldMap fields;
+    private final TimeToLive ttl;
     private final boolean r2compat;
     private final int schemaId;
     private final String description;
     private final ResourceOwner owner;
+    private final boolean sysTable;
 
     AddTable(TableImpl table, int seqNum) {
         super(seqNum);
@@ -69,19 +73,22 @@ class AddTable extends TableChange {
         final TableImpl parent = (TableImpl) table.getParent();
         parentName = (parent == null) ? null : parent.getFullName();
         primaryKey = table.getPrimaryKey();
+        primaryKeySizes = table.getPrimaryKeySizes();
         shardKey = table.getShardKey();
         fields = table.getFieldMap();
+        ttl = table.getDefaultTTL();
         r2compat = table.isR2compatible();
         schemaId = table.getSchemaId();
         description = table.getDescription();
         owner = table.getOwner();
+        sysTable = table.isSystemTable();
     }
 
     @Override
     public boolean apply(TableMetadata md) {
         md.insertTable(name, parentName,
-                       primaryKey, shardKey, fields,
-                       r2compat, schemaId, description, owner);
+                       primaryKey, primaryKeySizes, shardKey, fields,
+                       ttl, r2compat, schemaId, description, owner, sysTable);
         return true;
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -46,6 +46,9 @@ package oracle.kv.impl.api.avro;
 import java.util.Collections;
 import java.util.Map;
 
+import org.apache.avro.Schema;
+import org.apache.avro.specific.SpecificRecord;
+
 import oracle.kv.Consistency;
 import oracle.kv.avro.AvroCatalog;
 import oracle.kv.avro.GenericAvroBinding;
@@ -57,12 +60,10 @@ import oracle.kv.avro.UndefinedSchemaException;
 import oracle.kv.impl.api.KVStoreImpl;
 import oracle.kv.impl.test.TestHook;
 
-import org.apache.avro.Schema;
-import org.apache.avro.specific.SpecificRecord;
-
 /**
  * Implementation of AvroCatalog.  Most details are in the binding classes.
  */
+@SuppressWarnings("deprecation")
 public class AvroCatalogImpl implements AvroCatalog {
 
     /* All read-only access to schemas goes through the schema cache. */
@@ -167,9 +168,9 @@ public class AvroCatalogImpl implements AvroCatalog {
      * Returns an internal interface used by the C Avro API.
      */
     public CBindingBridge getCBindingBridge() {
-        return schemaCache.getCBindingBridge(); 
+        return schemaCache.getCBindingBridge();
     }
-    
+
     /**
      * Utility method for use by AvroBinding constructors.
      *
@@ -197,7 +198,7 @@ public class AvroCatalogImpl implements AvroCatalog {
              " new and modified schemas must be added or changed using the" +
              " administration interface, before being used by clients.", name);
     }
-    
+
     /**
      * Utility method for use by AvroBinding.toObject implementations.
      *
@@ -220,7 +221,7 @@ public class AvroCatalogImpl implements AvroCatalog {
         }
         return schema;
     }
-    
+
     /**
      * Utility method for use by AvroBinding.toValue implementations.
      *

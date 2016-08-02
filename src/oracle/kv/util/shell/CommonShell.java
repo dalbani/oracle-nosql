@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -52,6 +52,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.StringTokenizer;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -66,11 +67,16 @@ import oracle.kv.LoginCredentials;
 import oracle.kv.StatementResult;
 import oracle.kv.impl.admin.CommandResult;
 import oracle.kv.impl.client.DdlJsonFormat;
+import oracle.kv.impl.query.shell.OnqlShell.OutputMode;
+import oracle.kv.impl.query.shell.output.ResultOutputFactory;
+import oracle.kv.impl.query.shell.output.ResultOutputFactory.ResultOutput;
 import oracle.kv.impl.security.PasswordExpiredException;
 import oracle.kv.impl.security.util.KVStoreLogin;
 import oracle.kv.impl.security.util.KVStoreLogin.CredentialsProvider;
 import oracle.kv.impl.util.CommandParser;
+import oracle.kv.impl.util.HostPort;
 import oracle.kv.util.ErrorMessage;
+
 import static oracle.kv.impl.util.CommandParser.CONSISTENCY_FLAG;
 import static oracle.kv.impl.util.CommandParser.DURABILITY_FLAG;
 import static oracle.kv.impl.util.CommandParser.FROM_FLAG;
@@ -102,6 +108,12 @@ public abstract class CommonShell extends Shell {
     private boolean noprompt = false;
     private boolean noconnect = false;
 
+    /*
+     * This is an internal flag used by tests to allow them to
+     * call CommandShell.main without exiting.
+     */
+    private boolean dontExit = false;
+
     private Integer storeTimeout = null;
     private Consistency storeConsistency = null;
     private Durability storeDurability = null;
@@ -128,7 +140,7 @@ public abstract class CommonShell extends Shell {
         Map<String, Consistency> consMap = new HashMap<String, Consistency>();
         consMap.put("NONE_REQUIRED", Consistency.NONE_REQUIRED);
         consMap.put("NONE_REQUIRED_NO_MASTER",
-            Consistency.NONE_REQUIRED_NO_MASTER);
+                    Consistency.NONE_REQUIRED_NO_MASTER);
         consMap.put("ABSOLUTE", Consistency.ABSOLUTE);
         consistencyMap = Collections.unmodifiableMap(consMap);
 
@@ -140,7 +152,13 @@ public abstract class CommonShell extends Shell {
     }
 
     public CommonShell(InputStream input, PrintStream output) {
-        super(input, output);
+        this(input, output, false);
+    }
+
+    public CommonShell(InputStream input,
+                       PrintStream output,
+                       boolean disableJlineEventDesignator) {
+        super(input, output, disableJlineEventDesignator);
     }
 
     public KVStore getStore() throws ShellException {
@@ -241,6 +259,10 @@ public abstract class CommonShell extends Shell {
         return noconnect;
     }
 
+    public boolean dontExit() {
+        return dontExit;
+    }
+
     public static Consistency getConsistency(String name) {
         return consistencyMap.get(name.toUpperCase());
     }
@@ -336,11 +358,11 @@ public abstract class CommonShell extends Shell {
         final int requestTimeout = getRequestTimeout();
         kvstoreConfig.setRequestTimeout(requestTimeout, TimeUnit.MILLISECONDS);
         /* Make sure socket timeout >= request timeout */
-        final long socketTimeout = kvstoreConfig
-                .getSocketReadTimeout(TimeUnit.MILLISECONDS);
+        final long socketTimeout =
+            kvstoreConfig.getSocketReadTimeout(TimeUnit.MILLISECONDS);
         if (socketTimeout < requestTimeout) {
             kvstoreConfig.setSocketReadTimeout(requestTimeout,
-                TimeUnit.MILLISECONDS);
+                                               TimeUnit.MILLISECONDS);
         }
 
         try {
@@ -363,7 +385,16 @@ public abstract class CommonShell extends Shell {
     public abstract class ShellParser extends CommandParser {
         private List<String> reqFlags;
 
-        /* Hidden flags: -noprompt, -noconnect, -hidden. */
+        /*
+         * The flag indicates that if there is a non-hidden argument
+         * provided.
+         */
+        private boolean hasNonHiddenArg = false;
+
+        /*
+         * Hidden flags: -noprompt, -noconnect, -hidden, -verbose, -debug,
+         *               -no-exit, help flag(-help, help, -?, ?)
+         */
         public ShellParser(String[] args,
                            String[] rcArgs,
                            String[] requiredFlags) {
@@ -380,6 +411,14 @@ public abstract class CommonShell extends Shell {
 
         @Override
         protected void verifyArgs() {
+            /*
+             * If no argument except those hidden flags is provided, then
+             * don't try to connect to a store.
+             */
+            if (!hasNonHiddenArg && !noconnect) {
+                noconnect = true;
+            }
+
             if (!noconnect) {
                 if (reqFlags != null && reqFlags.size() > 0) {
                     usage("Missing required argument");
@@ -412,7 +451,7 @@ public abstract class CommonShell extends Shell {
                         error, ErrorMessage.NOSQL_5100,
                         CommandResult.NO_CLEANUP_JOBS);
                 error = Shell.toJsonReport(operation, result);
-            } 
+            }
 
             System.err.println(error);
             System.exit(1);
@@ -430,6 +469,10 @@ public abstract class CommonShell extends Shell {
              * the shell executable, if the commandToRun is set, just pass them
              * through.
              */
+            if (checkHiddenFlag(arg)) {
+                return true;
+            }
+
             if (commandToRun == null) {
                 checkRequiredFlag(arg);
 
@@ -475,34 +518,66 @@ public abstract class CommonShell extends Shell {
                     return true;
                 }
             }
-            if (NOCONNECT_FLAG.equals(arg)) {
-                noconnect = true; /* undocumented option */
-                return true;
-            }
-            if (NOPROMPT_FLAG.equals(arg)) {
-                noprompt = true;
-                return true;
-            }
-            if (HIDDEN_FLAG.equals(arg)) {
-                showHidden = true;
-                /* Some commands take this flag as well */
-                if (commandToRun != null) {
-                    addToCommand(arg);
-                }
-                return true;
-            }
-            if (JSON_FLAG.equals(arg)) {
-                shellJson = true;
-                /* Some commands take this flag as well */
-                if (commandToRun != null) {
-                    addToCommand(arg);
-                }
-                return true;
-            }
             if (!isIgnoreUnknownArg()) {
                 addToCommand(arg);
             }
             return true;
+        }
+
+        /*
+         * Check if the input argument is one of the hidden flags:
+         *  -noconnect, -noprompt, -verbose, -debug, -hidden or
+         *  help flag (-help, help, -?, ?).
+         *
+         * If the argument is a help flag for shell but not for commandToRun,
+         * then print the usage message of shell and exit current program.
+         */
+        private boolean checkHiddenFlag(final String arg) {
+
+            if (NOCONNECT_FLAG.equals(arg)) {
+                noconnect = true;
+                return true;
+            }
+
+            if (NOPROMPT_FLAG.equals(arg)) {
+                noprompt = true;
+                return true;
+            }
+
+            if (DONTEXIT_FLAG.equals(arg)) {
+                dontExit = true;
+                return true;
+            }
+
+            if (commandToRun == null && isHelpFlag(arg)) {
+                usage(null);
+            }
+
+            if (VERBOSE_FLAG.equals(arg)) {
+                setVerbose(true);
+            } else if (DEBUG_FLAG.equals(arg)) {
+                setDebug(true);
+            } else if (HIDDEN_FLAG.equals(arg)) {
+                showHidden = true;
+            } else if (JSON_FLAG.equals(arg)) {
+                shellJson = true;
+            } else if (!checkExtraHiddenFlag(arg)) {
+                if (!hasNonHiddenArg) {
+                    hasNonHiddenArg = true;
+                }
+                return false;
+            }
+
+            /* Some commands take this flag as well */
+            if (commandToRun != null) {
+                addToCommand(arg);
+            }
+            return true;
+        }
+
+        public boolean checkExtraHiddenFlag(@SuppressWarnings("unused")
+                                            final String arg) {
+            return false;
         }
 
         private void checkRequiredFlag(String arg) {
@@ -594,8 +669,7 @@ public abstract class CommonShell extends Shell {
                 if (isSecuredStore && storeCreds == null) {
                     storeCreds = storeLogin.makeShellLoginCredentials();
                 }
-                return KVStoreFactory.getStore(
-                    config, storeCreds,
+                return KVStoreFactory.getStore(config, storeCreds,
                     KVStoreLogin.makeReauthenticateHandler(this));
             } catch (AuthenticationFailureException afe) {
                 storeCreds = null;
@@ -612,6 +686,9 @@ public abstract class CommonShell extends Shell {
             } catch (IOException ioe) {
                 throw new ShellException("Failed to get login credentials: " +
                                          ioe.getMessage());
+            } catch (IllegalArgumentException iae) {
+                throw new ShellException(
+                    "Login properties error: " + iae.getMessage());
             }
         }
 
@@ -631,8 +708,9 @@ public abstract class CommonShell extends Shell {
             "login credentials.";
 
         public static final String CONNECT_STORE_COMMAND_ARGUMENTS =
-            CommandParser.getHostUsage() + " " + CommandParser.getPortUsage() +
-            " " + NAME_FLAG + " <storeName>" + eolt +
+            CommandParser.optional(CommandParser.getHostUsage()) + " " +
+            CommandParser.optional(CommandParser.getPortUsage()) + " " +
+            NAME_FLAG + " <storeName>" + eolt +
             CommandParser.optional(CommandParser.getTimeoutUsage()) + " " +
             eolt +
             CommandParser.optional(CommandParser.getConsistencyUsage()) +
@@ -700,12 +778,6 @@ public abstract class CommonShell extends Shell {
                 }
             }
 
-            if (hostname == null) {
-                shell.requiredArg(HOST_FLAG, this);
-            }
-            if (port == 0) {
-                shell.requiredArg(PORT_FLAG, this);
-            }
             if (storeName == null) {
                 shell.requiredArg(NAME_FLAG, this);
             }
@@ -713,15 +785,58 @@ public abstract class CommonShell extends Shell {
             /* Close current store, open new one.*/
             final CommonShell cshell = (CommonShell) shell;
             cshell.closeStore();
-            try {
-                cshell.openStore(hostname, port, storeName, user, security,
-                                 timeout, consistency, durability);
-            } catch (ShellException se) {
-                throw new ShellException(
-                    se.getMessage() + eol +
-                    "Warning: You are no longer connected to a store.");
+
+            List<HostPort> hostports = new ArrayList<HostPort>();
+            if (hostname != null && port != 0) {
+                hostports.add(new HostPort(hostname, port));
+            } else {
+                if (cshell.helperHosts != null) {
+                    /*
+                     * If a list of helperhost is used as argument of the shell,
+                     * then -host and -port should be specified either both or
+                     * not at all. Specifying only one of them cause the
+                     * exception that miss the another argument.
+                     */
+                    if (hostname == null && port != 0) {
+                        shell.requiredArg(HOST_FLAG, this);
+                    } else if (hostname != null && port == 0) {
+                        shell.requiredArg(PORT_FLAG, this);
+                    }
+                    assert(hostname == null && port == 0);
+                    for (String helperHost : cshell.helperHosts) {
+                        hostports.add(HostPort.parse(helperHost));
+                    }
+                } else {
+                    if (hostname == null) {
+                        hostname = cshell.storeHostname;
+                    }
+                    if (port == 0) {
+                        port = cshell.storePort;
+                    }
+                    hostports.add(new HostPort(hostname, port));
+                }
             }
 
+            boolean connected = false;
+            for (HostPort hostPort : hostports) {
+                try {
+                    hostname = hostPort.hostname();
+                    port = hostPort.port();
+                    cshell.openStore(hostname, port, storeName, user, security,
+                                     timeout, consistency, durability);
+                    connected = true;
+                    break;
+                } catch (ShellException ignored) {
+                }
+            }
+            if (!connected) {
+                String fmt = "Failed to connect to %s at %s" + eol +
+                    "Warning: You are no longer connected to a store.";
+                String helperHosts = Arrays.toString(
+                     hostports.toArray(new HostPort[hostports.size()]));
+                throw new ShellException(String.format(fmt, storeName,
+                                                       helperHosts));
+            }
             String ret = "Connected to " + storeName + " at " + hostname
                 + ":" + port + ".";
             if(timeout != null) {
@@ -754,7 +869,7 @@ public abstract class CommonShell extends Shell {
         final static String SYNTAX = NAME + " " +
             CommandParser.optional(ON_FLAG + " | " + OFF_FLAG);
         final static String DESCRIPTION = "Turns the measurement and display " +
-        	"of execution time for commands on or off.";
+            "of execution time for commands on or off.";
 
         public TimeCommand() {
             super(NAME, 5);
@@ -917,6 +1032,163 @@ public abstract class CommonShell extends Shell {
         }
     }
 
+    public static class DebugCommand extends ShellCommand {
+
+        private static String NAME = "debug";
+
+        final static String SYNTAX = NAME + " " +
+            CommandParser.optional(ON_FLAG + " | " + OFF_FLAG);
+
+        final static String DESCRIPTION =
+            "Toggles or sets the global debug setting.  This property can " +
+            "also" + eolt + "be set per-command using the -debug flag.";
+
+        public DebugCommand() {
+            super(NAME, 4);
+        }
+
+        @Override
+        public boolean isHidden() {
+            return true;
+        }
+
+        @Override
+        public String execute(String[] args, Shell shell)
+            throws ShellException {
+
+            if (args.length > 2) {
+                shell.badArgCount(this);
+            } else if (args.length > 1) {
+                String arg = args[1];
+                if (ON_FLAG.equals(arg)) {
+                    shell.setDebug(true);
+                } else if (OFF_FLAG.equals(arg)) {
+                    shell.setDebug(false);
+                } else {
+                    return "Invalid argument: " + arg + eolt +
+                        getBriefHelp();
+                }
+            } else {
+                shell.toggleDebug();
+            }
+            return "Debug mode is now " + (shell.getDebug()? "on" : "off");
+        }
+
+        @Override
+        protected String getCommandSyntax() {
+            return SYNTAX;
+        }
+
+        @Override
+        public String getCommandDescription() {
+            return DESCRIPTION;
+        }
+    }
+
+    public static class VerboseCommand extends ShellCommand {
+
+        private final static String NAME = "verbose";
+
+        final static String SYNTAX = NAME + " " +
+            CommandParser.optional(ON_FLAG + " | " + OFF_FLAG);
+
+        final static String DESCRIPTION =
+            "Toggles or sets the global verbosity setting.  This " +
+            "property can also" + eolt + "be set per-command using " +
+            "the -verbose flag.";
+
+        public VerboseCommand() {
+            super(NAME, 4);
+        }
+
+        @Override
+        public String execute(String[] args, Shell shell)
+            throws ShellException {
+
+            if (args.length > 2) {
+                shell.badArgCount(this);
+            } else if (args.length > 1) {
+                String arg = args[1];
+                if (ON_FLAG.equals(arg)) {
+                    shell.setVerbose(true);
+                } else if (OFF_FLAG.equals(arg)) {
+                    shell.setVerbose(false);
+                } else {
+                    return "Invalid argument: " + arg + eolt +
+                        getBriefHelp();
+                }
+            } else {
+                shell.toggleVerbose();
+            }
+            return "Verbose mode is now " + (shell.getVerbose()? "on" : "off");
+        }
+
+        @Override
+        protected String getCommandSyntax() {
+            return SYNTAX;
+        }
+
+        @Override
+        public String getCommandDescription() {
+            return DESCRIPTION;
+        }
+    }
+
+    public static class HiddenCommand extends ShellCommand {
+
+        private final static String NAME = "hidden";
+
+        final static String SYNTAX = NAME + " " +
+            CommandParser.optional(ON_FLAG + " | <n> | " + OFF_FLAG);
+
+        final static String DESCRIPTION =
+            "Toggles or sets visibility and setting of parameters " +
+            "that are normally hidden." + eolt + "Use these " +
+            "parameters only if advised to do so by Oracle Support.";
+
+        public HiddenCommand() {
+            super(NAME, 3);
+        }
+
+        @Override
+        protected boolean isHidden() {
+            return true;
+        }
+
+        @Override
+        public String execute(String[] args, Shell shell)
+            throws ShellException {
+
+            if (args.length > 2) {
+                shell.badArgCount(this);
+            } if (args.length > 1) {
+                String arg = args[1];
+                if (ON_FLAG.equals(arg)) {
+                    shell.setHidden(true);
+                } else if (OFF_FLAG.equals(arg)) {
+                    shell.setHidden(false);
+                } else {
+                    return "Invalid argument: " + arg + eolt +
+                        getBriefHelp();
+                }
+            } else {
+                shell.toggleHidden();
+            }
+            return "Hidden parameters are " +
+                (shell.showHidden()? "enabled" : "disabled");
+        }
+
+        @Override
+        protected String getCommandSyntax() {
+            return SYNTAX;
+        }
+
+        @Override
+        public String getCommandDescription() {
+            return DESCRIPTION;
+        }
+    }
+
     /**
      * Display the result depending on its type and outcome. Operations that
      * ended in error show their error messages and status info, operations
@@ -952,8 +1224,214 @@ public abstract class CommonShell extends Shell {
             result.getInfo();
     }
 
+    public String displayDMLResults(final OutputMode outputMode,
+                                    final StatementResult result)
+        throws ShellException {
+
+        return displayDMLResults(outputMode, result,
+                                 isPagingEnabled(), getOutput());
+    }
+
+    public String displayDMLResults(final OutputMode outputMode,
+                                    final StatementResult result,
+                                    final boolean isPagingEnabled,
+                                    final PrintStream queryOutput)
+        throws ShellException {
+
+        if (result.getErrorMessage() != null) {
+            return result.getErrorMessage() + "\n" + result.getInfo();
+        }
+
+        final ResultOutput resultOutput =
+            ResultOutputFactory.getOutput(outputMode, this, queryOutput,
+                                          result, isPagingEnabled,
+                                          getPageHeight());
+        final long num = resultOutput.outputResultSet();
+        return String.format("\n%d %s returned", num,
+                             ((num > 1) ? "rows" : "row"));
+    }
+
+    /**
+     * This is just a stopgap because currently, the ddl parser emits fairly
+     * cryptic error messages. Since generating sensible error messages
+     * is not a trivial task, this method merely supplies usage information
+     * by applying a simple guess as to what the statement is.
+     */
+    public static String getSQLSyntaxUsage(String ddlStatement) {
+        final String INDENT = "  ";
+
+        final String CREATE_TABLE_USAGE =
+            "CREATE TABLE [IF NOT EXISTS] table_name (" + eol +
+                INDENT + "(table_definition (,table_definition)*)," + eol +
+                INDENT + " primary_key_definition" + eol +
+                ") [USING TLL tt]";
+
+        final String DROP_TABLE_USAGE = "DROP TABLE [IF EXISTS] table_name";
+
+        final String ALTER_TABLE_USAGE =
+            "ALTER TABLE table_name (" + eol +
+                INDENT + "ADD field_name field_type" + eol +
+                INDENT + "| DROP field_name" + eol +
+                ") [USING TTL ttl]";
+
+        final String CREATE_INDEX_USAGE =
+            "CREATE INDEX [IF NOT EXISTS]" + eol +
+                 INDENT + "index_name on table_name (fieldName [,fieldName]*)";
+
+        final String DROP_INDEX_USAGE =
+            "DROP INDEX [IF EXISTS] index_name ON table_name";
+
+        final String CREATE_FULLTEXT_INDEX =
+            "CREATE FULLTEXT INDEX [IF NOT EXISTS]" + eol +
+                INDENT + "indexName on tableName" + eol +
+                INDENT + "(fieldName [{mappingSpec}] " +
+                "[,fieldName [{mappingSpec}]]*)";
+
+        final String CREATE_USER_USAGE =
+            "CREATE USER" +
+                " (user_name IDENTIFIED (BY password | EXTERNALLY)" + eol +
+                INDENT + "[PASSWORD EXPIRE] [PASSWORD LIFETIME duration]" +
+                eol +
+                INDENT + "[ACCOUNT LOCK|UNLOCK] [ADMIN]";
+
+        final String DROP_USER_USAGE = "DROP USER user_name";
+
+        final String ALTER_USER_USAGE =
+            "ALTER USER user_name" + eol +
+                INDENT + "[IDENTIFIED BY password [RETAIN CURRENT PASSWORD]]" +
+                eol +
+                INDENT + "[CLEAR RETAINED PASSWORD] [PASSWORD EXPIRE]" + eol +
+                INDENT + "[PASSWORD LIFETIME duration] [ACCOUNT UNLOCK|LOCK]";
+
+        final String CREATE_ROLE_USAGE = "CREATE ROLE role_name";
+
+        final String DROP_ROLE_USAGE = "DROP ROLE role_name";
+
+        final String GRANT_USAGE =
+            "To grant roles to a user or a role, use the syntax of:" + eol +
+            "GRANT role_name (,role_name)* TO (USER user_name | " +
+            "ROLE role_name)" + eol + eol +
+            "To grant system privileges to a role, use the syntax of:" + eol +
+            "GRANT (system_privilege | ALL PRIVILEGES) " +
+            "(,(system_privilege | ALL PRIVILEGES))* TO role_name" + eol + eol +
+            "To grant object privileges to a role, use the syntax of:" + eol +
+            "GRANT (object_privilege | ALL [PRIVILEGES]) " +
+            "(,(object_privilege | ALL [PRIVILEGES]))* ON object TO role_name";
+
+        final String REVOKE_USAGE =
+            "To revoke roles from a user or a role, use the syntax of:" + eol +
+            "REVOKE role_name (,role_name)* FROM (USER user_name | " +
+            "ROLE role_name)" + eol + eol +
+            "To revoke system privileges from a role, use the syntax of:" +
+            eol +
+            "REVOKE (system_privilege | ALL PRIVILEGES) " +
+            "(,(system_privilege | ALL PRIVILEGES))* FROM role_name" +
+            eol + eol +
+            "To revoke object privileges from a role, use the syntax of:" +
+            eol +
+            "REVOKE (object_privilege | ALL [PRIVILEGES]) " +
+            "(,(object_privilege | ALL [PRIVILEGES]))* ON object FROM " +
+            "role_name";
+
+        final String SHOW_USAGE =
+            "SHOW [AS JSON]" + eol +
+                INDENT + "TABLES" + eol +
+                INDENT + "USERS" + eol +
+                INDENT + "ROLES" + eol +
+                INDENT + "| TABLE table_name" + eol +
+                INDENT + "| USER user_name" + eol +
+                INDENT + "| ROLE role_name" + eol +
+                INDENT + "| INDEXES ON table_name";
+
+        final String DESC_USAGE =
+            "(DESCRIBE|DESC) [AS JSON]" + eol +
+                INDENT + "TABLE table_name (field_name (,field_name)*)?" + eol +
+                INDENT + "| INDEX index_name ON table_name";
+
+        final String SELECT_USAGE =
+            "SELECT <select_clause>" + eol +
+                INDENT + "FROM <table_name>" + eol +
+                INDENT + INDENT + "[WHERE <where_clause>]";
+
+        final String UNKNOWN_ERROR = "Unknown statement";
+
+        final StringTokenizer t = new StringTokenizer(ddlStatement);
+        final String keyword = t.nextToken();
+
+        if (keyword.equalsIgnoreCase("create")) {
+            String secondWord = null;
+            if (t.hasMoreTokens()) {
+               secondWord = t.nextToken();
+            }
+
+            if ("index".equalsIgnoreCase(secondWord)) {
+                return CREATE_INDEX_USAGE;
+            } else if ("user".equalsIgnoreCase(secondWord)) {
+                return CREATE_USER_USAGE;
+            } else if ("role".equalsIgnoreCase(secondWord)) {
+                return CREATE_ROLE_USAGE;
+            } else if ("fulltext".equalsIgnoreCase(secondWord)) {
+                return CREATE_FULLTEXT_INDEX;
+            } else if ("table".equalsIgnoreCase(secondWord)) {
+                return CREATE_TABLE_USAGE;
+            }
+            return UNKNOWN_ERROR;
+        } else if (keyword.equalsIgnoreCase("drop")) {
+            String secondWord = null;
+            if (t.hasMoreTokens()) {
+               secondWord = t.nextToken();
+            }
+
+            if ("index".equalsIgnoreCase(secondWord)) {
+                return DROP_INDEX_USAGE;
+            } else if ("user".equalsIgnoreCase(secondWord)) {
+                return DROP_USER_USAGE;
+            } else if ("role".equalsIgnoreCase(secondWord)) {
+                return DROP_ROLE_USAGE;
+            } else if ("table".equalsIgnoreCase(secondWord)) {
+                return DROP_TABLE_USAGE;
+            }
+            return UNKNOWN_ERROR;
+        } else if (keyword.equalsIgnoreCase("alter")) {
+            String secondWord = null;
+            if (t.hasMoreTokens()) {
+               secondWord = t.nextToken();
+            }
+
+            if ("user".equalsIgnoreCase(secondWord)) {
+                return ALTER_USER_USAGE;
+            } else if ("table".equalsIgnoreCase(secondWord)) {
+                return ALTER_TABLE_USAGE;
+            }
+            return UNKNOWN_ERROR;
+        } else if (keyword.equalsIgnoreCase("grant")) {
+            return GRANT_USAGE;
+        } else if (keyword.equalsIgnoreCase("revoke")) {
+            return REVOKE_USAGE;
+        } else if (keyword.equalsIgnoreCase("show")) {
+            return SHOW_USAGE;
+        } else if (keyword.equalsIgnoreCase("describe") ||
+                   keyword.equalsIgnoreCase("desc")) {
+            return DESC_USAGE;
+        } else if (keyword.equalsIgnoreCase("select")) {
+            return SELECT_USAGE;
+        } else {
+            return UNKNOWN_ERROR;
+        }
+    }
+
     public void start() {
         init();
+
+        /*
+         * For testing, once exit code is set, give up following execution
+         * in order to output a single error message.
+         */
+        if (getExitCode() != 0 && dontExit()) {
+            shutdown();
+            return;
+        }
+
         if (commandToRun != null) {
             try {
                 String result = run(commandToRun[0], commandToRun);

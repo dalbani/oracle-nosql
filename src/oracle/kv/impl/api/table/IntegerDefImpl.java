@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,37 +43,36 @@
 
 package oracle.kv.impl.api.table;
 
-import static oracle.kv.impl.api.table.TableJsonUtils.MIN;
-import static oracle.kv.impl.api.table.TableJsonUtils.MAX;
-
-import oracle.kv.impl.util.SortableString;
-import oracle.kv.table.IntegerDef;
-
 import com.sleepycat.persist.model.Persistent;
 
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.ObjectNode;
 
+import oracle.kv.impl.util.SortableString;
+import static oracle.kv.impl.api.table.TableJsonUtils.MAX;
+import static oracle.kv.impl.api.table.TableJsonUtils.MIN;
+
+import oracle.kv.table.IntegerDef;
+
 /**
  * IntegerDefImpl is an implementation of the IntegerDef interface.
  */
 @Persistent(version=1)
-class IntegerDefImpl extends FieldDefImpl
-    implements IntegerDef {
+public class IntegerDefImpl extends FieldDefImpl implements IntegerDef {
 
     private static final long serialVersionUID = 1L;
+
     /*
-     * These are not final to allow for schema evolution.
+     * min and max are inclusive
      */
-    private final Integer min;
-    private final Integer max;
+    private Integer min;
+    private Integer max;
     private int encodingLength;
 
     /**
      * Constructor requiring all fields.
      */
-    public IntegerDefImpl(String description,
-                          Integer min, Integer max) {
+    IntegerDefImpl(String description, Integer min, Integer max) {
         super(Type.INTEGER, description);
         this.min = min;
         this.max = max;
@@ -81,9 +80,16 @@ class IntegerDefImpl extends FieldDefImpl
     }
 
     /**
+     * Constructor requiring just the description.
+     */
+    IntegerDefImpl(String description) {
+        this(description, null, null);
+    }
+
+    /**
      * This constructor defaults most fields.
      */
-    public IntegerDefImpl() {
+    IntegerDefImpl() {
         super(Type.INTEGER);
         min = null;
         max = null;
@@ -97,34 +103,20 @@ class IntegerDefImpl extends FieldDefImpl
         encodingLength = impl.encodingLength;
     }
 
+    /*
+     * Public api methods from Object and FieldDef
+     */
+
     @Override
-    public Integer getMin() {
-        return min;
+    public IntegerDefImpl clone() {
+        return new IntegerDefImpl(this);
     }
 
     @Override
-    public Integer getMax() {
-        return max;
-    }
-
-    @Override
-    public boolean isInteger() {
-        return true;
-    }
-
-    @Override
-    public IntegerDef asInteger() {
-        return this;
-    }
-
-    @Override
-    public boolean isValidKeyField() {
-        return true;
-    }
-
-    @Override
-    public boolean isValidIndexField() {
-        return true;
+    public int hashCode() {
+        return super.hashCode() +
+            (min != null ? min.hashCode() : 0) +
+            (max != null ? max.hashCode() : 0);
     }
 
     @Override
@@ -138,11 +130,68 @@ class IntegerDefImpl extends FieldDefImpl
     }
 
     @Override
-    public int hashCode() {
-        return super.hashCode() +
-            (min != null ? min.hashCode() : 0) +
-            (max != null ? max.hashCode() : 0);
+    public boolean isValidKeyField() {
+        return true;
     }
+
+    @Override
+    public boolean isValidIndexField() {
+        return true;
+    }
+
+    @Override
+    public boolean isInteger() {
+        return true;
+    }
+
+    @Override
+    public boolean isAtomic() {
+        return true;
+    }
+
+    @Override
+    public boolean isNumeric() {
+        return true;
+    }
+
+    @Override
+    public IntegerDef asInteger() {
+        return this;
+    }
+
+    @Override
+    public IntegerValueImpl createInteger(int value) {
+
+        return (hasMin() || hasMax() ?
+                new IntegerRangeValue(value, this) :
+                new IntegerValueImpl(value));
+    }
+
+    @Override
+    IntegerValueImpl createInteger(String value) {
+
+        return (hasMin() || hasMax() ?
+                new IntegerRangeValue(value, this) :
+                new IntegerValueImpl(value));
+    }
+
+    /*
+     * Public api methods from IntegerDef
+     */
+
+    @Override
+    public Integer getMin() {
+        return min;
+    }
+
+    @Override
+    public Integer getMax() {
+        return max;
+    }
+
+    /*
+     * FieldDefImpl internal api methods
+     */
 
     @Override
     int getEncodingLength() {
@@ -150,54 +199,36 @@ class IntegerDefImpl extends FieldDefImpl
     }
 
     @Override
+    public boolean hasMin() {
+        return min != null;
+    }
+
+    @Override
+    public boolean hasMax() {
+        return max != null;
+    }
+
+    @Override
+    public boolean isSubtype(FieldDefImpl superType) {
+
+        if (superType.isInteger() ||
+            superType.isLong() ||
+            superType.isAny() ||
+            superType.isAnyAtomic()) {
+            return true;
+        }
+
+        return false;
+    }
+
+    @Override
     void toJson(ObjectNode node) {
         super.toJson(node);
-        /*
-         * Add min, max
-         */
         if (min != null) {
             node.put(MIN, min);
         }
         if (max != null) {
             node.put(MAX, max);
-        }
-    }
-
-    @Override
-    public IntegerDefImpl clone() {
-        return new IntegerDefImpl(this);
-    }
-
-    @Override
-    public IntegerValueImpl createInteger(int value) {
-        validateRange(value);
-        return new IntegerValueImpl(value);
-    }
-
-    private void validate() {
-        /* Make sure min <= max */
-        if (min != null && max != null) {
-            if (min > max) {
-                throw new IllegalArgumentException
-                    ("Invalid min or max value");
-            }
-        }
-        encodingLength = SortableString.encodingLength(min, max);
-    }
-
-    /**
-     * Validates the value against the range if one exists.
-     */
-    private void validateRange(int val) {
-
-        /* min/max are inclusive */
-        if ((min != null && val < min) ||
-            (max != null && val > max)) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("Value, ");
-            sb.append(val);
-            sb.append(", is outside of the allowed range");
-            throw new IllegalArgumentException(sb.toString());
         }
     }
 
@@ -211,5 +242,35 @@ class IntegerDefImpl extends FieldDefImpl
                 ("Default value for type INTEGER is not int");
         }
         return createInteger(node.getIntValue());
+    }
+
+    /*
+     * local methods
+     */
+
+    private void validate() {
+
+        if (min != null && max != null) {
+            if (min > max) {
+                throw new IllegalArgumentException
+                    ("Invalid min or max value");
+            }
+        }
+        encodingLength = SortableString.encodingLength(min, max);
+    }
+
+    /**
+     * Validates the value against the range if one exists.
+     * min/max are inclusive.
+     */
+    void validateValue(int val) {
+
+        if ((min != null && val < min) || (max != null && val > max)) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Value, ");
+            sb.append(val);
+            sb.append(", is outside of the allowed range");
+            throw new IllegalArgumentException(sb.toString());
+        }
     }
 }

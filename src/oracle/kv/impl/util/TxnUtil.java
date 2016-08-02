@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -53,7 +53,6 @@ import com.sleepycat.je.Environment;
 import com.sleepycat.je.Transaction;
 import com.sleepycat.je.rep.ReplicaWriteException;
 import com.sleepycat.je.rep.UnknownMasterException;
-import com.sleepycat.persist.EntityStore;
 
 /**
  * Utility class for managing transactions
@@ -190,34 +189,6 @@ public class TxnUtil {
             }
 
         }.close(logger, env, dbType);
-    }
-
-    /**
-     * As above, except that it represents the close of an EntityStore
-     *
-     * @param logger used to log message related to exceptions when closing
-     * the entity store
-     * @param env the environment associated with the entity store, it must
-     * not be null
-     * @param store the store to be closed
-     * @param entityType description string describing the store being closed
-     *
-     * @return null if the store was closed cleanly. Otherwise it returns the
-     * suppressed exception
-     */
-    public static RuntimeException close(Logger logger,
-                                         Environment env,
-                                         final EntityStore store,
-                                         String entityType) {
-
-        return new WithDbCloseExceptionHandler() {
-
-            @Override
-            void closeInternal() {
-                store.close();
-            }
-
-        }.close(logger, env, entityType);
     }
 
     /**

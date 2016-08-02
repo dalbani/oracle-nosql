@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -124,22 +124,25 @@ public final class V1V2TableUtil {
      * construct and populate the Map to return.
      */
     public static Map<TableHiveInputSplit, TableInputSplit> getSplitMap(
-                                               JobConf jobConf,
-                                               TableHiveInputSplit inputSplit)
+                      final JobConf jobConf,
+                      final TableHiveInputSplit inputSplit,
+                      final boolean splitOnShards)
                                                           throws IOException {
         synchronized (V1_V2_UTIL_LOCK) {
             if (v1V2SplitMap == null) {
+
                 /* Construct & populate both the splitMap and v2InputFormat */
-                getInputFormat(jobConf, inputSplit);
+                getInputFormat(jobConf, inputSplit, splitOnShards);
             }
             return v1V2SplitMap;
         }
     }
 
     public static Map<TableHiveInputSplit, TableInputSplit> getSplitMap(
-                                                          JobConf jobConf)
-                                                          throws IOException {
-        return getSplitMap(jobConf, null);
+                      final JobConf jobConf,
+                      final boolean splitOnShards) throws IOException {
+
+        return getSplitMap(jobConf, null, splitOnShards);
     }
 
     /**
@@ -156,9 +159,9 @@ public final class V1V2TableUtil {
      */
     @SuppressWarnings("deprecation")
     public static InputFormat<PrimaryKey, Row> getInputFormat(
-                                             JobConf jobConf,
-                                             TableHiveInputSplit inputSplit)
-                                  throws IOException {
+                      final JobConf jobConf,
+                      final TableHiveInputSplit inputSplit,
+                      final boolean splitOnShards) throws IOException {
 
         Path[] tablePaths = FileInputFormat.getInputPaths(jobConf);
         if (tablePaths == null || tablePaths.length == 0) {
@@ -181,9 +184,18 @@ public final class V1V2TableUtil {
         synchronized (V1_V2_UTIL_LOCK) {
             if (v2InputFormat == null) {
 
-                /* Instantiate v2InputFormat to return. */
+                /* Instantiate & initialize the v2InputFormat to return. */
                 v2InputFormat = ReflectionUtils.newInstance(
                                          TableInputFormat.class, jobConf);
+
+                /*
+                 * Tell v2InputFormat whether to use partitions or shards.
+                 * Must do this BEFORE calling getSplits below; which calls
+                 * SplitBuilder to construct the splits for partitions or
+                 * shards.
+                 */
+                ((TableInputFormat) v2InputFormat).setSplitOnShards(
+                                                       splitOnShards);
 
                 /* Construct and populate the v1V2SplitMap. */
                 v1V2SplitMap =
@@ -206,9 +218,10 @@ public final class V1V2TableUtil {
         }
     }
 
-    public static InputFormat<PrimaryKey, Row> getInputFormat(JobConf jobConf)
+    public static InputFormat<PrimaryKey, Row> getInputFormat(
+                      final JobConf jobConf, final boolean splitOnShards)
                                   throws IOException {
-        return getInputFormat(jobConf, null);
+        return getInputFormat(jobConf, null, splitOnShards);
     }
 
     /**
@@ -246,8 +259,8 @@ public final class V1V2TableUtil {
      * then the values set by this method are obtained from the given
      * InputSplit; which must be Non-Null.
      */
-    private static void getStoreInfo(
-                            JobConf jobConf, TableHiveInputSplit split) {
+    private static void getStoreInfo(final JobConf jobConf,
+                                     final TableHiveInputSplit split) {
 
         /* 1. Store name */
         String storeName = jobConf.get(ParamConstant.KVSTORE_NAME.getName());

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,16 +45,23 @@ package oracle.kv.util;
 import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import oracle.kv.impl.admin.AdminFaultException;
 import oracle.kv.impl.admin.AdminStatus;
 import oracle.kv.impl.admin.CommandServiceAPI;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.StorageNodeParams;
+import oracle.kv.impl.arb.ArbNodeStatus;
+import oracle.kv.impl.arb.admin.ArbNodeAdminAPI;
 import oracle.kv.impl.monitor.views.ServiceChange;
 import oracle.kv.impl.rep.RepNodeStatus;
 import oracle.kv.impl.rep.admin.RepNodeAdminAPI;
@@ -62,6 +69,8 @@ import oracle.kv.impl.security.login.LoginManager;
 import oracle.kv.impl.sna.StorageNodeAgentAPI;
 import oracle.kv.impl.sna.StorageNodeStatus;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepGroup;
 import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.RepNode;
@@ -93,6 +102,8 @@ import oracle.kv.util.Ping.Problem;
  */
 public class PingCollector {
 
+    private static final int MAX_N_THREADS = 10;
+
     /*
      * The action to take when the collector visits a storage node
      */
@@ -114,6 +125,13 @@ public class PingCollector {
         void nodeCallback(AdminId aId, AdminInfo info);
     }
 
+    /*
+     * The action to take when the collector visits an arbiter node
+     */
+    private interface ArbNodeCallback {
+        void nodeCallback(ArbNode an, ArbNodeStatus status);
+    }
+
     /* A struct for packaging information returned from an Admin service. */
     class AdminInfo {
         final StorageNodeId snId;
@@ -127,6 +145,7 @@ public class PingCollector {
     /* Collections of status information */
     private Map<StorageNode, StorageNodeStatus> snMap;
     private Map<RepNode, RepNodeStatus> rnMap;
+    private Map<ArbNode, ArbNodeStatus> anMap;
 
     /*
      * AdminMap and monitoredChanges are collected at the same time. AdminMap *
@@ -138,11 +157,12 @@ public class PingCollector {
     private Map<ResourceId, ServiceChange> monitoredChanges;
 
     /* Map of problems encountered when pinging components of the store. */
-    private final List<Problem> problems = new ArrayList<Problem>();
+    private final List<Problem> problems =
+        Collections.synchronizedList(new ArrayList<Problem>());
 
     private final Topology topo;
     private final Parameters params;
-    private LoginManager adminLoginManager;
+    private final LoginManager adminLoginManager;
 
     PingCollector(Topology topo,
                   Parameters params,
@@ -159,7 +179,14 @@ public class PingCollector {
 
     Map<StorageNode, StorageNodeStatus> getSNMap() {
         if (snMap == null) {
-            snMap = new HashMap<StorageNode, StorageNodeStatus>();
+            /*
+             * Note that a synchronized HashMap is used rather than
+             * ConcurrentHashMap because we need to be able to support null
+             * status values, and ConcurrentHashMap does not support null
+             * values.
+             */
+            snMap = Collections.synchronizedMap(
+                new HashMap<StorageNode, StorageNodeStatus>());
             forEachStorageNode(new StorageNodeCallback() {
                     @Override
                     public void nodeCallback(StorageNode sn,
@@ -173,7 +200,14 @@ public class PingCollector {
 
     Map<RepNode, RepNodeStatus> getRNMap() {
         if (rnMap == null) {
-            rnMap = new TreeMap<RepNode, RepNodeStatus>();
+            /*
+             * Note that a synchronized TreeMap is used rather than
+             * ConcurrentHashMap because we need to be able to support null
+             * status values, and ConcurrentHashMap does not support null
+             * values.
+             */
+            rnMap = Collections.synchronizedMap(
+                new TreeMap<RepNode, RepNodeStatus>());
             forEachRepNode(new RepNodeCallback() {
                     @Override
                     public void nodeCallback(RepNode rn, RepNodeStatus status) {
@@ -186,8 +220,16 @@ public class PingCollector {
 
     Map<AdminId, AdminInfo> getAdminMap() {
         if (adminMap == null) {
-            adminMap = new HashMap<AdminId, AdminInfo>();
-            monitoredChanges = new HashMap<ResourceId, ServiceChange>();
+            /*
+             * Note that a synchronized HashMap is used rather than
+             * ConcurrentHashMap because we need to be able to support null
+             * status values, and ConcurrentHashMap does not support null
+             * values.
+             */
+            adminMap = Collections.synchronizedMap(
+                new HashMap<AdminId, AdminInfo>());
+            monitoredChanges = Collections.synchronizedMap(
+                new HashMap<ResourceId, ServiceChange>());
             forEachAdmin(new AdminCallback() {
                     @Override
                     public void nodeCallback(AdminId aId,
@@ -197,6 +239,19 @@ public class PingCollector {
                 });
         }
         return adminMap;
+    }
+
+    Map<ArbNode, ArbNodeStatus> getANMap() {
+        if (anMap == null) {
+            anMap = new TreeMap<ArbNode, ArbNodeStatus>();
+            forEachArbNode(new ArbNodeCallback() {
+                    @Override
+                    public void nodeCallback(ArbNode an, ArbNodeStatus status) {
+                        anMap.put(an, status);
+                    }
+                });
+        }
+        return anMap;
     }
 
     Map<ResourceId, ServiceChange> getMonitoredChanges() {
@@ -264,7 +319,8 @@ public class PingCollector {
      */
     public RepNode getMaster(RepGroupId rgId) {
 
-        final List<RepNode> master = new ArrayList<RepNode>();
+        final List<RepNode> master =
+            Collections.synchronizedList(new ArrayList<RepNode>());
 
         forEachRepNodeInShard
             (rgId,
@@ -286,7 +342,8 @@ public class PingCollector {
      */
     public RNNameHAPort getMasterNamePort(RepGroupId rgId) {
 
-        final List<RNNameHAPort> namePort = new ArrayList<RNNameHAPort>();
+        final List<RNNameHAPort> namePort =
+            Collections.synchronizedList(new ArrayList<RNNameHAPort>());
 
         forEachRepNodeInShard
             (rgId, new RepNodeCallback() {
@@ -328,9 +385,16 @@ public class PingCollector {
      */
     public Map<RepNodeId, RepNodeStatus> getRepNodeStatus(RepGroupId rgId) {
 
-        /* Get status for each node in the shard */
+        /*
+         * Get status for each node in the shard
+         * Note that a synchronized HashMap is used rather than
+         * ConcurrentHashMap because we need to be able to support null
+         * status values, and ConcurrentHashMap does not support null
+         * values.
+         */
         final Map<RepNodeId, RepNodeStatus> statusMap =
-            new HashMap<RepNodeId, RepNodeStatus>();
+            Collections.synchronizedMap(
+                new HashMap<RepNodeId, RepNodeStatus>());
 
         forEachRepNodeInShard
             (rgId, new RepNodeCallback() {
@@ -342,28 +406,69 @@ public class PingCollector {
         return statusMap;
     }
 
-    private void forEachStorageNode(StorageNodeCallback callback) {
+    /**
+     * Return a map of node status for each AN in the shard. Note
+     * that the status value may be null if the AN is not responsive.
+     */
+    public Map<ArbNodeId, ArbNodeStatus> getArbNodeStatus(RepGroupId rgId) {
 
+        /* Get status for each node in the shard */
+        final Map<ArbNodeId, ArbNodeStatus> statusMap =
+            new HashMap<ArbNodeId, ArbNodeStatus>();
+
+        forEachArbNodeInShard
+            (rgId, new ArbNodeCallback() {
+                    @Override
+                    public void nodeCallback(ArbNode an, ArbNodeStatus status) {
+                        statusMap.put(an.getResourceId(), status);
+                    }
+                });
+        return statusMap;
+    }
+
+    private void forEachStorageNode(final StorageNodeCallback callback) {
+
+        ExecutorService executor = Executors.newFixedThreadPool(MAX_N_THREADS);
+        Collection<Callable<Void>> tasks = new ArrayList<Callable<Void>>();
         /* LoginManager not needed for ping */
-        RegistryUtils regUtils = new RegistryUtils(topo,
-                                                   (LoginManager) null);
+        final RegistryUtils regUtils = new RegistryUtils(topo,
+                                                         (LoginManager) null);
 
-        for (StorageNode sn : topo.getStorageNodeMap().getAll()) {
-            StorageNodeStatus status = null;
-            try {
-                StorageNodeAgentAPI sna =
-                    regUtils.getStorageNodeAgent(sn.getResourceId());
-                status = sna.ping();
-            } catch (RemoteException re) {
-                problems.add(new Problem(sn.getResourceId(), sn.getHostname(),
-                                         sn.getRegistryPort(),
-                                         "Can't call ping for SN: ", re));
-            } catch (NotBoundException e) {
-                problems.add(new Problem(sn.getResourceId(), sn.getHostname(),
-                                         sn.getRegistryPort(),
-                                         "No RMI service for SN", e));
-            }
-            callback.nodeCallback(sn, status);
+        for (final StorageNode sn : topo.getStorageNodeMap().getAll()) {
+            tasks.add(new Callable<Void>() {
+                @Override
+                public Void call() throws Exception {
+                    StorageNodeStatus status = null;
+                    try {
+                        StorageNodeAgentAPI sna =
+                            regUtils.getStorageNodeAgent(sn.getResourceId());
+                        status = sna.ping();
+                    } catch (RemoteException re) {
+                        problems.add(new Problem(sn.getResourceId(),
+                                                 sn.getHostname(),
+                                                 sn.getRegistryPort(),
+                                                 "Can't call ping for SN: ",
+                                                 re));
+                    } catch (NotBoundException e) {
+                        problems.add(new Problem(sn.getResourceId(),
+                                                 sn.getHostname(),
+                                                 sn.getRegistryPort(),
+                                                 "No RMI service for SN",
+                                                 e));
+                    } finally {
+                        callback.nodeCallback(sn, status);
+                    }
+                    return null;
+                }
+            });
+        }
+
+        try {
+            executor.invokeAll(tasks);
+        } catch (InterruptedException e) {
+            /* ignore */
+        } finally {
+            executor.shutdown();
         }
     }
 
@@ -375,7 +480,128 @@ public class PingCollector {
     }
 
     private void forEachRepNodeInShard(RepGroupId rgId,
-                                       RepNodeCallback callback) {
+                                       final RepNodeCallback callback) {
+
+        final RepGroup group = topo.get(rgId);
+
+        if (group == null) {
+            return;
+        }
+
+        ExecutorService executor = Executors.newFixedThreadPool(MAX_N_THREADS);
+        Collection<Callable<Void>> tasks = new ArrayList<Callable<Void>>();
+        /* LoginManager not needed for ping */
+        final RegistryUtils regUtils = new RegistryUtils(topo,
+                                                         (LoginManager) null);
+
+        for (final RepNode rn : group.getRepNodes()) {
+            tasks.add(new Callable<Void>() {
+                @Override
+                public Void call() throws Exception {
+                    RepNodeStatus status = null;
+                    StorageNode sn = topo.get(rn.getStorageNodeId());
+                    try {
+                        RepNodeAdminAPI rna =
+                            regUtils.getRepNodeAdmin(rn.getResourceId());
+                        status = rna.ping();
+                    } catch (RemoteException re) {
+                        problems.add(new Problem(rn.getResourceId(),
+                                                 sn.getHostname(),
+                                                 sn.getRegistryPort(),
+                                                 "Can't call ping for RN:" +
+                                                 re));
+                    } catch (NotBoundException e) {
+                        problems.add(new Problem(rn.getResourceId(),
+                                                 sn.getHostname(),
+                                                 sn.getRegistryPort(),
+                                                 "No RMI service for RN: " +
+                                                 e));
+                    } finally {
+                        callback.nodeCallback(rn, status);
+                    }
+                    return null;
+                }
+            });
+        }
+
+        try {
+            executor.invokeAll(tasks);
+        } catch (InterruptedException e) {
+            /* ignore */
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+
+    private void forEachAdmin(final AdminCallback callback) {
+        if (params == null) {
+            return;
+        }
+        ExecutorService executor = Executors.newFixedThreadPool(MAX_N_THREADS);
+        Collection<Callable<Void>> tasks = new ArrayList<Callable<Void>>();
+        for (final AdminId aId : params.getAdminIds()) {
+            tasks.add(new Callable<Void>() {
+                @Override
+                public Void call() throws Exception {
+                    final StorageNodeId snId =
+                        params.get(aId).getStorageNodeId();
+                    final StorageNodeParams snp = params.get(snId);
+                    String hostname = snp.getHostname();
+                    int port = snp.getRegistryPort();
+                    final AdminInfo info = new AdminInfo(snId);
+                    try {
+                        final CommandServiceAPI admin =
+                            RegistryUtils.getAdmin(hostname, port,
+                                                   adminLoginManager);
+                        info.adminStatus = admin.getAdminStatus();
+
+                        /*
+                         * Ask the Admin master for the latest service status
+                         * map, which is maintained as part of the Admin's
+                         * monitoring infrastructure.
+                         */
+                        if (info.adminStatus.getIsAuthoritativeMaster()) {
+                            Map<ResourceId, ServiceChange> monitorMap =
+                                admin.getStatusMap();
+                            monitoredChanges.putAll(monitorMap);
+                        }
+                    } catch (AdminFaultException afe) {
+                        /*
+                         * Note that admin.getAdminStatus() may throw an AFE
+                         * wrapping a SAE in case of network issues, which is
+                         * caused by RE or NBE.
+                         */
+                        problems.add(new Problem(aId, hostname, port,
+                                                 "Can't get status for Admin:",
+                                                 afe));
+                    } catch (RemoteException re) {
+                        problems.add(new Problem(aId, hostname, port,
+                                                 "Can't get status for Admin:",
+                                                 re));
+                    } catch (NotBoundException e) {
+                        problems.add(new Problem(aId, hostname, port,
+                                                 "No RMI Service for Admin:",
+                                                 e));
+                    } finally {
+                        callback.nodeCallback(aId, info);
+                    }
+                    return null;
+                }
+            });
+        }
+
+        try {
+            executor.invokeAll(tasks);
+        } catch (InterruptedException e) {
+            /* ignore */
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    private void forEachArbNodeInShard(RepGroupId rgId,
+                                       ArbNodeCallback callback) {
 
         final RepGroup group = topo.get(rgId);
 
@@ -387,68 +613,32 @@ public class PingCollector {
         final RegistryUtils regUtils = new RegistryUtils(topo,
                                                          (LoginManager) null);
 
-        for (RepNode rn : group.getRepNodes()) {
-            RepNodeStatus status = null;
-            StorageNode sn = topo.get(rn.getStorageNodeId());
+        for (ArbNode an : group.getArbNodes()) {
+            ArbNodeStatus status = null;
+            StorageNode sn = topo.get(an.getStorageNodeId());
             try {
-                RepNodeAdminAPI rna =
-                    regUtils.getRepNodeAdmin(rn.getResourceId());
-                status = rna.ping();
+                ArbNodeAdminAPI ana =
+                    regUtils.getArbNodeAdmin(an.getResourceId());
+                status = ana.ping();
             } catch (RemoteException re) {
-                problems.add(new Problem(rn.getResourceId(),
+                problems.add(new Problem(an.getResourceId(),
                                          sn.getHostname(),
                                          sn.getRegistryPort(),
-                                         "Can't call ping for RN:" + re));
+                                         "Can't call ping for AN:" + re));
             } catch (NotBoundException e) {
-                problems.add(new Problem(rn.getResourceId(),
+                problems.add(new Problem(an.getResourceId(),
                                          sn.getHostname(),
                                          sn.getRegistryPort(),
-                                         "No RMI service for RN: " + e));
+                                         "No RMI service for AN: " + e));
             }
-            callback.nodeCallback(rn, status);
+            callback.nodeCallback(an, status);
         }
     }
 
-    private void forEachAdmin(AdminCallback callback) {
-        if (params == null) {
-            return;
-        }
-        for (final AdminId aId : params.getAdminIds()) {
-            final StorageNodeId snId = params.get(aId).getStorageNodeId();
-            final StorageNodeParams snp = params.get(snId);
-            String hostname = snp.getHostname();
-            int port = snp.getRegistryPort();
-            final AdminInfo info = new AdminInfo(snId);
-            try {
-                final CommandServiceAPI admin =
-                    RegistryUtils.getAdmin(hostname, port, adminLoginManager);
-                info.adminStatus = admin.getAdminStatus();
+    private void forEachArbNode(ArbNodeCallback callback) {
 
-                /*
-                 * Ask the Admin master for the latest service status map,
-                 * which is maintained as part of the Admin's monitoring
-                 * infrastructure.
-                 */
-                if (info.adminStatus.getIsAuthoritativeMaster()) {
-                    Map<ResourceId, ServiceChange> monitorMap =
-                        admin.getStatusMap();
-                    monitoredChanges.putAll(monitorMap);
-                }
-            } catch (AdminFaultException afe) {
-                /*
-                 * Note that admin.getAdminStatus() may throw an AFE wrapping a
-                 * SAE in case of network issues, which is caused by RE or NBE.
-                 */
-                problems.add(new Problem(aId, hostname, port,
-                                         "Can't get status for Admin:", afe));
-            } catch (RemoteException re) {
-                problems.add(new Problem(aId, hostname, port,
-                                         "Can't get status for Admin:", re));
-            } catch (NotBoundException e) {
-                problems.add(new Problem(aId, hostname, port,
-                                         "No RMI Service for Admin:", e));
-            }
-            callback.nodeCallback(aId, info);
+        for (RepGroup rg : topo.getRepGroupMap().getAll()) {
+            forEachArbNodeInShard(rg.getResourceId(), callback);
         }
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -53,6 +53,8 @@ import java.util.SortedMap;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.LogRecord;
 
+import com.sleepycat.je.rep.ReplicatedEnvironment;
+
 import oracle.kv.KVVersion;
 import oracle.kv.impl.admin.Snapshot.SnapResult;
 import oracle.kv.impl.admin.Snapshot.SnapshotOperation;
@@ -89,9 +91,8 @@ import oracle.kv.impl.topo.Topology;
 import oracle.kv.impl.util.ConfigurableService.ServiceStatus;
 import oracle.kv.impl.util.SerialVersion;
 import oracle.kv.impl.util.registry.RemoteAPI;
+import oracle.kv.table.TimeToLive;
 import oracle.kv.util.ErrorMessage;
-
-import com.sleepycat.je.rep.ReplicatedEnvironment;
 
 /**
  * This is the interface used by the command line client.
@@ -150,6 +151,9 @@ public final class CommandServiceAPI extends RemoteAPI {
      * and show plan commands.
      */
     private static final short ADMIN_AUTO_V1_VERSION = SerialVersion.V9;
+
+    /** Arbiter Support. */
+    private static final short ADMIN_ARBITER_VERSION = SerialVersion.V10;
 
     private static final AuthContext NULL_CTX = null;
 
@@ -365,6 +369,20 @@ public final class CommandServiceAPI extends RemoteAPI {
     }
 
     /**
+     * Change a topology with the "topology change-zone-arbiters" command.
+     */
+    public String changeZoneArbiters(String candidateName, DatacenterId dcId,
+                                     boolean allowArbiters)
+        throws RemoteException {
+
+        checkMethodSupported(ADMIN_ARBITER_VERSION);
+        return proxyRemote.changeZoneArbiters(candidateName,
+                                              dcId,
+                                              allowArbiters,
+                                              NULL_CTX, getSerialVersion());
+    }
+
+    /**
      * Change the topology with the "topology redistribute" command.
      */
     public String redistributeTopology(String candidateName, String snPoolName)
@@ -496,12 +514,18 @@ public final class CommandServiceAPI extends RemoteAPI {
     public int createDeployDatacenterPlan(String planName,
                                           String datacenterName,
                                           int repFactor,
-                                          DatacenterType datacenterType)
+                                          DatacenterType datacenterType,
+                                          boolean allowArbiters)
         throws RemoteException {
 
         if (!datacenterType.isPrimary()) {
             checkMethodSupported(DATACENTER_TYPE_INITIAL_SERIAL_VERSION);
         }
+
+        if (allowArbiters) {
+            checkMethodSupported(ADMIN_ARBITER_VERSION);
+        }
+
         if (getSerialVersion() < DATACENTER_TYPE_INITIAL_SERIAL_VERSION) {
             return proxyRemote.createDeployDatacenterPlan(
                 planName, datacenterName, repFactor,
@@ -510,8 +534,10 @@ public final class CommandServiceAPI extends RemoteAPI {
         }
         return proxyRemote.createDeployDatacenterPlan(
             planName, datacenterName, repFactor, datacenterType,
+            allowArbiters,
             NULL_CTX, getSerialVersion());
     }
+
 
     /**
      * Create a new Plan to deploy a new StorageNode.
@@ -721,6 +747,21 @@ public final class CommandServiceAPI extends RemoteAPI {
     }
 
     /**
+     * Create a new Plan to alter parameters for all ArbNodes deployed to the
+     * specified datacenter; or all ArbNodes in all datacenters if
+     * <code>null</code> is input for the <code>dcid</code> parameter.
+     */
+    public int createChangeAllANParamsPlan(String planName,
+                                         DatacenterId dcid,
+                                         ParameterMap newParams)
+        throws RemoteException {
+
+        checkMethodSupported(ADMIN_ARBITER_VERSION);
+        return proxyRemote.createChangeAllANParamsPlan(
+            planName, dcid, newParams, NULL_CTX, getSerialVersion());
+    }
+
+    /**
      * Create a new Plan to alter parameters for all Admins deployed to the
      * specified datacenter; or all Admins in all datacenters if
      * <code>null</code> is input for the <code>dcid</code> parameter.
@@ -854,23 +895,35 @@ public final class CommandServiceAPI extends RemoteAPI {
                                             getSerialVersion());
     }
 
+    @SuppressWarnings("deprecation")
     public int createAddTablePlan(String planName,
                                   String tableName,
                                   String parentName,
                                   FieldMap fieldMap,
                                   List<String> primaryKey,
+                                  List<Integer> primaryKeySizes,
                                   List<String> majorKey,
+                                  TimeToLive ttl,
                                   boolean r2compat,
                                   int schemaId,
                                   String description)
         throws RemoteException {
+        final short TTL_VERSION = SerialVersion.V10;
+        if (getSerialVersion() < TTL_VERSION) { // call pre-TTL service
+            return proxyRemote.createAddTablePlan(planName, tableName,
+                                                  parentName, fieldMap,
+                                                  primaryKey, majorKey,
+                                                  r2compat, schemaId,
+                                                  description, NULL_CTX,
+                                                  getSerialVersion());
+        }
 
         return proxyRemote.createAddTablePlan(planName, tableName,
                                               parentName, fieldMap,
-                                              primaryKey, majorKey,
-                                              r2compat, schemaId, description,
-                                              NULL_CTX,
-                                              getSerialVersion());
+                                              primaryKey, primaryKeySizes,
+                                              majorKey, ttl, r2compat,
+                                              schemaId, description,
+                                              NULL_CTX, getSerialVersion());
     }
 
     public int createRemoveTablePlan(final String planName,
@@ -909,17 +962,28 @@ public final class CommandServiceAPI extends RemoteAPI {
                                                  getSerialVersion());
     }
 
+    @SuppressWarnings("deprecation")
     public int createEvolveTablePlan(String planName,
                                      String tableName,
                                      int tableVersion,
-                                     FieldMap fieldMap)
+                                     FieldMap fieldMap,
+                                     TimeToLive ttl)
         throws RemoteException {
-
+        final short TTL_VERSION = SerialVersion.TTL_SERIAL_VERSION;
+        final short currentSerialVersion = getSerialVersion();
+        if (currentSerialVersion < TTL_VERSION) { // call pre-TTL service
+            return proxyRemote.createEvolveTablePlan(planName, 
+                                                     tableName,
+                                                     tableVersion, fieldMap, 
+                                                     NULL_CTX, 
+                                                     currentSerialVersion);
+        }
         return proxyRemote.createEvolveTablePlan(planName,
                                                  tableName,
                                                  tableVersion, fieldMap,
+                                                 ttl,
                                                  NULL_CTX,
-                                                 getSerialVersion());
+                                                 currentSerialVersion);
     }
 
    /**
@@ -1684,5 +1748,46 @@ public final class CommandServiceAPI extends RemoteAPI {
         checkMethodSupported(REPAIR_ADMIN_VERSION);
         return proxyRemote.repairAdminQuorum(
             zoneIds, adminIds, NULL_CTX, getSerialVersion());
+    }
+
+
+    /**
+     * Creates a plan to inform the Store of the existence of an ES node, and
+     * stores it by its plan id.
+     * @param planName the name of the plan
+     * @param clusterName - the cluster name of the ES cluster.
+     * @param transportHp - transport host:port of any node in the ES cluster.
+     * @param forceClear - if true, allows deletion of an existing ES index.
+     * @return the plan id of the created plan
+     * @since 4.0
+     */
+    public int createRegisterESClusterPlan(final String planName,
+                                           final String clusterName,
+                                           final String transportHp,
+                                           final boolean forceClear)
+        throws RemoteException {
+
+        return proxyRemote.createRegisterESClusterPlan(planName,
+                                                       clusterName,
+                                                       transportHp,
+                                                       forceClear,
+                                                       NULL_CTX,
+                                                       getSerialVersion());
+    }
+
+    /**
+     * Creates a plan to cause the Store to forget about a registered ES
+     * cluster.  Only one cluster may be registered, so no identifying
+     * information is needed.
+     * @param planName the name of the plan
+     * @return the plan id of the created plan
+     * @since 4.0
+     */
+    public int createDeregisterESClusterPlan(final String planName)
+        throws RemoteException {
+
+        return proxyRemote.createDeregisterESClusterPlan(planName,
+                                                         NULL_CTX,
+                                                         getSerialVersion());
     }
 }

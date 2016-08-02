@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -53,14 +53,19 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.logging.Logger;
 
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.param.LoadParameters;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepGroup;
 import oracle.kv.impl.topo.RepNode;
 import oracle.kv.impl.topo.RepNodeId;
+import oracle.kv.impl.topo.ResourceId;
+import oracle.kv.impl.topo.ResourceId.ResourceType;
 import oracle.kv.impl.topo.StorageNode;
 import oracle.kv.impl.topo.StorageNodeId;
 import oracle.kv.impl.topo.Topology;
@@ -79,7 +84,8 @@ public class TopologyCheckUtils {
 
     /**
      * Peruse both the topology and AdminDB params and return all
-     * StorageNodeIds, RepNodeIds, and AdminIds, clustered and ordered by SN.
+     * StorageNodeIds, RepNodeIds, ArbNodeIds, and AdminIds,
+     * clustered and ordered by SN.
      */
     static Map<StorageNodeId, SNServices>
         groupServicesBySN(Topology topology, Parameters params) {
@@ -105,6 +111,11 @@ public class TopologyCheckUtils {
                 StorageNodeId target = rn.getStorageNodeId();
                 SNServices snInfo = resourceInfo.get(target);
                 snInfo.add(rn.getResourceId());
+            }
+            for (ArbNode arb : rg.getArbNodes()) {
+                StorageNodeId target = arb.getStorageNodeId();
+                SNServices snInfo = resourceInfo.get(target);
+                snInfo.add(arb.getResourceId());
             }
         }
 
@@ -138,12 +149,13 @@ public class TopologyCheckUtils {
      * @return the composition of the group as understood by JE HA. Set will
      * be empty if the information can't be retrieved.
      */
-    static Set<ReplicationNode> getJEHAGroupDB
-        (final String groupName,
-         final int timeoutMs,
-         final Logger logger,
-         final Set<InetSocketAddress> helperSockets,
-         final ReplicationNetworkConfig repNetConfig) {
+    static Set<ReplicationNode> getJEHAGroup(final String groupName,
+                                             final int timeoutMs,
+                                             final Logger logger,
+                                             final Set<InetSocketAddress>
+                                                 helperSockets,
+                                             final ReplicationNetworkConfig
+                                                 repNetConfig) {
 
 
         /* The timeout for the repeat check is min(total timeout, 1 second) */
@@ -166,6 +178,7 @@ public class TopologyCheckUtils {
                                                           helperSockets,
                                                           repNetConfig);
                         groupDB.addAll(jeRGA.getGroup().getDataNodes());
+                        groupDB.addAll(jeRGA.getGroup().getArbiterNodes());
                         return true;
                     } catch (Exception e) {
                         problem.append(e.getMessage());
@@ -232,18 +245,22 @@ public class TopologyCheckUtils {
 
     /**
      * Generate helper hosts by appending all the nodeHostPort values for the
-     * shard peers of the target RN.
+     * shard peers of the target RN/AN.
      */
-    public static String findPeerRNHelpers(RepNodeId targetRNId,
-                                           Parameters parameters,
-                                           Topology topo) {
+    public static String findPeerHelpers(ResourceId targetId,
+                                         Parameters parameters,
+                                         Topology topo) {
 
-        RepNode targetRN = topo.get(targetRNId);
-        RepGroup rg = topo.get(targetRN.getRepGroupId());
+        RepGroup rg;
+        if (targetId.getType() == ResourceType.REP_NODE) {
+            rg = topo.get(topo.get((RepNodeId)targetId).getRepGroupId());
+        } else {
+            rg = topo.get(topo.get((ArbNodeId)targetId).getRepGroupId());
+        }
 
         StringBuilder helperHosts = new StringBuilder();
         for (RepNode rn : rg.getRepNodes()) {
-            if (rn.getResourceId().equals(targetRNId)) {
+            if (rn.getResourceId().equals(targetId)) {
                 continue;
             }
 
@@ -252,6 +269,19 @@ public class TopologyCheckUtils {
             }
 
             RepNodeParams peerParams = parameters.get(rn.getResourceId());
+            helperHosts.append(peerParams.getJENodeHostPort());
+        }
+
+        for (ArbNode an : rg.getArbNodes()) {
+            if (an.getResourceId().equals(targetId)) {
+                continue;
+            }
+
+            if (helperHosts.length() != 0) {
+                helperHosts.append(",");
+            }
+
+            ArbNodeParams peerParams = parameters.get(an.getResourceId());
             helperHosts.append(peerParams.getJENodeHostPort());
         }
         return helperHosts.toString();
@@ -264,12 +294,14 @@ public class TopologyCheckUtils {
     static class SNServices {
         private final StorageNodeId snId;
         public final Set<RepNodeId> rnIds;
+        public final Set<ArbNodeId> anIds;
         public AdminId adminId;
         public LoadParameters remoteParams;
 
         SNServices(StorageNodeId snId) {
             this.snId = snId;
             rnIds = new TreeSet<RepNodeId>();
+            anIds = new TreeSet<ArbNodeId>();
         }
 
         public void add(AdminId adId) {
@@ -280,12 +312,19 @@ public class TopologyCheckUtils {
             rnIds.add(rnId);
         }
 
-        SNServices(StorageNodeId snId, Set<RepNodeId> allRNs, AdminId aId,
+        public void add(ArbNodeId arbId) {
+            anIds.add(arbId);
+        }
+
+
+        SNServices(StorageNodeId snId, Set<RepNodeId> allRNs,
+                   Set<ArbNodeId> allARBs, AdminId aId,
                    LoadParameters remoteParams) {
             this.snId = snId;
             rnIds = allRNs;
             this.adminId = aId;
             this.remoteParams = remoteParams;
+            anIds = allARBs;
         }
 
         Set<RepNodeId> getAllRepNodeIds() {
@@ -304,8 +343,15 @@ public class TopologyCheckUtils {
             return rnIds;
         }
 
-        public boolean contains(RepNodeId rnId) {
-            return rnIds.contains(rnId);
+        Set<ArbNodeId> getAllARBs() {
+            return anIds;
+        }
+
+        public boolean contains(ResourceId resId) {
+            if (resId.getType().isRepNode()) {
+                return rnIds.contains(resId);
+            }
+            return anIds.contains(resId);
         }
     }
 }

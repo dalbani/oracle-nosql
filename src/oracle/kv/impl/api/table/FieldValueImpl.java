@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,9 +45,8 @@ package oracle.kv.impl.api.table;
 
 import java.io.IOException;
 import java.io.Serializable;
-import java.nio.ByteBuffer;
 import java.util.ListIterator;
-
+import java.util.Map;
 import oracle.kv.impl.util.JsonUtils;
 import oracle.kv.table.ArrayValue;
 import oracle.kv.table.BinaryValue;
@@ -68,7 +67,6 @@ import oracle.kv.table.Row;
 import oracle.kv.table.StringValue;
 
 import org.apache.avro.Schema;
-import org.apache.avro.generic.GenericData;
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.map.ObjectWriter;
 
@@ -84,15 +82,28 @@ import com.sleepycat.persist.model.Persistent;
  * for implementations of FieldValue and its sub-interfaces.
  */
 @Persistent(version=1)
-abstract class FieldValueImpl
+public abstract class FieldValueImpl
     implements FieldValue, Serializable, Cloneable {
 
     private static final long serialVersionUID = 1L;
 
-    /**
-     * Return a Jackson JsonNode for the instance.
-     */
-    public abstract JsonNode toJsonNode();
+    @Override
+    public FieldValueImpl clone() {
+        try {
+            return (FieldValueImpl) super.clone();
+        } catch (CloneNotSupportedException ignore) {
+        }
+        return null;
+    }
+
+    @Override
+    public int compareTo(FieldValue o) {
+        throw new IllegalArgumentException
+            ("FieldValueImpl objects must implement compareTo");
+    }
+
+    @Override
+    public abstract FieldDefImpl getDefinition();
 
     @Override
     public BinaryValue asBinary() {
@@ -265,122 +276,193 @@ abstract class FieldValueImpl
     }
 
     @Override
-    public FieldValueImpl clone() {
-        try {
-            return (FieldValueImpl) super.clone();
-        } catch (CloneNotSupportedException ignore) {
-        }
-        return null;
+    public boolean isAtomic() {
+        return false;
     }
 
     @Override
-    public int compareTo(FieldValue o) {
+    public boolean isNumeric() {
+        return false;
+    }
+
+    @Override
+    public boolean isComplex() {
+        return false;
+    }
+
+    /**
+     * Subclasses can override this but it will do a pretty good job of output
+     */
+    @Override
+    public String toJsonString(boolean pretty) {
+        if (pretty) {
+            ObjectWriter writer = JsonUtils.createWriter(pretty);
+            try {
+                return writer.writeValueAsString(toJsonNode());
+            }
+            catch (IOException ioe) {
+                return ioe.toString();
+            }
+        }
+        StringBuilder sb = new StringBuilder(128);
+        toStringBuilder(sb);
+        return sb.toString();
+    }
+
+    /*
+     * Local methods
+     */
+
+    public boolean isTuple() {
+        return false;
+    }
+
+    public int size() {
+        throw new ClassCastException(
+            "Value is not complex (array, map, or record): " + getClass());
+    }
+
+    public Map<String, FieldValue> getMap() {
+        throw new ClassCastException(
+            "Value is not a record or map: " + getClass());
+    }
+
+    public int getInt() {
+        throw new ClassCastException(
+            "Value is not an integer or subtype: " + getClass());
+    }
+
+    public void setInt(@SuppressWarnings("unused")int v) {
+        throw new ClassCastException(
+            "Value is not an integer or subtype: " + getClass());
+    }
+
+    public long getLong() {
+        throw new ClassCastException(
+            "Value is not a long or subtype: " + getClass());
+    }
+
+    public void setLong(@SuppressWarnings("unused")long v) {
+        throw new ClassCastException(
+            "Value is not a long or subtype: " + getClass());
+    }
+
+    public float getFloat() {
+        throw new ClassCastException(
+            "Value is not a float or subtype: " + getClass());
+    }
+
+    public void setFloat(@SuppressWarnings("unused")float v) {
+        throw new ClassCastException(
+            "Value is not a float or subtype: " + getClass());
+    }
+
+    public double getDouble() {
+        throw new ClassCastException(
+            "Value is not a double or subtype: " + getClass());
+    }
+
+    public void setDouble(@SuppressWarnings("unused")double v) {
+        throw new ClassCastException(
+            "Value is not a double or subtype: " + getClass());
+    }
+
+    public String getString() {
+        throw new ClassCastException(
+            "Value is not a string or subtype: " + getClass());
+    }
+
+    public void setString(@SuppressWarnings("unused")String v) {
+        throw new ClassCastException(
+            "Value is not a String or subtype: " + getClass());
+    }
+
+    public String getEnumString() {
+        throw new ClassCastException(
+            "Value is not an enum or subtype: " + getClass());
+    }
+
+    public void setEnum(@SuppressWarnings("unused")String v) {
+        throw new ClassCastException(
+            "Value is not an enum or subtype: " + getClass());
+    }
+
+    public boolean getBoolean() {
+        throw new ClassCastException(
+            "Value is not a boolean: " + getClass());
+    }
+
+    public void setBoolean(@SuppressWarnings("unused")boolean v) {
+        throw new ClassCastException(
+            "Value is not a boolean or subtype: " + getClass());
+    }
+
+    public byte[] getBytes() {
+        throw new ClassCastException(
+            "Value is not a binary: " + getClass());
+    }
+
+    public FieldValueImpl getElement(
+        @SuppressWarnings("unused") int index) {
+        throw new ClassCastException(
+            "Value is not an array: " + getClass());
+    }
+
+    public FieldValueImpl getElement(
+        @SuppressWarnings("unused") String fieldName) {
+        throw new ClassCastException(
+            "Value is not a map: " + getClass());
+    }
+
+    public FieldValueImpl getFieldValue(
+        @SuppressWarnings("unused") String fieldName) {
+        throw new ClassCastException(
+            "Value is not a record: " + getClass());
+    }
+
+    /**
+     * Return the "next" legal value for this type in terms of comparison
+     * purposes.  That is value.compareTo(value.getNextValue()) is < 0 and
+     * there is no legal value such that value < cantHappen < value.getNextValue().
+     *
+     * This method is only called for indexable fields and is only
+     * implemented for types for which FieldDef.isValidIndexField() returns true.
+     */
+    FieldValueImpl getNextValue() {
         throw new IllegalArgumentException
-            ("FieldValueImpl objects must implement compareTo");
+            ("Type does not implement getNextValue: " +
+             getClass().getName());
     }
 
     /**
-     * The next two methods convert the value to/from its Avro equivalent
-     * for ser-deserialization.  Here are the documented mappings from Java that
-     * apply:
+     * Return the minimum legal value for this type in terms of comparison
+     * purposes such that there is no value V where value.compareTo(V) > 0.
      *
-     * Schema records are implemented as GenericRecord.
-     * Schema arrays are implemented as Collection.
-     * Schema maps are implemented as Map.
-     * Schema strings are implemented as CharSequence.
-     * Schema binary (bytes) are implemented as ByteBuffer.
-     * Schema ints are implemented as Integer.
-     * Schema longs are implemented as Long.
-     * Schema doubles are implemented as Double.
-     * Schema floats are implemented as Float.
-     * Schema booleans are implemented as Boolean.
-     * Schema enums are implemented as GenericEnumSymbol.
-     * Schema fixed (FixedBinary) are implemented as GenericFixed.
+     * This method is only called for indexable fields and is only
+     * implemented for types for which FieldDef.isValidIndexField() returns true.
+     */
+    FieldValueImpl getMinimumValue() {
+        throw new IllegalArgumentException
+            ("Type does not implement getMinimumValue: " +
+             getClass().getName());
+    }
+
+    /**
+     * Return a Jackson JsonNode for the instance.
+     */
+    public abstract JsonNode toJsonNode();
+
+    /**
      *
-     * The latter two need special mention because when used in a union, which
-     * is the default because most fields are nullable, the appropriate schema
-     * needs to be used for them in order for union resolution to work properly
-     * in Avro (see GenericData.resolveUnion()).  Because of that these types
-     * override toAvroValue().
+     * @param sb
      */
-
-    /**
-     * Convert the value to its Avro equivalent
-     */
-    @SuppressWarnings("unused")
-    Object toAvroValue(Schema schema) {
-        switch (getType()) {
-        case INTEGER:
-            return this.asInteger().get();
-        case LONG:
-            return this.asLong().get();
-        case DOUBLE:
-            return this.asDouble().get();
-        case FLOAT:
-            return this.asFloat().get();
-        case STRING:
-            return this.asString().get();
-        case BINARY:
-            return ByteBuffer.wrap(this.asBinary().get());
-        case BOOLEAN:
-            return this.asBoolean().get();
-        case FIXED_BINARY:
-        case ENUM:
-        case RECORD:
-        case ARRAY:
-        case MAP:
-            throw new IllegalArgumentException
-                ("Complex classes must override toAvroValue");
-        default:
-            throw new IllegalStateException
-                ("Unknown type in toAvroValue " + getType());
-        }
-    }
-
-    /**
-     * Construct a FieldValue from an Avro Object returned in a deserialized
-     * record.  The type of the Object is type-dependent, as is construction
-     * of the value object.
-     */
-    static FieldValue fromAvroValue(FieldDef def,
-                                    Object o,
-                                    Schema schema) {
-        switch (def.getType()) {
-        case INTEGER:
-            return def.createInteger((Integer)o);
-        case LONG:
-            return def.createLong((Long)o);
-        case DOUBLE:
-            return def.createDouble((Double)o);
-        case FLOAT:
-            return def.createFloat((Float)o);
-        case STRING:
-            return def.createString(((CharSequence)o).toString());
-        case BINARY:
-            return def.createBinary(((ByteBuffer)o).array());
-        case FIXED_BINARY:
-            return def.createFixedBinary(((GenericData.Fixed)o).bytes());
-        case BOOLEAN:
-            return def.createBoolean((Boolean)o);
-        case ENUM:
-            return def.createEnum(((GenericData.EnumSymbol)o).toString());
-        case RECORD:
-            return RecordValueImpl.fromAvroValue(def, o, schema);
-        case ARRAY:
-            return ArrayValueImpl.fromAvroValue(def, o, schema);
-        case MAP:
-            return MapValueImpl.fromAvroValue(def, o, schema);
-        default:
-            throw new IllegalArgumentException
-                ("Complex classes must override toAvroValue");
-        }
-    }
+    abstract public void toStringBuilder(StringBuilder sb);
 
     /**
      * Construct a FieldValue from an Java Object.
      */
-    static FieldValue fromJavaObjectValue(FieldDef def,
-                                          Object o) {
+    static FieldValue fromJavaObjectValue(FieldDef def, Object o) {
+
         switch (def.getType()) {
         case INTEGER:
             return def.createInteger((Integer)o);
@@ -413,31 +495,6 @@ abstract class FieldValueImpl
     }
 
     /**
-     * Subclasses can override this but it will do a pretty good job of output
-     */
-    @Override
-    public String toJsonString(boolean pretty) {
-        if (pretty) {
-            ObjectWriter writer = JsonUtils.createWriter(pretty);
-            try {
-                return writer.writeValueAsString(toJsonNode());
-            }
-            catch (IOException ioe) {
-                return ioe.toString();
-            }
-        }
-        StringBuilder sb = new StringBuilder(128);
-        toStringBuilder(sb);
-        return sb.toString();
-    }
-
-    /**
-     *
-     * @param sb
-     */
-    abstract public void toStringBuilder(StringBuilder sb);
-
-    /**
      * Return a String representation of the value suitable for use as part of
      * a primary key.  This method must work for any value that can participate
      * in a primary key.  The key string format may be different than a more
@@ -446,53 +503,216 @@ abstract class FieldValueImpl
      * consistently.
      */
     @SuppressWarnings("unused")
-    public String formatForKey(FieldDef field) {
+    public String formatForKey(FieldDef field, int storageSize) {
         throw new IllegalArgumentException
             ("Key components must be atomic types");
     }
 
-    /**
-     * Return the "next" legal value for this type in terms of comparison
-     * purposes.  That is value.compareTo(value.getNextValue()) is < 0 and
-     * there is no legal value such that value < cantHappen < value.getNextValue().
-     *
-     * This method is only called for indexable fields and is only
-     * implemented for types for which FieldDef.isValidIndexField() returns true.
-     */
-    public FieldValueImpl getNextValue() {
-        throw new IllegalArgumentException
-            ("Type does not implement getNextValue: " +
-             getClass().getName());
+    String formatForKey(FieldDef field) {
+        return formatForKey(field, 0);
     }
 
     /**
-     * Return the minimum legal value for this type in terms of comparison
-     * purposes such that there is no value V where value.compareTo(V) > 0.
-     *
-     * This method is only called for indexable fields and is only
-     * implemented for types for which FieldDef.isValidIndexField() returns true.
+     * Returns the number of non-null field values in a FieldValue instance,
+     * including nested values. This is useful for validating IndexKey and
+     * PrimaryKey, for example. Defaults to 1 for simple types.
      */
-    public FieldValueImpl getMinimumValue() {
-        throw new IllegalArgumentException
-            ("Type does not implement getMinimumValue: " +
-             getClass().getName());
+    int numValues() {
+        return 1;
     }
 
     /**
-     * Returns the correct schema for the type if schema is for a union.
-     * Returns the schema itself if is not a union.
+     * This method is used to populate/update an IndexKey or a table Row. It
+     * takes as input a fieldPath and an atomic value. The fieldPath is supposed
+     * to be a path that defines an index field. If an IndexKey is populated or
+     * updated, the atomic value is the value to search for in that index field.
+     * Otherwise, it is a value extracted from the specified field of an index
+     * entry.
+     *
+     * In either case, the method puts the given value deep into "this",
+     * implicitly creating intermediate fields/elements along the given
+     * fieldPath, if they do not already exist.
+     *
+     * Note: the method is recursive and applies to FieldValues of different
+     * kinds, but the initial, non-recursive, invocation is always on an
+     * IndexKey instance or a Row instance. The createTableRow tells whether
+     * it's an IndexKey or a Row.
      */
-    static Schema getUnionSchema(Schema schema, Schema.Type type) {
-        if (schema.getType() == Schema.Type.UNION) {
-            for (Schema s : schema.getTypes()) {
-                if (s.getType() == type) {
-                    return s;
+    FieldValue putComplex(
+        ListIterator<String> fieldPath,
+        FieldValue value,
+        boolean createTableRow) {
+
+        FieldDef.Type type = value.getType();
+
+        switch (getType()) {
+
+        case RECORD: {
+
+            if (isTuple()) {
+                throw new IllegalStateException(
+                    "Cannot add fields to a TupleValue");
+            }
+
+            RecordValueImpl rec = (RecordValueImpl)this;
+
+            String fname = fieldPath.next();
+
+            if (!fieldPath.hasNext()) {
+                rec.validateNameAndType(fname, type);
+                rec.putField(fname, value);
+
+            } else {
+                FieldDefImpl def = rec.getFieldDef(fname);
+                if (def == null) {
+                    throw new IllegalArgumentException(
+                        "Cannot find field named " + fname);
+                }
+
+                /* The nested field may have been created already. */
+                FieldValueImpl val = (FieldValueImpl) rec.get(fname);
+                if (val == null) {
+                    val = createComplexValue(def);
+                }
+
+                rec.putField(fname,
+                             val.putComplex(fieldPath, value, createTableRow));
+            }
+            return this;
+        }
+        case ARRAY: {
+            ArrayValueImpl arr = (ArrayValueImpl)this;
+            FieldDefImpl elemDef = arr.getElementDef();
+
+            if (arr.size() > 1) {
+                throw new IllegalArgumentException(
+                    "Array encountered during construction/update of IndexKey " +
+                    "must have at most one element. Array value : \n" + this);
+            }
+
+            if (!fieldPath.hasNext()) {
+
+                if (arr.size() == 0) {
+                    arr.add(value);
+                } else {
+                    arr.set(0, value);
+                }
+                return this;
+            }
+
+            String fname = fieldPath.next();
+
+            if (fname.equals(TableImpl.ANONYMOUS)) {
+                if (!fieldPath.hasNext()) {
+                    if (arr.size() == 0) {
+                        arr.add(value);
+                    } else {
+                        arr.set(0, value);
+                    }
+                    return this;
+                }
+            } else {
+                fieldPath.previous();
+            }
+
+            ComplexValueImpl val = null;
+
+            if (arr.size() == 0) {
+                val = createComplexValue(elemDef);
+                arr.add(val);
+
+            } else {
+
+                if (!(arr.get(0) instanceof ComplexValueImpl)) {
+                    throw new IllegalArgumentException(
+                        "Invalid attempt to overwrite an atomic " +
+                        "element with a complex element in an array " +
+                        "encountered during construction/update of " +
+                        "IndexKey. Array value : \n" + this);
+                }
+
+                val = (ComplexValueImpl) arr.get(0);
+            }
+
+            val.putComplex(fieldPath, value, createTableRow);
+            return this;
+        }
+        case MAP: {
+            MapValueImpl map = (MapValueImpl)this;
+            FieldDefImpl elemDef = map.getElementDef();
+
+            String fname = fieldPath.next();
+
+            if (MapDefImpl.isMapKeyTag(fname)) {
+
+                assert(value instanceof StringValueImpl);
+
+                map.putNull(((StringValueImpl) value).toString());
+                return this;
+            }
+
+            if (fname.equals(TableImpl.ANONYMOUS) && createTableRow) {
+                String mapKey = map.getMapKey();
+                if (mapKey != null) {
+                    fname = mapKey;
                 }
             }
-            throw new IllegalArgumentException
-                ("Cannot find type in union schema: " + type);
+
+            /*
+             * NOTE: at this point fname may be a normal key string or the
+             * special "[]" string.  In the latter case an entry will be
+             * created using "[]" as the key string. This is normal for
+             * indexes on map values.
+             */
+            if (!fieldPath.hasNext()) {
+
+                /*
+                 * There are no more components.  Put a map entry using fname as
+                 * the key and create the value using the specified type and Object.
+                 */
+                if (type != elemDef.getType()) {
+                    throw new IllegalStateException(
+                        "Incorrect type for map.  Expected " +
+                        elemDef.getType() + ", received " + type);
+                }
+
+                map.put(fname, value);
+
+            } else {
+
+                /* Create the field if it's not been created. */
+                FieldValueImpl val = (FieldValueImpl) map.get(fname);
+                if (val == null ||
+                    (createTableRow && val.isNull())) {
+                    val = createComplexValue(elemDef);
+                }
+
+                /*
+                 * Put an entry based on the value just constructed, based
+                 * on the iterator, type, and value state.
+                 */
+                map.put(fname, val.putComplex(fieldPath, value, createTableRow));
+            }
+            return this;
         }
-        return schema;
+        default:
+            throw new IllegalArgumentException(
+                "Cannot put a value in an atomic value");
+        }
+    }
+
+    static private ComplexValueImpl createComplexValue(FieldDef def) {
+        switch (def.getType()) {
+        case MAP:
+            return (ComplexValueImpl) def.createMap();
+        case RECORD:
+            return (ComplexValueImpl) def.createRecord();
+        case ARRAY:
+            return (ComplexValueImpl) def.createArray();
+        default:
+            throw new IllegalArgumentException(
+                "Not a complex type: " + def.getType());
+        }
     }
 
     /**
@@ -525,31 +745,11 @@ abstract class FieldValueImpl
      * @param mapKey if non-null there may be a map involved and this key is
      * used to get the appropriate entry.
      */
-    FieldValueImpl findFieldValue(ListIterator<String> fieldPath,
-                                  String mapKey) {
+    FieldValueImpl findFieldValue(
+        ListIterator<String> fieldPath,
+        String mapKey) {
+
         return null;
-    }
-
-    /**
-     * Returns the number of non-null field values in a FieldValue instance,
-     * including nested values.  This is useful for validating IndexKey and
-     * PrimaryKey, for example.  Defaults to 1 for simple types.
-     */
-    int numValues() {
-        return 1;
-    }
-
-    /**
-     * Defines a method to put fields deep into a nested type, implicitly
-     * creating intermediate fields if they do not already exist.  This is
-     * only used when deserializing IndexKey instances and is not accessible
-     * to users.  The default implementation throws.  This will never be called
-     * for simple types and complex types must implement it.
-     */
-    @SuppressWarnings("unused")
-    FieldValue putComplex(ListIterator<String> fieldPath, FieldDef.Type type,
-                          Object value) {
-        throw new IllegalArgumentException("Complex types must implement");
     }
 
     protected static Object readTuple(FieldDef def, TupleInput in) {
@@ -571,5 +771,47 @@ abstract class FieldValueImpl
                 ("Type not supported in indexes: " +
                  def.getType());
         }
+    }
+
+    /**
+     * If schema is for a union, returns the union memeber schema that matches
+     * the given type. Otherwise, returns the schema itself.
+     */
+    static Schema getUnionSchema(Schema schema, Schema.Type type) {
+        if (schema.getType() == Schema.Type.UNION) {
+            for (Schema s : schema.getTypes()) {
+                if (s.getType() == type) {
+                    return s;
+                }
+            }
+            throw new IllegalArgumentException
+                ("Cannot find type in union schema: " + type);
+        }
+        return schema;
+    }
+
+    public int castAsInt() {
+        throw new ClassCastException(
+            "Value can not be cast to an integer: " + getClass());
+    }
+
+    public long castAsLong() {
+        throw new ClassCastException(
+            "Value can not be cast to a long: " + getClass());
+    }
+
+    public float castAsFloat() {
+        throw new ClassCastException(
+            "Value can not be cast to a float: " + getClass());
+    }
+
+    public double castAsDouble() {
+        throw new ClassCastException(
+            "Value can not be cast to a double: " + getClass());
+    }
+
+    public String castAsString() {
+        throw new ClassCastException(
+            "Value can not be cast to a String: " + getClass());
     }
 }

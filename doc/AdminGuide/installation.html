@@ -14,7 +14,7 @@
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
@@ -67,7 +67,7 @@
         This chapter describes the installation process for Oracle NoSQL Database in a
         multi-host environment. If you are planning a large system for production
         use, please read
-        <a class="xref" href="initialcapacityplanning.html" title="Appendix B. Initial Capacity Planning">Initial Capacity Planning</a> 
+        <a class="xref" href="initialcapacityplanning.html" title="Appendix C. Initial Capacity Planning">Initial Capacity Planning</a> 
         to estimate the number of storage nodes on which you will need to install 
         the software. For simple uses when you already know the storage nodes you intend 
         to use, simply follow the instructions below and Oracle NoSQL Database will make the best use 
@@ -82,7 +82,7 @@
           </div>
         </div>
         <p>
-            Make sure that you have Java SE 7 or later installed on
+            Make sure that you have Java SE 8 or later installed on
             all of the hosts that you are going to use for the Oracle NoSQL Database
             installation. The command:
         </p>
@@ -93,8 +93,8 @@
         <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
           <h3 class="title">Note</h3>
           <p>
-           Oracle NoSQL Database is compatible with Java SE 7 and later, and has been tested
-           and certified against Oracle Java SE 7. It is recommended that you upgrade
+           Oracle NoSQL Database is compatible with Java SE 8 (64 bit), and has been tested
+           and certified against Oracle Java SE 8. It is recommended that you upgrade
            to the latest Java releases to take advantage of the latest bug fixes and performance
            improvements. The release notes included in the Oracle NoSQL Database download 
            specify the exact Java versions that have been used for certification.
@@ -125,19 +125,9 @@
         </p>
         </div>
         <p>
-            Only Linux and Solaris 10 are officially supported platforms
-            for Oracle NoSQL Database.  It may be that platforms other than Linux or
-            Solaris 10 could work for your deployment. However, Oracle does
-            not test Oracle NoSQL Database on platforms other than Linux and Solaris 10,
-            and so makes no claims as to the suitability of other platforms
-            for Oracle NoSQL Database deployments. 
-        </p>
-        <p>
-            In addition, it is preferable that virtual machines not be used
-            for any of the Oracle NoSQL Database nodes. This is because the usage of
-            virtual machines makes it difficult to characterize Oracle NoSQL Database
-            performance. For best results, run the Oracle NoSQL Database nodes natively
-            (that is, without VMs) on Linux or Solaris 10 platforms.
+            Linux and Solaris are officially supported platforms
+            for Oracle NoSQL Database.  Both Solaris x86 and Solaris SPARC are supported.
+            A 64 bit JVM is required in order to run Oracle NoSQL Database.
         </p>
         <p>
             You do not necessarily need root access on each node for the

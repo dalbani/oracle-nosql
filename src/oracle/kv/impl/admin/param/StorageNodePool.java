@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,6 +43,8 @@
 
 package oracle.kv.impl.admin.param;
 
+import java.io.IOException;
+import java.io.ObjectInputStream;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -66,14 +68,14 @@ import com.sleepycat.persist.model.Persistent;
 public class StorageNodePool implements Serializable, Iterable<StorageNodeId> {
 
     private static final long serialVersionUID = 1L;
-	
+
     private String name;
     private Set<StorageNodeId> snIds;
     transient ReadWriteLock rwl = new ReentrantReadWriteLock();
 
     public StorageNodePool(String name) {
         this.name = name;
-        snIds = new TreeSet<StorageNodeId>();
+        snIds = new TreeSet<>();
     }
 
     StorageNodePool() {
@@ -84,7 +86,7 @@ public class StorageNodePool implements Serializable, Iterable<StorageNodeId> {
     }
 
     public List<StorageNodeId> getList() {
-        return new ArrayList<StorageNodeId>(snIds);
+        return new ArrayList<>(snIds);
     }
 
     public void add(StorageNodeId snId) {
@@ -159,6 +161,15 @@ public class StorageNodePool implements Serializable, Iterable<StorageNodeId> {
     }
 
     /**
+     * Sets transient fields after being read from the DB.
+     */
+    private void readObject(ObjectInputStream in)
+        throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        rwl = new ReentrantReadWriteLock();
+    }
+
+    /**
      * This iterator will loop over the storage node list, and will never
      * return null.
      */
@@ -168,7 +179,7 @@ public class StorageNodePool implements Serializable, Iterable<StorageNodeId> {
 
         private LoopIterator(StorageNodePool pool) {
 
-            if (pool.snIds.size() == 0) {
+            if (pool.snIds.isEmpty()) {
                 throw new IllegalCommandException
                     ("Storage Node Pool " + pool.name + " is empty.");
             }

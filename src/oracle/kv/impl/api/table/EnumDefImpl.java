@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,46 +43,70 @@
 
 package oracle.kv.impl.api.table;
 
-import static oracle.kv.impl.api.table.TableJsonUtils.ENUM_NAME;
-import static oracle.kv.impl.api.table.TableJsonUtils.ENUM_VALS;
-import static oracle.kv.impl.api.table.TableJsonUtils.NAME;
-import static oracle.kv.impl.api.table.TableJsonUtils.TYPE;
-
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashSet;
 
-import oracle.kv.impl.util.JsonUtils;
-import oracle.kv.impl.util.SortableString;
-import oracle.kv.table.EnumDef;
-import oracle.kv.table.FieldDef;
+import com.sleepycat.persist.model.Persistent;
 
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.ArrayNode;
 import org.codehaus.jackson.node.ObjectNode;
 
-import com.sleepycat.persist.model.Persistent;
+import static oracle.kv.impl.api.table.TableJsonUtils.ENUM_NAME;
+import static oracle.kv.impl.api.table.TableJsonUtils.ENUM_VALS;
+import static oracle.kv.impl.api.table.TableJsonUtils.NAME;
+import static oracle.kv.impl.api.table.TableJsonUtils.TYPE;
+import oracle.kv.impl.util.JsonUtils;
+import oracle.kv.impl.util.SortableString;
+
+import oracle.kv.table.EnumDef;
+import oracle.kv.table.FieldDef;
 
 @Persistent(version=1)
-class EnumDefImpl extends FieldDefImpl
-    implements EnumDef {
+public class EnumDefImpl extends FieldDefImpl implements EnumDef {
 
     private static final long serialVersionUID = 1L;
+
     private final String[] values;
-    private final String name;
+
+    /* AVRO requires names for records. */
+    private String name;
+
     private transient int encodingLen;
 
-    EnumDefImpl(final String name, final String[] values,
-                final String description) {
+    EnumDefImpl(final String[] values, final String description) {
+
         super(FieldDef.Type.ENUM, description);
-        this.name = name;
         this.values = values;
+
         validate();
         init();
     }
 
+    EnumDefImpl(
+        final String name,
+        final String[] values,
+        final String description) {
+
+        this(values, description);
+
+        if (name == null) {
+            throw new IllegalArgumentException
+                ("Enumerations require a name");
+        }
+
+        this.name = name;
+    }
+
     EnumDefImpl(final String name, String[] values) {
         this(name, values, null);
+    }
+
+    @SuppressWarnings("unused")
+    private EnumDefImpl() {
+        name = null;
+        values = null;
     }
 
     private EnumDefImpl(EnumDefImpl impl) {
@@ -92,33 +116,27 @@ class EnumDefImpl extends FieldDefImpl
         encodingLen = impl.encodingLen;
     }
 
-    private void readObject(java.io.ObjectInputStream in)
-        throws IOException, ClassNotFoundException {
-        in.defaultReadObject();
-        init();
+    /*
+     * Public api methods from Object and FieldDef
+     */
+
+    @Override
+    public EnumDefImpl clone() {
+        return new EnumDefImpl(this);
     }
 
-    private void init() {
-        encodingLen = SortableString.encodingLength(values.length);
-        if (encodingLen < 2) {
-            encodingLen = 2;
+    @Override
+    public int hashCode() {
+        return super.hashCode() + Arrays.hashCode(values);
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        if (other instanceof EnumDefImpl) {
+            EnumDefImpl otherDef = (EnumDefImpl) other;
+            return Arrays.equals(values, otherDef.getValues());
         }
-    }
-
-    @SuppressWarnings("unused")
-    private EnumDefImpl() {
-        name = null;
-        values = null;
-    }
-
-    @Override
-    public String getName() {
-        return name;
-    }
-
-    @Override
-    public String[] getValues() {
-        return values;
+        return false;
     }
 
     @Override
@@ -137,22 +155,50 @@ class EnumDefImpl extends FieldDefImpl
     }
 
     @Override
+    public boolean isAtomic() {
+        return true;
+    }
+
+    @Override
     public EnumDef asEnum() {
         return this;
     }
 
     @Override
-    public boolean equals(Object other) {
-        if (other instanceof EnumDefImpl) {
-            EnumDefImpl otherDef = (EnumDefImpl) other;
-            return Arrays.equals(values, otherDef.getValues());
-        }
-        return false;
+    public EnumValueImpl createEnum(String value) {
+        return new EnumValueImpl(this, value);
+    }
+
+    /*
+     * Public api methods from EnumDef
+     */
+
+    @Override
+    public String getName() {
+        return name;
     }
 
     @Override
-    public int hashCode() {
-        return super.hashCode() + Arrays.hashCode(values);
+    public String[] getValues() {
+        return values;
+    }
+
+    /*
+     * FieldDefImpl internal api methods
+     */
+
+    @Override
+    public boolean isSubtype(FieldDefImpl superType) {
+
+        if (superType.isEnum()) {
+            return this.equals(superType);
+        }
+
+        if (superType.isAny() || superType.isAnyAtomic()) {
+            return true;
+        }
+
+        return false;
     }
 
     @Override
@@ -163,16 +209,6 @@ class EnumDefImpl extends FieldDefImpl
         for (String val : getValues()) {
             enumVals.add(val);
         }
-    }
-
-    @Override
-    public EnumDefImpl clone() {
-        return new EnumDefImpl(this);
-    }
-
-    @Override
-    public EnumValueImpl createEnum(String value) {
-        return new EnumValueImpl(this, value);
     }
 
     /**
@@ -199,56 +235,42 @@ class EnumDefImpl extends FieldDefImpl
         return node;
     }
 
-    private void validate() {
-        if (values == null || values.length < 1) {
+    @Override
+    FieldValueImpl createValue(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return NullValueImpl.getInstance();
+        }
+        if (!node.isTextual()) {
             throw new IllegalArgumentException
-                ("Enumerations requires one or more values");
+                ("Default value for type ENUM is not a string");
         }
-        if (name == null) {
-            throw new IllegalArgumentException
-                ("Enumerations require a name");
-        }
-
-        /*
-         * Check for duplicate values and validate the values of the
-         * enumeration strings themselves.
-         */
-        HashSet<String> set = new HashSet<String>();
-        for (String value: values) {
-            validateStringValue(value);
-            if (set.contains(value)) {
-                throw new IllegalArgumentException
-                    ("Duplicated enumeration value: " + value);
-            }
-            set.add(value);
-        }
+        return createEnum(node.asText());
     }
 
-    /**
-     * Validates the value of the enumeration string.  The strings must
-     * work for Avro schema, which means avoiding special characters.
+    /*
+     * local methods
      */
-    private void  validateStringValue(String value) {
-        if (!value.matches(TableImpl.VALID_NAME_CHAR_REGEX)) {
-            throw new IllegalArgumentException
-                ("Enumeration string names may contain only " +
-                 "alphanumeric values plus the character \"_\": " + value);
+
+    public void setName(String n) {
+        name = n;
+
+        if (name == null || name.isEmpty()) {
+            throw new IllegalArgumentException(
+                "Enumeration types require a name");
         }
     }
 
-    boolean isValidIndex(int index) {
-        return (index < values.length);
+    private void readObject(java.io.ObjectInputStream in)
+        throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        init();
     }
 
-    /**
-     * Create the value represented by this index in the declaration
-     */
-    EnumValueImpl createEnum(int index) {
-        if (!isValidIndex(index)) {
-            throw new IllegalArgumentException
-                ("Index is out of range for enumeration: " + index);
+    private void init() {
+        encodingLen = SortableString.encodingLength(values.length);
+        if (encodingLen < 2) {
+            encodingLen = 2;
         }
-        return new EnumValueImpl(this, values[index]);
     }
 
     int indexOf(String enumValue) {
@@ -272,10 +294,47 @@ class EnumDefImpl extends FieldDefImpl
      * Simple value comparison function, used to avoid circular calls
      * between equals() and EnumValueImpl.equals().
      */
-    boolean valuesEqual(EnumDefImpl other) {
+    public boolean valuesEqual(EnumDefImpl other) {
         return Arrays.equals(values, other.getValues());
     }
 
+    /*
+     * Make sure that the type definition is valid: Check for duplicate values
+     * and validate the values of the enumeration strings themselves.
+     */
+    private void validate() {
+        if (values == null || values.length < 1) {
+            throw new IllegalArgumentException
+                ("Enumerations requires one or more values");
+        }
+
+        HashSet<String> set = new HashSet<String>();
+        for (String value: values) {
+            validateStringValue(value);
+            if (set.contains(value)) {
+                throw new IllegalArgumentException
+                    ("Duplicated enumeration value: " + value);
+            }
+            set.add(value);
+        }
+    }
+
+    /**
+     * Validates the value of the enumeration string.  The strings must
+     * work for Avro schema, which means avoiding special characters.
+     */
+    private void  validateStringValue(String value) {
+        if (!value.matches(TableImpl.VALID_NAME_CHAR_REGEX)) {
+            throw new IllegalArgumentException
+                ("Enumeration string names may contain only " +
+                 "alphanumeric values plus the character \"_\": " + value);
+        }
+    }
+
+    /*
+     * Used when creating a value of this enum type, to check that the value
+     * is one of the allowed ones.
+     */
     void validateValue(String value) {
         for (String val : values) {
             if (val.equals(value)) {
@@ -287,16 +346,19 @@ class EnumDefImpl extends FieldDefImpl
              "', must be in values: " + Arrays.toString(values));
     }
 
-    @Override
-    FieldValueImpl createValue(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return NullValueImpl.getInstance();
-        }
-        if (!node.isTextual()) {
+    /**
+     * Create the value represented by this index in the declaration
+     */
+    public EnumValueImpl createEnum(int index) {
+        if (!isValidIndex(index)) {
             throw new IllegalArgumentException
-                ("Default value for type ENUM is not a string");
+                ("Index is out of range for enumeration: " + index);
         }
-        return createEnum(node.asText());
+        return new EnumValueImpl(this, values[index]);
+    }
+
+    boolean isValidIndex(int index) {
+        return (index < values.length);
     }
 
     /*

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,14 +43,18 @@
 
 package oracle.kv.impl.admin.plan.task;
 
+import oracle.kv.KVVersion;
 import oracle.kv.impl.admin.Admin;
+import oracle.kv.impl.admin.AdminFaultException;
 import oracle.kv.impl.admin.CommandResult;
 import oracle.kv.impl.admin.IllegalCommandException;
+import oracle.kv.impl.admin.plan.DeployDatacenterPlan;
 import oracle.kv.impl.admin.plan.DeployTopoPlan;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.DatacenterType;
 import oracle.kv.impl.topo.Topology;
+import oracle.kv.impl.util.VersionUtil;
 import oracle.kv.util.ErrorMessage;
 
 import com.sleepycat.persist.model.Persistent;
@@ -67,8 +71,8 @@ public class UpdateDatacenter extends SingleJobTask {
     protected int newRepFactor;
     protected DeployTopoPlan plan;
 
-    public UpdateDatacenter(DeployTopoPlan plan, DatacenterId dcId,
-                            int newRepFactor) {
+    protected UpdateDatacenter(DeployTopoPlan plan, DatacenterId dcId,
+                               int newRepFactor) {
         super();
         this.plan = plan;
         this.dcId = dcId;
@@ -96,7 +100,8 @@ public class UpdateDatacenter extends SingleJobTask {
             current.update(dcId,
                        Datacenter.newInstance(currentdc.getName(),
                                               newRepFactor,
-                                              currentdc.getDatacenterType()));
+                                              currentdc.getDatacenterType(),
+                                              currentdc.getAllowArbiters()));
             plan.getAdmin().saveTopo(current, plan.getDeployedInfo(), plan);
         }
         return Task.State.SUCCEEDED;
@@ -136,23 +141,34 @@ public class UpdateDatacenter extends SingleJobTask {
         return false;
     }
 
-    /*
-     * Subclass to avoid upgrade issues. This version can handle changing the
-     * datacenter type.
-     */
     public static class UpdateDatacenterV2 extends UpdateDatacenter {
         private static final long serialVersionUID = 1L;
 
-        private DatacenterType newType;
+        protected final DatacenterType newType;
+        private final boolean newAllowArbiters;
 
         public UpdateDatacenterV2(DeployTopoPlan plan, DatacenterId dcId,
-                                  int newRepFactor, DatacenterType newType) {
+                                  int newRepFactor, DatacenterType newType,
+                                  boolean newAllowArbiters) {
             super(plan, dcId, newRepFactor);
             this.newType = newType;
+            this.newAllowArbiters = newAllowArbiters;
+            final Topology current = plan.getAdmin().getCurrentTopology();
+            final Datacenter currentdc = current.get(dcId);
+            if (newAllowArbiters &&
+                !currentdc.getAllowArbiters()) {
+                /*
+                 * Updating the datacenter to support arbiters. Check that
+                 * all nodes in the store are the at a version that supports
+                 * arbiters. This check requires all SNs in the topo to be
+                 * available.
+                 */
+                checkVersionRequirements();
+            }
         }
 
         /*
-         * Update the repfactor and/or type of this datacenter.
+         * Update the repfactor, type and/or allowArbiters of this datacenter.
          */
         @Override
         public State doWork()
@@ -163,14 +179,59 @@ public class UpdateDatacenter extends SingleJobTask {
             final Datacenter currentdc = current.get(dcId);
 
              if (checkRF(currentdc) ||
-                 !currentdc.getDatacenterType().equals(newType)) {
-                current.update(dcId,
-                               Datacenter.newInstance(currentdc.getName(),
-                                                      newRepFactor,
-                                                      newType));
+                 !currentdc.getDatacenterType().equals(newType) |
+                 currentdc.getAllowArbiters() != newAllowArbiters) {
+                 Datacenter newdc =
+                     Datacenter.newInstance(currentdc.getName(),
+                                            newRepFactor,
+                                            newType,
+                                            newAllowArbiters);
+                current.update(dcId, newdc);
                 admin.saveTopo(current, plan.getDeployedInfo(), plan);
             }
             return Task.State.SUCCEEDED;
+        }
+
+        /**
+         * Check that the attempt change a datacenter attribute is
+         * supported by the store version.
+         */
+        private void checkVersionRequirements() {
+            final Admin admin = plan.getAdmin();
+            Topology current = admin.getCurrentTopology();
+            Datacenter currentdc = current.get(dcId);
+            if (!currentdc.getAllowArbiters()) {
+                return;
+            }
+
+            final KVVersion minANVersion =
+                DeployDatacenterPlan.ARBITER_DC_VERSION;
+            final KVVersion storeVersion;
+            try {
+                storeVersion = admin.getStoreVersion();
+            } catch (AdminFaultException e) {
+                throw new IllegalCommandException(
+                    "Cannot change" + currentdc.getName() +
+                    " zone allowing Arbiters when unable to confirm" +
+                    " that all nodes in the store support" +
+                    " zones allowing Arbiters, which require version " +
+                    minANVersion.getNumericVersionString() +
+                    " or later.",
+                    e);
+            }
+
+            if (VersionUtil.compareMinorVersion(storeVersion,
+                                                minANVersion) < 0) {
+               throw new IllegalCommandException(
+                   "Cannot change " + currentdc.getName() +
+                   " zone allowing Arbiters when not all nodes in the" +
+                   " store support zones allowing Arbiters." +
+                   " The highest version supported by all nodes is " +
+                   storeVersion.getNumericVersionString() +
+                   ", but zones allowing Arbiters require version " +
+                   minANVersion.getNumericVersionString() +
+                   " or later.");
+           }
         }
     }
 }

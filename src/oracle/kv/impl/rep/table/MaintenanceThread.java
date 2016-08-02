@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,17 +43,20 @@
 
 package oracle.kv.impl.rep.table;
 
-import java.io.IOException;
-import java.io.ObjectInput;
-import java.util.List;
+import static oracle.kv.impl.api.ops.OperationHandler.CURSOR_DEFAULT;
+import static oracle.kv.impl.api.ops.OperationHandler.CURSOR_READ_COMMITTED;
+
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import oracle.kv.Direction;
 import oracle.kv.impl.api.ops.MultiDeleteTable;
+import oracle.kv.impl.api.ops.MultiDeleteTableHandler;
 import oracle.kv.impl.api.ops.OperationHandler;
 import oracle.kv.impl.api.ops.Result;
-import oracle.kv.impl.api.ops.ResultKeyValueVersion;
+import oracle.kv.impl.api.ops.Scanner;
 import oracle.kv.impl.api.ops.TableIterate;
+import oracle.kv.impl.api.ops.TableIterateHandler;
 import oracle.kv.impl.api.table.TableKey;
 import oracle.kv.impl.api.table.TargetTables;
 import oracle.kv.impl.rep.RepNode;
@@ -65,6 +68,7 @@ import oracle.kv.table.PrimaryKey;
 import oracle.kv.table.Table;
 
 import com.sleepycat.je.CursorConfig;
+import com.sleepycat.je.Cursor;
 import com.sleepycat.je.Database;
 import com.sleepycat.je.DatabaseEntry;
 import com.sleepycat.je.DatabaseException;
@@ -223,8 +227,8 @@ public abstract class MaintenanceThread extends Thread {
      */
     public boolean isStopped() {
         return stop ||
-               !repEnv.isValid() ||
-               !repEnv.getState().isMaster();
+            !repEnv.isValid() ||
+            !repEnv.getState().isMaster();
     }
 
     /**
@@ -267,6 +271,8 @@ public abstract class MaintenanceThread extends Thread {
 
             final OperationHandler oh =
                 new OperationHandler(repNode, tableManager.getParams());
+            final TableIterateHandlerInternal opHandler =
+                new TableIterateHandlerInternal(oh);
 
             /* The working secondary. */
             String currentSecondary = null;
@@ -274,8 +280,9 @@ public abstract class MaintenanceThread extends Thread {
             while (!isStopped()) {
                 Transaction txn = null;
                 try {
-                    txn = repEnv.beginTransaction(null,
-                                        SecondaryInfoMap.SECONDARY_INFO_CONFIG);
+                    txn = repEnv.beginTransaction(
+                        null,
+                        SecondaryInfoMap.SECONDARY_INFO_CONFIG);
 
                     final SecondaryInfoMap infoMap =
                         SecondaryInfoMap.fetch(infoDb, txn, LockMode.RMW);
@@ -308,7 +315,7 @@ public abstract class MaintenanceThread extends Thread {
                     }
 
                     final SecondaryDatabase db =
-                                tableManager.getSecondaryDb(currentSecondary);
+                        tableManager.getSecondaryDb(currentSecondary);
 
                     if (info.getCurrentPartition() == null) {
                         logger.log(Level.FINE, "Finished populating {0} {1}",
@@ -337,7 +344,7 @@ public abstract class MaintenanceThread extends Thread {
                                new Object[]{currentSecondary, info});
 
                     final String tableName =
-                            TableManager.getTableName(db.getDatabaseName());
+                        TableManager.getTableName(db.getDatabaseName());
                     final Table table = tableManager.getTable(tableName);
 
                     if (table == null) {
@@ -347,10 +354,11 @@ public abstract class MaintenanceThread extends Thread {
                         return;
                     }
 
-                    final boolean more = populate(table, oh, txn,
+                    final boolean more = populate(table,
+                                                  opHandler,
+                                                  txn,
                                                   info.getCurrentPartition(),
-                                                  info.getLastKey(),
-                                                  db);
+                                                  info.getLastKey());
                     if (!more) {
                         logger.log(Level.FINE, "Finished partition for {0}",
                                    info);
@@ -373,7 +381,7 @@ public abstract class MaintenanceThread extends Thread {
          * key of the last record read.
          *
          * @param table the source table
-         * @param oh operation handler for execution
+         * @param opHandler the internal operation handler
          * @param txn current transaction
          * @param partitionId the source partition
          * @param lastKey a key to start the iteration on input, set to the
@@ -381,12 +389,11 @@ public abstract class MaintenanceThread extends Thread {
          * @param db the secondary DB to populate
          * @return true if there are more records to process
          */
-         private boolean populate(Table table,
-                                  OperationHandler oh,
-                                  Transaction txn,
-                                  PartitionId partitionId,
-                                  DatabaseEntry lastKey,
-                                  SecondaryDatabase db) {
+        private boolean populate(Table table,
+                                 TableIterateHandlerInternal opHandler,
+                                 Transaction txn,
+                                 PartitionId partitionId,
+                                 DatabaseEntry lastKey) {
             final byte[] resumeKey = lastKey.getData();
 
             final PrimaryKey pkey = table.createPrimaryKey();
@@ -394,57 +401,29 @@ public abstract class MaintenanceThread extends Thread {
 
             /* A single target table */
             final TargetTables targetTables =
-                                        new TargetTables(table, null, null);
+                new TargetTables(table, null, null);
 
             /* Create and execute the iteration */
-            final TableIterate iterate =
-                            new TableIterateInternal(tkey.getKeyBytes(),
-                                                     targetTables,
-                                                     tkey.getMajorKeyComplete(),
-                                                     resumeKey);
-            final Result result = iterate.execute(txn, partitionId, oh);
+            final TableIterate op =
+                new TableIterate(tkey.getKeyBytes(),
+                                 targetTables,
+                                 Direction.FORWARD,
+                                 null,
+                                 tkey.getMajorKeyComplete(),
+                                 POPULATE_BATCH_SIZE,
+                                 resumeKey);
 
-            /*
-             * Process results. For each result, call the JE method to extract
-             * index keys if needed.
-             */
-            final boolean hasMoreElements = result.hasMoreElements();
-
-            final List<ResultKeyValueVersion> byteKeyResults =
-                                                result.getKeyValueVersionList();
-            final DatabaseEntry data = new DatabaseEntry();
-
-            for (ResultKeyValueVersion kvv : byteKeyResults) {
-                lastKey.setData(kvv.getKeyBytes()); // sets the lastKey return
-                data.setData(kvv.getValueBytes());
-                db.populateSecondaries(txn, lastKey, data);
-            }
-            return hasMoreElements;
+            return opHandler.populate(op, txn, partitionId, lastKey);
         }
     }
 
     /*
-     * Special internal OP which bypasses security checks.
+     * Special internal handler which bypasses security checks.
      */
-    private static class TableIterateInternal extends TableIterate {
-        TableIterateInternal(byte[] parentKeyBytes,
-                             TargetTables targetTables,
-                             boolean majorPathComplete,
-                             byte[] resumeKey) {
-            super(parentKeyBytes, targetTables,
-                  majorPathComplete, POPULATE_BATCH_SIZE, resumeKey);
-        }
-
-        /*
-         * FastExternalizable constructor. This throws
-         * UnsupportedOperationException to prevent this class from being
-         * used remotely.
-         */
-        TableIterateInternal(ObjectInput in, short serialVersion)
-            throws IOException {
-            super(in, serialVersion);
-            throw new UnsupportedOperationException("Class cannot be " +
-                                                    "deserialized");
+    private static class TableIterateHandlerInternal
+            extends TableIterateHandler {
+        TableIterateHandlerInternal(OperationHandler handler) {
+            super(handler);
         }
 
         /*
@@ -453,7 +432,7 @@ public abstract class MaintenanceThread extends Thread {
          */
         @Override
         protected CursorConfig getCursorConfig() {
-            return OperationHandler.CURSOR_DEFAULT;
+            return CURSOR_DEFAULT;
         }
 
         /*
@@ -461,7 +440,82 @@ public abstract class MaintenanceThread extends Thread {
          * security checks.
          */
         @Override
-        protected void verifyTableAccess(OperationHandler operationHandler) {}
+        public void verifyTableAccess(TableIterate op) {}
+
+        private boolean populate(TableIterate op,
+                                 Transaction txn,
+                                 PartitionId partitionId,
+                                 DatabaseEntry lastKey) {
+
+            /*
+             * Use READ_UNCOMMITTED_ALL and keyOnly to make it inexpensive to
+             * skip records that don't match the table. Once they match, lock
+             * them, and use them.
+             *
+             * TODO: can this loop be combined with the loop in TableIterate
+             * to share code?
+             */
+            final OperationTableInfo tableInfo = new OperationTableInfo();
+            Scanner scanner = getScanner(op,
+                                         tableInfo,
+                                         txn,
+                                         partitionId,
+                                         CURSOR_READ_COMMITTED,
+                                         LockMode.READ_UNCOMMITTED_ALL,
+                                         true); // key-only
+            boolean moreElements = false;
+
+            try {
+                DatabaseEntry keyEntry = scanner.getKey();
+                DatabaseEntry dataEntry = scanner.getData();
+
+                /* this is used to do a full fetch of data when needed */
+                DatabaseEntry dentry = new DatabaseEntry();
+                Cursor cursor = scanner.getCursor();
+                int numElements = 0;
+                while ((moreElements = scanner.next()) == true) {
+
+                    int match = keyInTargetTable(op,
+                                                 tableInfo,
+                                                 keyEntry,
+                                                 dataEntry,
+                                                 cursor);
+                    if (match > 0) {
+
+                        /*
+                         * The iteration was done using READ_UNCOMMITTED_ALL
+                         * and with the cursor set to getPartial().  It is
+                         * necessary to call getLockedData() here to both lock
+                         * the record and fetch the data. populateSecondaries()
+                         * must be called with a locked record.
+                         */
+                        if (scanner.getLockedData(dentry)) {
+
+                            if (!isTableData(dentry.getData(), null)) {
+                                continue;
+                            }
+
+                            byte[] keyBytes = keyEntry.getData();
+                            lastKey.setData(keyBytes); // sets the lastKey return
+                            scanner.getDatabase().
+                                populateSecondaries(txn, lastKey, dentry,
+                                                    scanner.getExpirationTime(),
+                                                    null);
+                            ++numElements;
+                        }
+                    } else if (match < 0) {
+                        moreElements = false;
+                        break;
+                    }
+                    if (numElements >= POPULATE_BATCH_SIZE) {
+                        break;
+                    }
+                }
+            } finally {
+                scanner.close();
+            }
+            return moreElements;
+        }
     }
 
     /**
@@ -502,7 +556,7 @@ public abstract class MaintenanceThread extends Thread {
                 Transaction txn = null;
                 try {
                     txn = repEnv.beginTransaction(null,
-                                               SecondaryInfoMap.CLEANER_CONFIG);
+                                                  SecondaryInfoMap.CLEANER_CONFIG);
 
                     final SecondaryInfoMap infoMap =
                         SecondaryInfoMap.fetch(infoDb, txn, LockMode.RMW);
@@ -578,6 +632,8 @@ public abstract class MaintenanceThread extends Thread {
 
             final OperationHandler oh =
                 new OperationHandler(repNode, tableManager.getParams());
+            final MultiDeleteTableHandlerInternal opHandler =
+                new MultiDeleteTableHandlerInternal(oh);
 
             /*
              * NOTE: this code does not attempt to use partition migration
@@ -595,7 +651,7 @@ public abstract class MaintenanceThread extends Thread {
                 Transaction txn = null;
                 try {
                     txn = repEnv.beginTransaction(null,
-                                               SecondaryInfoMap.CLEANER_CONFIG);
+                                                  SecondaryInfoMap.CLEANER_CONFIG);
 
                     final SecondaryInfoMap infoMap =
                         SecondaryInfoMap.fetch(infoDb, txn, LockMode.RMW);
@@ -612,7 +668,7 @@ public abstract class MaintenanceThread extends Thread {
                     }
 
                     final DeletedTableInfo info =
-                                    infoMap.getDeletedTableInfo(currentTable);
+                        infoMap.getDeletedTableInfo(currentTable);
                     assert info != null;
                     assert !info.isDone();
                     if (info.getCurrentPartition() == null) {
@@ -633,7 +689,7 @@ public abstract class MaintenanceThread extends Thread {
                     } else {
 
                         // delete some...
-                        if (deleteABlock(info, oh, txn)) {
+                        if (deleteABlock(info, opHandler, txn)) {
                             logger.log(Level.FINE,
                                        "Completed cleaning {0} for {1}",
                                        new Object[] {info.getCurrentPartition(),
@@ -657,28 +713,30 @@ public abstract class MaintenanceThread extends Thread {
          * primary (partition) database.
          */
         private boolean deleteABlock(DeletedTableInfo info,
-                                     OperationHandler oh,
+                                     MultiDeleteTableHandlerInternal opHandler,
                                      Transaction txn) {
-            final MultiDeleteTable mdt =
-                    new MultiDeleteTableInternal(info.getParentKeyBytes(),
-                                                 info.getTargetTableId(),
-                                                 info.getMajorPathComplete(),
-                                                 info.getCurrentKeyBytes());
+            final MultiDeleteTable op =
+                new MultiDeleteTable(info.getParentKeyBytes(),
+                                     info.getTargetTableId(),
+                                     info.getMajorPathComplete(),
+                                     DELETE_BATCH_SIZE,
+                                     info.getCurrentKeyBytes());
 
-            final Result result = mdt.execute(txn,
-                                              info.getCurrentPartition(),
-                                              oh);
+            final Result result =
+                opHandler.execute(op,
+                                  txn,
+                                  info.getCurrentPartition());
             int num = result.getNDeletions();
             logger.log(Level.FINE, "Deleted {0} records in partition {1}{2}",
-                    new Object[]{num, info.getCurrentPartition(),
-                                 (num < DELETE_BATCH_SIZE ?
-                                            ", partition is complete" : "")});
+                       new Object[]{num, info.getCurrentPartition(),
+                                    (num < DELETE_BATCH_SIZE ?
+                                     ", partition is complete" : "")});
             if (num < DELETE_BATCH_SIZE) {
                 /* done with this partition */
                 info.setCurrentKeyBytes(null);
                 return true;
             }
-            info.setCurrentKeyBytes(mdt.getLastDeleted());
+            info.setCurrentKeyBytes(op.getLastDeleted());
             return false;
         }
     }
@@ -686,25 +744,10 @@ public abstract class MaintenanceThread extends Thread {
     /*
      * Special internal OP which bypasses security checks.
      */
-    private static class MultiDeleteTableInternal extends MultiDeleteTable {
-        MultiDeleteTableInternal(byte[] parentKeyBytes,
-                                 long targetTableId,
-                                 boolean majorPathComplete,
-                                 byte[] resumeKey) {
-            super(parentKeyBytes, targetTableId,
-                  majorPathComplete, DELETE_BATCH_SIZE, resumeKey);
-        }
-
-        /*
-         * FastExternalizable constructor. This throws
-         * UnsupportedOperationException to prevent this class from being
-         * used remotely.
-         */
-        MultiDeleteTableInternal(ObjectInput in, short serialVersion)
-            throws IOException {
-            super(in, serialVersion);
-            throw new UnsupportedOperationException("Class cannot be " +
-                                                    "deserialized");
+    private static class MultiDeleteTableHandlerInternal
+            extends MultiDeleteTableHandler {
+        MultiDeleteTableHandlerInternal(OperationHandler handler) {
+            super(handler);
         }
 
         /*
@@ -712,6 +755,6 @@ public abstract class MaintenanceThread extends Thread {
          * security checks.
          */
         @Override
-        protected void verifyTableAccess(OperationHandler operationHandler) {}
+        public void verifyTableAccess(MultiDeleteTable op) {}
     }
 }

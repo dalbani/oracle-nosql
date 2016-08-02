@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2014 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -53,6 +53,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import oracle.kv.Key;
+import oracle.kv.impl.api.table.TableBuilder;
 import oracle.kv.impl.api.table.TableImpl;
 import oracle.kv.impl.api.table.TableMetadata;
 import oracle.kv.impl.metadata.Metadata.MetadataType;
@@ -80,7 +81,8 @@ import com.sleepycat.je.Transaction;
  */
 public class PartitionScan extends StatsScan<PartitionLeaseInfo> {
     /* Table name */
-    public static final String TABLE_NAME = "TableStatsPartition";
+    public static final String TABLE_NAME =
+        TableImpl.SYSTEM_TABLE_PREFIX + "TableStatsPartition";
 
     /* All fields within table TableStatsPartition */
     protected static final String COL_NAME_TABLE_NAME = "tableName";
@@ -373,5 +375,24 @@ public class PartitionScan extends StatsScan<PartitionLeaseInfo> {
             }
         }
         return false;
+    }
+
+    /**
+     * Get table builder of TableStatsPartition
+     */
+    public static TableBuilder getTableBuilder() {
+        final TableBuilder builder =
+            TableBuilder.createSystemTableBuilder(TABLE_NAME);
+
+        /* Types of all fields within this table */
+        builder.addString(COL_NAME_TABLE_NAME);
+        builder.addInteger(COL_NAME_PARTITION_ID);
+        builder.addInteger(COL_NAME_SHARD_ID);
+        builder.addLong(COL_NAME_COUNT);
+        builder.addInteger(COL_NAME_AVG_KEY_SIZE);
+        builder.primaryKey(COL_NAME_TABLE_NAME, COL_NAME_PARTITION_ID);
+        builder.shardKey(COL_NAME_TABLE_NAME, COL_NAME_PARTITION_ID);
+
+        return builder;
     }
 }

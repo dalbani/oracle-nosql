@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -105,6 +105,7 @@ public abstract class ManagedService {
     public static final String REP_NODE_NAME = "RepNode";
     public static final String ADMIN_NAME = "Admin";
     public static final String BOOTSTRAP_ADMIN_NAME = "BootstrapAdmin";
+    public static final String ARB_NODE_NAME = "ArbNode";
     public static final String LOG_CONFIG_PREFIX = "config.";
 
     /* Flags used for exec args */
@@ -682,6 +683,9 @@ public abstract class ManagedService {
                     ms = new ManagedAdmin(kvSecDir, kvSNDir, kvName,
                                           serviceClass, serviceName);
                 }
+            } else if (ARB_NODE_NAME.equals(serviceClass)) {
+                ms = new ManagedArbNode(kvSecDir, kvSNDir, kvName,
+                                        serviceClass, serviceName);
             } else {
                 throw new IllegalArgumentException
                     ("Unknown service name " + serviceClass);

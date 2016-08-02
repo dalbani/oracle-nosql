@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -55,6 +55,11 @@ import java.util.StringTokenizer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import com.sleepycat.je.rep.ReplicatedEnvironment;
+import com.sleepycat.je.rep.ReplicationGroup;
+import com.sleepycat.je.rep.util.ReplicationGroupAdmin;
+import com.sleepycat.je.rep.utilint.HostPortPair;
+
 import oracle.kv.KVStore;
 import oracle.kv.impl.admin.param.GlobalParams;
 import oracle.kv.impl.admin.param.RepNodeParams;
@@ -67,6 +72,7 @@ import oracle.kv.impl.api.RequestDispatcherImpl;
 import oracle.kv.impl.api.RequestHandlerImpl;
 import oracle.kv.impl.fault.ProcessExitCode;
 import oracle.kv.impl.fault.ProcessFaultHandler;
+import oracle.kv.impl.fault.ServiceFaultHandler;
 import oracle.kv.impl.fault.SystemFaultException;
 import oracle.kv.impl.metadata.Metadata;
 import oracle.kv.impl.metadata.MetadataInfo;
@@ -94,6 +100,7 @@ import oracle.kv.impl.topo.Topology;
 import oracle.kv.impl.util.ConfigUtils;
 import oracle.kv.impl.util.ConfigurableService;
 import oracle.kv.impl.util.FileNames;
+import oracle.kv.impl.util.GCUtils;
 import oracle.kv.impl.util.SerialVersion;
 import oracle.kv.impl.util.ServiceStatusTracker;
 import oracle.kv.impl.util.UserDataControl;
@@ -102,17 +109,13 @@ import oracle.kv.impl.util.registry.RegistryUtils;
 import oracle.kv.impl.util.registry.ServerSocketFactory;
 import oracle.kv.impl.util.server.LoggerUtils;
 
-import com.sleepycat.je.rep.ReplicatedEnvironment;
-import com.sleepycat.je.rep.ReplicationGroup;
-import com.sleepycat.je.rep.util.ReplicationGroupAdmin;
-import com.sleepycat.je.rep.utilint.HostPortPair;
-
 /**
  * This is the "main" that represents the RepNode. It handles startup and
  * houses all the pieces of software that share a JVM such as a request
  * handler, the administration support and the monitor agent.
  */
-public class RepNodeService implements ConfigurableService {
+public class RepNodeService
+    implements ConfigurableService {
 
     /*
      * Timeout the wait for shutdown of the update thread so the process
@@ -168,7 +171,7 @@ public class RepNodeService implements ConfigurableService {
     /**
      * The fault handler associated with the service.
      */
-    private final RepNodeServiceFaultHandler faultHandler;
+    private final ServiceFaultHandler faultHandler;
 
     /**
      * True if running in a thread context.
@@ -180,77 +183,6 @@ public class RepNodeService implements ConfigurableService {
      * RepNode.
      */
     private KeyStatsCollector keyStatsCollector;
-
-    /**
-     * These are the default CMS GC parameters that are always applied. They
-     * can be overridden and/or enhanced by user-supplied parameters.
-     *
-     * A note about the rationale behind the CMSInitiatingOccupancyFraction
-     * setting: We currently size the JE cache size (by default) at 70% of the
-     * total heap and use a NewRatio (the ratio of old to new space) of 18. So
-     * if NewRatio + 1 represents the total heap space, old space is
-     *
-     * (1 - ( 1 / (NewRatio + 1)) * 100 =
-     *
-     * (1 - (1 / (18 + 1)) * 100 = 94.7% of total heap space.
-     *
-     * 70% of total heap used for the JE cache represents (70/94.7)*100 =
-     * 73.92% of old space. A CMS setting of 77% allows us a 77% - 73.92% =
-     * 3.08% margin for error when the JE cache is full, before unproductive
-     * CMS cycles kick in.
-     *
-     * The applications metadata requirements (topology, tables, index,
-     * security, sockets, RMI handles, etc.) as well as the jvm's class level
-     * metadata have grown in r3 and need to be accounted for. The metadata
-     * size is particularly relevant when the heap sizes are relatively modest,
-     * but the number of nodes or schema is large, e.g. the default BDA
-     * configuration. So we add another 3% to the percentage calculated above,
-     * to arrive at 77% + 3% = 80% as the value for the occupancy threshold for
-     * the CMS. Using a constant delta percentage is not the best way to
-     * account for this "fixed" (unrelated to data size) overhead. So in future
-     * we will calculate a more dynamic value for the CMS threshold and the JE
-     * cache size as well, to account for the actual metadata overhead which
-     * can vary over the lifetime of the application, even as the the data
-     * sizes and machine resources are held constant.
-     *
-     * SR 22779 and SR 23652 have more detailed discussions on this subject.
-     */
-    public static final String DEFAULT_CMS_GC_ARGS=
-        "-XX:+UseConcMarkSweepGC " +
-        "-XX:+UseParNewGC " +
-        "-XX:+DisableExplicitGC " +
-        "-XX:NewRatio=18 " +
-        "-XX:SurvivorRatio=4 " +
-        "-XX:MaxTenuringThreshold=10 " +
-        "-XX:CMSInitiatingOccupancyFraction=80 " ;
-
-    /**
-     * These are the default arguments that are used if the G1 GC is
-     * explicitly enabled.
-     */
-    public static final String DEFAULT_G1_GC_ARGS=
-        "-XX:+UseG1GC " +
-        "-XX:NewRatio=15 " +
-        "-XX:MaxTenuringThreshold=10 " +
-        "-XX:InitiatingHeapOccupancyPercent=80";
-
-    public static final String DEFAULT_MISC_JAVA_ARGS =
-        /*
-         * Don't use large pages on the Mac, where they are not supported and,
-         * in Java 1.7.0_13, doing so with these other flags causes a crash.
-         * [#22165]
-         */
-        ((!"Mac OS X".equals(System.getProperty("os.name"))) ?
-            "-XX:+UseLargePages " :
-            "") +
-
-        /*
-         * Disable JE's requirement that helper host names be resolvable.  We
-         * want nodes to be able to start up even if other nodes in the
-         * replication group have been removed and no longer have DNS names.
-         * [#23120]
-         */
-        "-Dje.rep.skipHelperHostResolution=true";
 
     protected Logger logger;
 
@@ -264,8 +196,8 @@ public class RepNodeService implements ConfigurableService {
 
     public RepNodeService(boolean usingThreads) {
         super();
-        faultHandler = new RepNodeServiceFaultHandler
-            (this, logger, ProcessExitCode.RESTART);
+        faultHandler = new ServiceFaultHandler(this,
+                                               logger, ProcessExitCode.RESTART);
         this.usingThreads = usingThreads;
         parameterTracker = new ParameterTracker();
         globalParameterTracker = new ParameterTracker();
@@ -349,6 +281,13 @@ public class RepNodeService implements ConfigurableService {
                                                         repNode,
                                                         logger);
         metadataUpdateThread.start();
+
+        /*
+         * Log GC events. Trigger warnings when young gen. > 3 seconds and
+         * old gen. > 10 seconds
+         */
+        GCUtils.monitorGC(3 * 1000, 10 * 1000, logger,
+                          this.getClass().getClassLoader());
 
         addParameterListener(UserDataControl.getParamListener());
 
@@ -693,6 +632,11 @@ public class RepNodeService implements ConfigurableService {
         return statusTracker;
     }
 
+    @Override
+    public void update(ServiceStatus status) {
+        statusTracker.update(status);
+    }
+
     public OperationsStatsTracker getOpStatsTracker() {
         return opStatsTracker;
     }
@@ -730,6 +674,7 @@ public class RepNodeService implements ConfigurableService {
         return repNode.getSecurityMDManager().getSecurityMetadata();
     }
 
+    @Override
     public boolean getUsingThreads() {
         return usingThreads;
     }
@@ -797,11 +742,48 @@ public class RepNodeService implements ConfigurableService {
 
     /**
      * Issue a BDBJE update of the target node's HA address.
+     *
+     * @param groupName replication group name
+     * @param targetNodeName node name
+     * @param targetHelperHosts helper hosts used to access RepGroupAdmin
+     * @param newNodeHostPort list of new helpers
      */
     public void updateMemberHAAddress(String groupName,
                                       String targetNodeName,
                                       String targetHelperHosts,
                                       String newNodeHostPort) {
+        modifyMemberHAAddress(groupName, targetNodeName, targetHelperHosts,
+                              newNodeHostPort);
+    }
+
+    /**
+     * Delete the target node from the JE HA group.
+     *
+     * @param groupName replication group name
+     * @param targetNodeName node name
+     * @param targetHelperHosts helper hosts used to access RepGroupAdmin
+     */
+    public void deleteMember(String groupName,
+                             String targetNodeName,
+                             String targetHelperHosts) {
+        modifyMemberHAAddress(groupName, targetNodeName, targetHelperHosts,
+                              null);
+    }
+
+    /**
+     * Issue a BDBJE update of the target node's HA address or remove the
+     * target from the group.
+     *
+     * @param groupName replication group name
+     * @param targetNodeName node name
+     * @param targetHelperHosts helper hosts used to access RepGroupAdmin
+     * @param newNodeHostPort list of new helpers, if NULL complete entry is
+     * removed from the rep group.
+     */
+    private void modifyMemberHAAddress(String groupName,
+                                       String targetNodeName,
+                                       String targetHelperHosts,
+                                       String newNodeHostPort) {
 
         /*
          * Setup the helper hosts to use for finding the master to execute this
@@ -832,6 +814,11 @@ public class RepNodeService implements ConfigurableService {
             throw new IllegalStateException
                 (targetNodeName + " does not exist in replication group " +
                  groupName);
+        }
+
+        if (newNodeHostPort == null) {
+            rga.deleteMember(targetNodeName);
+            return;
         }
 
         String newHostName = HostPortPair.getHostname(newNodeHostPort);

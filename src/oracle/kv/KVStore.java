@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -50,8 +50,11 @@ import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.concurrent.TimeUnit;
 
-import oracle.kv.avro.AvroCatalog;
 import oracle.kv.lob.KVLargeObject;
+import oracle.kv.query.BoundStatement;
+import oracle.kv.query.ExecuteOptions;
+import oracle.kv.query.PreparedStatement;
+import oracle.kv.query.Statement;
 import oracle.kv.stats.KVStats;
 import oracle.kv.table.TableAPI;
 
@@ -1861,37 +1864,37 @@ public interface KVStore extends KVLargeObject, Closeable {
                FaultException;
 
     /**
-     * For internal use only.
-     * @hidden
-     *
      * Loads Key/Value pairs supplied by special purpose streams into the store.
      * The bulk loading of the entries is optimized to make efficient use of
      * hardware resources. As a result, this operation can achieve much higher
-     * throughput when compared with single Key/Value put APIs. The sequential
-     * semantics of individual streams are the basis for stream granularity
-     * resumption in the presence of failures.
-     *
+     * throughput when compared with single Key/Value put APIs.
+     * <p>
      * Entries are supplied to the loader by a list of EntryStream instances.
      * Each stream is read sequentially, that is, each EntryStream.getNext() is
      * allowed to finish before the next operation is issued. The load
      * operation typically reads from these streams in parallel as determined
      * by {@link BulkWriteOptions#getStreamParallelism}.
-     *
+     * </p>
+     * <p>
      * If an entry is associated with a key that's already present in the store,
      * the {@link EntryStream#keyExists} method is invoked on it and the entry
      * is not loaded into the store by this method; the
      * {@link EntryStream#keyExists} method may of course choose to do so
      * itself, if the values differ.
-     *
+     * </p>
+     * <p>
      * If the key is absent, a new entry is created in the store, that is, the
      * load operation has putIfAbsent semantics. The putIfAbsent semantics
      * permit restarting a load of a stream that failed for some reason.
-     *
+     * </p>
+     * <p>
      * The collection of streams defines a partial insertion order, with
-     * insertion of Key/Value pairs containing the same key within a stream
-     * being strictly ordered, but with no ordering constraints being imposed on
-     * keys across streams, or for different keys within the same stream.
-     *
+     * insertion of Key/Value pairs containing the same major key within a
+     * stream being strictly ordered, but with no ordering constraints being
+     * imposed on keys across streams, or for different keys within the same
+     * stream.
+     * </p>
+     * <p>
      * The behavior of the bulk put operation with respect to duplicate entries
      * contained in different streams is thus undefined. If the duplicate
      * entries are just present in a single stream, then the first entry will
@@ -1901,19 +1904,31 @@ public interface KVStore extends KVLargeObject, Closeable {
      * streams, then the first entry to win the race is inserted and subsequent
      * duplicates will result in {@link EntryStream#keyExists} being invoked on
      * them.
-     *
+     * </p>
+     * <p>
+     * Load operations tend to be long running. In order to facilitate
+     * resumption of such a long running operation due to a process or client
+     * machine failure, the application may use to checkpoint its progress at
+     * granularity of a stream, using the
+     * {@link oracle.kv.EntryStream#completed} method. The javadoc for this
+     * method provides further details.
+     * </p>
+     * <p>
      * Exceptions encountered during the reading of streams result in the put
      * operation being terminated and the first such exception being thrown
      * from the put method.
-     *
+     * </p>
+     * <p>
      * Exceptions encountered when inserting a Key/Value pair into the store
      * result in the {@link EntryStream#catchException} being invoked.
-     *
+     * </p>
      * @param streams the streams that supply the Key/Value pairs to be
      * inserted.
      *
      * @param bulkWriteOptions non-default arguments controlling the behavior
      * the bulk write operations
+     *
+     * @since 4.0
      */
     public void put(List<EntryStream<KeyValue>> streams,
                     BulkWriteOptions bulkWriteOptions);
@@ -1944,11 +1959,14 @@ public interface KVStore extends KVLargeObject, Closeable {
     /**
      * Returns the catalog of Avro schemas and bindings for this store.  The
      * catalog returned is a cached object and may require refresh.  See
-     * {@link AvroCatalog#refreshSchemaCache} for details.
+     * {@link oracle.kv.avro.AvroCatalog#refreshSchemaCache} for details.
      *
      * @since 2.0
+     *
+     * @deprecated as of 4.0, use the table API instead.
      */
-    public AvroCatalog getAvroCatalog();
+    @Deprecated
+    public oracle.kv.avro.AvroCatalog getAvroCatalog();
 
     /**
      * Returns an instance of the TableAPI interface for the store.
@@ -2064,7 +2082,8 @@ public interface KVStore extends KVLargeObject, Closeable {
      * <br>
      * See the documentation for a full description of the supported statements.
      * @param statement must follow valid Table syntax.
-     * @throws IllegalArgumentException if the statement is not valid
+     * @throws IllegalArgumentException if statement is not valid or cannot be executed
+     * because of a syntactic or semantic error.
      * @throws FaultException if the statement cannot be completed. This
      * indicates a transient problem with communication to the server or
      * within the server, and the statement can be retried.
@@ -2073,6 +2092,76 @@ public interface KVStore extends KVLargeObject, Closeable {
      * @since 3.3
      */
     ExecutionFuture execute(String statement)
+        throws FaultException,
+               IllegalArgumentException;
+
+    /**
+     * Asynchronously executes a DDL statement. DDL statements can be used to
+     * create or modify tables, indices, users and roles. The operation is
+     * asynchronous and may not be finished when the method returns.
+     * <p>
+     * An {@link ExecutionFuture} instance is returned which extends
+     * {@link java.util.concurrent.Future} and can be used to get information
+     * about the status of the operation, or to await completion of the
+     * operation.
+     * <p>
+     * For example:
+     * <pre>
+     * // Create a table
+     * ExecutionFuture future = null;
+     * try {
+     *     future = store.execute
+     *          ("CREATE TABLE users (" +
+     *           "id INTEGER, " +
+     *           "firstName STRING, " +
+     *           "lastName STRING, " +
+     *           "age INTEGER, " +
+     *           "PRIMARY KEY (id))");
+     * } catch (IllegalArgumentException e) {
+     *     System.out.println("The statement is invalid: " + e);
+     * } catch (FaultException e) {
+     *     System.out.println("There is a transient problem, retry the " +
+     *                          "operation: " + e);
+     * }
+     * // Wait for the operation to finish
+     * StatementResult result = future.get()
+     * </pre>
+     * <p>
+     * If the statement is a data definition or administrative operation, and
+     * the store is currently executing an operation that is the logical
+     * equivalent of the action specified by the statement, the method will
+     * return an ExecutionFuture that serves as a handle to that operation,
+     * rather than starting a new invocation of the command. The caller can use
+     * the ExecutionFuture to await the completion of the operation.
+     * <pre>
+     *   // process A starts an index creation
+     *   ExecutionFuture futureA =
+     *       store.execute("CREATE INDEX age ON users(age)");
+     *
+     *   // process B starts the same index creation. If the index creation is
+     *   // still running in the cluster, futureA and futureB will refer to
+     *   // the same operation
+     *   ExecutionFuture futureB =
+     *       store.execute("CREATE INDEX age ON users(age)");
+     * </pre>
+     * <p>
+     * Note that, in a secure store, creating and modifying table and index
+     * definitions may require a level of system privileges over and beyond
+     * that required for reads and writes of table records.
+     * <br>
+     * See the documentation for a full description of the supported statements.
+     * @param statement must follow valid Table syntax.
+     * @param options options that override the defaults.
+     * @throws IllegalArgumentException if statement is not valid or cannot be executed
+     * because of a syntactic or semantic error.
+     * @throws FaultException if the statement cannot be completed. This
+     * indicates a transient problem with communication to the server or
+     * within the server, and the statement can be retried.
+     * <p>
+     * Note that this method supersedes oracle.kv.table.TableAPI.execute.
+     * @since 4.0
+     */
+    ExecutionFuture execute(String statement, ExecuteOptions options)
         throws FaultException,
                IllegalArgumentException;
 
@@ -2089,7 +2178,8 @@ public interface KVStore extends KVLargeObject, Closeable {
      * and the resulting {@link StatementResult} will provide information
      * about the outcome.
      * @param statement must follow valid Table syntax.
-     * @throws IllegalArgumentException if the statement is not valid
+     * @throws IllegalArgumentException if statement is not valid or cannot be executed
+     * because of a syntactic or semantic error.
      * @throws FaultException if the statement cannot be completed. This
      * indicates a transient problem with communication to the server or
      * within the server, and the statement can be retried.
@@ -2102,7 +2192,34 @@ public interface KVStore extends KVLargeObject, Closeable {
         throws FaultException,
                IllegalArgumentException;
 
-   /**
+    /**
+     * Synchronously execute a table statement. The method will only return
+     * when the statement has finished. Has the same semantics as {@link
+     * #execute(String)}, but offers synchronous behavior as a convenience.
+     * ExecuteSync() is the equivalent of:
+     * <pre>
+     * ExecutionFuture future = tableAPI.execute( ... );
+     * return future.get();
+     * </pre>
+     * When executeSync() returns, statement execution will have terminated,
+     * and the resulting {@link StatementResult} will provide information
+     * about the outcome.
+     * @param statement must follow valid Table syntax.
+     * @param options options that override the defaults.
+     * @throws IllegalArgumentException if statement is not valid or cannot be executed
+     * because of a syntactic or semantic error.
+     * @throws FaultException if the statement cannot be completed. This
+     * indicates a transient problem with communication to the server or
+     * within the server, and the statement can be retried.
+     * @see #execute(String)
+     * <p>
+     * Note that this method supersedes oracle.kv.table.TableAPI.executeSync
+     * @since 4.0
+     */
+    StatementResult executeSync(String statement, ExecuteOptions options)
+        throws FaultException, IllegalArgumentException;
+
+    /**
      * Obtain a handle onto a previously issued DDL operation, using a
      * serialized version of the ExecutionFuture obtained from
      * {@link ExecutionFuture#toByteArray}. Does not result in any
@@ -2127,4 +2244,66 @@ public interface KVStore extends KVLargeObject, Closeable {
      */
     ExecutionFuture getFuture(byte[] futureBytes)
         throws IllegalArgumentException;
+
+    /**
+     * Compiles a query into an execution plan.
+     *
+     * @param statement The statement to be compiled.
+     * @return Returns the prepared statement of the query.
+     * @throws FaultException if the statement compilation can not be completed.
+     * @throws IllegalArgumentException if statement is not valid.
+     * @since 4.0
+     */
+    PreparedStatement prepare(String statement)
+        throws FaultException,
+               IllegalArgumentException;
+
+    /**
+     * Synchronously execute a table statement: {@link PreparedStatement} or
+     * {@link BoundStatement}. For DDL statements the method will only return
+     * when the statement has finished and has the same semantics as {@link
+     * #execute(String)}, but offers synchronous behavior as a convenience.
+     * In the case of DML statements the execution is delayed until the
+     * iteration of the results.</pre>
+     * When executeSync() returns, statement execution will have terminated,
+     * and the resulting {@link StatementResult} will provide information
+     * about the outcome.
+     *
+     * @param statement The statement to be executed.
+     * @return Returns the result of the statement.
+     * @throws FaultException if the statement cannot be completed. This
+     * indicates a transient problem with communication to the server or
+     * within the server, and the statement can be retried.
+     * @throws IllegalArgumentException if the statement fails to be executed
+     * because of a semantic problem with the query.
+     * @since 4.0
+     */
+    StatementResult executeSync(Statement statement)
+        throws FaultException,
+               IllegalArgumentException;
+
+    /**
+     * Synchronously execute a table statement: {@link PreparedStatement} or
+     * {@link BoundStatement}. For DDL statements the method will only return
+     * when the statement has finished and has the same semantics as {@link
+     * #execute(String)}, but offers synchronous behavior as a convenience.
+     * In the case of DML statements the execution is delayed until the
+     * iteration of the results.</pre>
+     * When executeSync() returns, statement execution will have terminated,
+     * and the resulting {@link StatementResult} will provide information
+     * about the outcome.
+     *
+     * @param statement The statement to be executed.
+     * @param options Execution options.
+     * @return Returns the result of the statement.
+     * @throws FaultException if the statement cannot be completed. This
+     * indicates a transient problem with communication to the server or
+     * within the server, and the statement can be retried.
+     * @throws IllegalArgumentException if the statement fails to be executed
+     * because of a semantic problem with the query.
+     * @since 4.0
+     */
+    StatementResult executeSync(Statement statement, ExecuteOptions options)
+        throws FaultException,
+               IllegalArgumentException;
 }

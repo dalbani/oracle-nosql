@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -339,7 +339,7 @@ public class AdminService implements ConfigurableService {
         logger.info("Shutting down AdminService instance" +
                     (force ? " (force)" : ""));
 
-        updateAdminStatus(admin, ServiceStatus.STOPPING);
+        update(ServiceStatus.STOPPING);
         String hostName = params.getStorageNodeParams().getHostname();
         if (commandService != null) {
             ((CommandServiceImpl) commandService).stopRemoteTestInterface(
@@ -531,6 +531,7 @@ public class AdminService implements ConfigurableService {
        return faultHandler;
     }
 
+    @Override
     public boolean getUsingThreads() {
         return usingThreads;
     }
@@ -656,11 +657,16 @@ public class AdminService implements ConfigurableService {
 
         if (admin == null) {
             /* We're unconfigured; report waiting for deployment. */
-            updateAdminStatus(null, ServiceStatus.WAITING_FOR_DEPLOY);
+            update(ServiceStatus.WAITING_FOR_DEPLOY);
         } else {
             /* Otherwise, if we're up and servicing calls, we are running. */
-            updateAdminStatus(admin, ServiceStatus.RUNNING);
+            update(ServiceStatus.RUNNING);
         }
+    }
+
+    @Override
+    public void update(ServiceStatus newStatus) {
+       updateAdminStatus(admin, newStatus);
     }
 
     void updateAdminStatus(Admin a, ServiceStatus newStatus) {

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,6 +43,15 @@
 
 package oracle.kv.table;
 
+
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+
+import oracle.kv.impl.api.table.FieldDefSerialization;
+import oracle.kv.impl.api.table.FieldValueSerialization;
+import oracle.kv.impl.util.FastExternalizable;
+
 /**
  * FieldRange defines a range of values to be used in a table or index
  * iteration or multiGet operation.  A FieldRange is used as the least
@@ -74,14 +83,23 @@ package oracle.kv.table;
  *
  * @since 3.0
  */
-public class FieldRange {
+public class FieldRange implements FastExternalizable, Cloneable {
 
-    private final String fieldName;
-    private final FieldDef field;
+    private final String fieldPath;
+    private final FieldDef fieldDef;
     private FieldValue start;
     private boolean startInclusive;
     private FieldValue end;
     private boolean endInclusive;
+
+    /*
+     * Storage size is non-zero if the field is a primary key field with
+     * a storage size constraint on it. That is possible only for integers
+     * at this time. For other types and index keys it will be 0. It's only
+     * used on the client side or for direct construction so it need not be
+     * serialized.
+     */
+    private final int storageSize;
 
     /**
      * @hidden
@@ -89,15 +107,67 @@ public class FieldRange {
      * The fields referenced by startValue and endValue must be the same field
      * within the field definition for the table on which this object is used.
      *
-     * @param fieldName is the name of the field on which this range is
+     * @param fieldPath is the name of the field on which this range is
      * defined.
      *
-     * @param field is the definition of the field on which this range is
+     * @param fieldDef is the definition of the field on which this range is
      * defined.
      */
-    public FieldRange(String fieldName, FieldDef field) {
-        this.fieldName = fieldName;
-        this.field = field;
+    public FieldRange(String fieldPath, FieldDef fieldDef, int storageSize) {
+        this.fieldPath = fieldPath;
+        this.fieldDef = fieldDef;
+        this.storageSize = storageSize;
+        assert(fieldDef.isAtomic());
+    }
+
+    /**
+     * FastExternalizable constructor.
+     * @hidden
+     */
+    public FieldRange(DataInput in, short serialVersion) throws IOException {
+
+        fieldPath = in.readUTF();
+        startInclusive = in.readBoolean();
+        endInclusive = in.readBoolean();
+        fieldDef = FieldDefSerialization.readFieldDef(in, serialVersion);
+        start =
+            FieldValueSerialization.readFieldValue(fieldDef, in, serialVersion);
+        end =
+            FieldValueSerialization.readFieldValue(fieldDef, in, serialVersion);
+        storageSize = 0;
+    }
+
+    /**
+     * FastExternalizable writer.  Must call superclass method first to
+     * write common elements.
+     *
+     * @hidden
+     */
+    @Override
+    public void writeFastExternal(DataOutput out, short serialVersion)
+            throws IOException {
+
+        out.writeUTF(fieldPath);
+        out.writeBoolean(startInclusive);
+        out.writeBoolean(endInclusive);
+        FieldDefSerialization.writeFieldDef(fieldDef, out, serialVersion);
+        FieldValueSerialization.writeFieldValue(start, false,
+                                                out, serialVersion);
+        FieldValueSerialization.writeFieldValue(end, false,
+                                                out, serialVersion);
+    }
+
+    /**
+     * Creates a new FieldRange instance that is a shallow copy of this
+     * instance.
+     */
+    @Override
+    public FieldRange clone() {
+        try {
+            return (FieldRange) super.clone();
+        } catch (CloneNotSupportedException ignore) {
+        }
+        return null;
     }
 
     /**
@@ -119,7 +189,7 @@ public class FieldRange {
      * @return the FieldDef
      */
     public FieldDef getField() {
-        return getFieldDef();
+        return fieldDef;
     }
 
     /**
@@ -170,7 +240,7 @@ public class FieldRange {
      * @return the FieldDef
      */
     public FieldDef getDefinition() {
-        return field;
+        return fieldDef;
     }
 
     /**
@@ -179,7 +249,7 @@ public class FieldRange {
      * @return the name of the field
      */
     public String getFieldName() {
-        return fieldName;
+        return fieldPath;
     }
 
     /**
@@ -196,8 +266,7 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setStart(int value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        final FieldValue val = fieldToUse.createInteger(value);
+        final FieldValue val = fieldDef.createInteger(value);
         return setStartValue(val, isInclusive);
     }
 
@@ -215,8 +284,7 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setStart(double value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        final FieldValue val = fieldToUse.createDouble(value);
+        final FieldValue val = fieldDef.createDouble(value);
         return setStartValue(val, isInclusive);
     }
 
@@ -234,8 +302,7 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setStart(float value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        final FieldValue val = fieldToUse.createFloat(value);
+        final FieldValue val = fieldDef.createFloat(value);
         return setStartValue(val, isInclusive);
     }
 
@@ -253,8 +320,7 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setStart(long value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        final FieldValue val = fieldToUse.createLong(value);
+        final FieldValue val = fieldDef.createLong(value);
         return setStartValue(val, isInclusive);
     }
 
@@ -272,8 +338,7 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setStart(String value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        final FieldValue val = fieldToUse.createString(value);
+        final FieldValue val = fieldDef.createString(value);
         return setStartValue(val, isInclusive);
     }
 
@@ -290,10 +355,8 @@ public class FieldRange {
      * @throws IllegalArgumentException if the value is not valid for the
      * field in the range.
      */
-    public FieldRange setStartEnum(String value,
-                                   boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        final FieldValue val = fieldToUse.createEnum(value);
+    public FieldRange setStartEnum(String value, boolean isInclusive) {
+        final FieldValue val = fieldDef.createEnum(value);
         return setStartValue(val, isInclusive);
     }
 
@@ -311,8 +374,7 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setEnd(int value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        final FieldValue val = fieldToUse.createInteger(value);
+        final FieldValue val = fieldDef.createInteger(value);
         return setEndValue(val, isInclusive);
     }
 
@@ -330,8 +392,7 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setEnd(double value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        final FieldValue val = fieldToUse.createDouble(value);
+        final FieldValue val = fieldDef.createDouble(value);
         return setEndValue(val, isInclusive);
     }
 
@@ -349,8 +410,7 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setEnd(float value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        final FieldValue val = fieldToUse.createFloat(value);
+        final FieldValue val = fieldDef.createFloat(value);
         return setEndValue(val, isInclusive);
     }
 
@@ -368,8 +428,7 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setEnd(long value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        final FieldValue val = fieldToUse.createLong(value);
+        final FieldValue val = fieldDef.createLong(value);
         return setEndValue(val, isInclusive);
     }
 
@@ -387,8 +446,7 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setEnd(String value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        final FieldValue val = fieldToUse.createString(value);
+        final FieldValue val = fieldDef.createString(value);
         return setEndValue(val, isInclusive);
     }
 
@@ -406,8 +464,7 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setEndEnum(String value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        final FieldValue val = fieldToUse.createEnum(value);
+        final FieldValue val = fieldDef.createEnum(value);
         return setEndValue(val, isInclusive);
     }
 
@@ -425,12 +482,7 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setStart(FieldValue value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        if (!fieldToUse.isType(value.getType())) {
-            throw new IllegalArgumentException
-                ("Value is not of correct type: " + value.getType());
-        }
-        return setStartValue(value, isInclusive);
+        return setStart(value, isInclusive, true);
     }
 
     /**
@@ -447,82 +499,150 @@ public class FieldRange {
      * field in the range.
      */
     public FieldRange setEnd(FieldValue value, boolean isInclusive) {
-        final FieldDef fieldToUse = getFieldDef();
-        if (!fieldToUse.isType(value.getType())) {
-            throw new IllegalArgumentException
-                ("Value is not of correct type: " + value.getType());
-        }
-        return setEndValue(value, isInclusive);
+        return setEnd(value, isInclusive, true);
     }
 
     /*
      * Internal use
+     *
+     * @hidden
      */
-    private FieldRange setStartValue(FieldValue value, boolean isInclusive) {
-        if (field.isArray()) {
-            final ArrayValue array = field.createArray();
-            array.add(value);
-            value = array;
-        } else if (field.isMap()) {
-            final MapValue map = field.createMap();
-            map.putNull(value.asString().toString());
-            value = map;
+    public FieldRange setStart(
+        FieldValue value,
+        boolean isInclusive,
+        boolean validate) {
+        if (!fieldDef.isType(value.getType())) {
+            throw new IllegalArgumentException
+                ("Value is not of correct type: " + value.getType());
         }
-        validate(value, end);
+        return setStartValue(value, isInclusive, validate);
+    }
+
+    /*
+     * Internal use
+     *
+     * @hidden
+     */
+    public FieldRange setEnd(
+        FieldValue value,
+        boolean isInclusive,
+        boolean validate) {
+        if (!fieldDef.isType(value.getType())) {
+            throw new IllegalArgumentException
+                ("Value is not of correct type: " + value.getType());
+        }
+        return setEndValue(value, isInclusive, validate);
+    }
+
+    /*
+     * Internal use
+     *
+     * @hidden
+     */
+    public FieldRange setStartValue(FieldValue value, boolean isInclusive) {
+        return setStartValue(value, isInclusive, true);
+    }
+
+    /*
+     * Internal use
+     *
+     * @hidden
+     */
+    private FieldRange setStartValue(
+        FieldValue value,
+        boolean isInclusive,
+        boolean validate) {
+
         start = value;
         startInclusive = isInclusive;
+
+        if (validate) {
+            validate();
+        }
+
         return this;
     }
 
+    /*
+     * Internal use
+     *
+     * @hidden
+     */
     private FieldRange setEndValue(FieldValue value, boolean isInclusive) {
-        if (field.isArray()) {
-            final ArrayValue array = field.createArray();
-            array.add(value);
-            value = array;
-        } else if (field.isMap()) {
-            final MapValue map = field.createMap();
-            map.putNull(value.asString().toString());
-            value = map;
-        }
-        validate(start, value);
+        return setEndValue(value, isInclusive, true);
+    }
+
+    /*
+     * Internal use
+     *
+     * @hidden
+     */
+    private FieldRange setEndValue(
+        FieldValue value,
+        boolean isInclusive,
+        boolean validate) {
+
         end = value;
         endInclusive = isInclusive;
+
+        if (validate) {
+            validate();
+        }
+
         return this;
     }
 
-    private void validate(FieldValue startVal, FieldValue endVal) {
-        if (startVal != null && endVal != null) {
-            if (startVal.compareTo(endVal) > 0) {
-                throw new IllegalArgumentException
-                    ("FieldRange: start value must be less than " +
-                     "the end value");
-            }
-        }
+    /*
+     * Internal use
+     *
+     * @hidden
+     */
+    public int getStorageSize() {
+        return storageSize;
     }
 
-    /**
-     * This indirection allows array and map indexes to interpose themselves and
-     * return an appropriate FieldDef for the array element type.
+    /*
+     * Internal use
+     *
+     * @hidden
      */
-    private FieldDef getFieldDef() {
-        if (field.isArray()) {
-            return field.asArray().getElement();
+    public boolean check() {
+
+        if (start != null && end != null) {
+
+            int cmp = start.compareTo(end);
+
+            if (cmp > 0) {
+                return false;
+            }
+
+            if (cmp == 0) {
+                if (!endInclusive || !startInclusive) {
+                    return false;
+                }
+            }
         }
-        if (field.isMap()) {
-            return field.asMap().getKeyDefinition();
+        return true;
+    }
+
+    private void validate() {
+        if (!check()) {
+            throw new IllegalArgumentException(
+                "FieldRange: start value must be less than the end value");
         }
-        return field;
     }
 
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
-        sb.append("Name: ").append(fieldName).append("; Type:")
-            .append(field.getType())
-            .append("; Start: ").append(start != null ? start : "null")
-            .append("; End: ").append(end != null ? end : "null")
-            .append("; Inclusive: ").append(startInclusive).append(",")
-            .append(endInclusive);
+        sb.append("{");
+        sb.append(" \"Name\" : ").append(fieldPath);
+        sb.append(", \"Type\" : ").append(fieldDef.getType());
+        sb.append(", \"Start\" : ").append(start != null ? start : "null");
+        sb.append(", \"End\" : ").append(end != null ? end : "null");
+        sb.append(", \"StartInclusive\" : ").append(startInclusive);
+        sb.append(", \"EndInclusive\" : ").append(endInclusive);
+        sb.append(" }");
         return sb.toString();
     }
 }

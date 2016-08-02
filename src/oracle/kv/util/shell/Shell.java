@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -69,6 +69,10 @@ import oracle.kv.impl.admin.CommandJsonUtils;
 import oracle.kv.impl.admin.CommandResult;
 import oracle.kv.util.ErrorMessage;
 
+import static oracle.kv.impl.util.CommandParser.DEBUG_FLAG;
+import static oracle.kv.impl.util.CommandParser.JSON_FLAG;
+import static oracle.kv.impl.util.CommandParser.VERBOSE_FLAG;
+
 /**
  *
  * Simple framework for a command line shell.  See CommandShell.java for a
@@ -86,6 +90,12 @@ public abstract class Shell {
     protected Stack<ShellCommand> stCurrentCommands = null;
     protected boolean isSecured = false;
     private final Timer timer;
+
+    /*
+     * The command to handle the general command line if no matched command
+     * is found using findCommand().
+     */
+    private ShellCommand generalCommand = null;
 
     public final static String tab = "\t";
     public final static String eol = System.getProperty("line.separator");
@@ -121,6 +131,11 @@ public abstract class Shell {
      * This variable is toggled by the "verbose" command
      */
     private boolean global_verbose = false;
+
+    /*
+     * This variable is toggled by the "debug" command
+     */
+    private boolean global_debug = false;
 
     /*
      * This variable is set using "timer [on | off]" command, if it is true
@@ -159,6 +174,16 @@ public abstract class Shell {
     private final static char LINE_JOINER = '\\';
 
     /*
+     * The comment mark string
+     */
+    public final static String COMMENT_MARK = "#";
+
+    /*
+     * The flag indicates if disable the event designator of JLine.
+     */
+    private final boolean disableJlineEventDesignator;
+
+    /*
      * These must be implemented by specific shell classes
      */
     public abstract List<? extends ShellCommand> getCommands();
@@ -175,12 +200,26 @@ public abstract class Shell {
      * Concrete implementation
      */
     public Shell(InputStream input, PrintStream output) {
+        this(input, output, false);
+    }
+
+    /**
+     * The disableJlineEventDesignator indicates if disable the Jline history
+     * event designator functionality that use characters like '!' or '^' as
+     * as the indicator for the event designator:
+     *
+     * http://www.gnu.org/software/bash/manual/html_node/Event-Designators.html
+     */
+    public Shell(InputStream input,
+                 PrintStream output,
+                 boolean disableJlineEventDesignator) {
         this.input = input;
         this.output = output;
         history = new CommandHistory();
         stCurrentCommands = new Stack<ShellCommand>();
         shellVariables = new VariablesMap();
         timer = new Timer();
+        this.disableJlineEventDesignator = disableJlineEventDesignator;
     }
 
     public String getUsage() {
@@ -332,7 +371,7 @@ public abstract class Shell {
                          se.getMessage();
         exitCode = EXIT_UNKNOWN;
         displayResultReport(line, cmdResult, message);
-        if (debug) {
+        if (getDebug()) {
             se.printStackTrace(output);
         }
         return false;
@@ -347,7 +386,7 @@ public abstract class Shell {
                                            CommandResult.NO_CLEANUP_JOBS);
         displayResultReport(line, cmdResult,
                             "Unknown Exception: " + e.getClass());
-        if (debug) {
+        if (getDebug()) {
             e.printStackTrace(output);
         }
     }
@@ -371,7 +410,7 @@ public abstract class Shell {
         displayResultReport(line, cmdResult,
                             "Error handling command " + line + ": " +
                                 kvse.getMessage());
-        if (debug) {
+        if (getDebug()) {
             kvse.printStackTrace(output);
         }
         exitCode = EXIT_NOPERM;
@@ -390,6 +429,14 @@ public abstract class Shell {
 
     public boolean getTerminate() {
         return terminate;
+    }
+
+    public void setGeneralCommand(ShellCommand command) {
+        generalCommand = command;
+    }
+
+    private ShellCommand getGeneralCommand() {
+        return generalCommand;
     }
 
     /*
@@ -537,13 +584,13 @@ public abstract class Shell {
         verbose = false;
         debug = false;
         String[] retArgs = args;
-        if (checkArg(args, "-verbose")) {
+        if (checkArg(args, VERBOSE_FLAG)) {
             verbose = true;
-            retArgs = extractArg(args, "-verbose");
+            retArgs = extractArg(args, VERBOSE_FLAG);
         }
-        if (checkArg(args, "-debug")) {
+        if (checkArg(args, DEBUG_FLAG)) {
             debug = true;
-            retArgs = extractArg(args, "-debug");
+            retArgs = extractArg(args, DEBUG_FLAG);
         }
         return retArgs;
     }
@@ -551,9 +598,9 @@ public abstract class Shell {
     private String[] checkJson(String[] args) {
         json = false;
         String[] retArgs = args;
-        if (checkArg(args, "-json")) {
+        if (checkArg(args, JSON_FLAG)) {
             json = true;
-            retArgs = extractArg(args, "-json");
+            retArgs = extractArg(args, JSON_FLAG);
         }
         return retArgs;
     }
@@ -655,7 +702,7 @@ public abstract class Shell {
         throws ShellException {
 
         exitCode = EXIT_OK;
-        if (line.length() > 0 && !line.startsWith("#")) {
+        if (line.length() > 0 && !isComment(line)) {
             String[] splitArgs;
             try {
                 splitArgs = parseLine(line, checkQuotesMatch);
@@ -667,7 +714,7 @@ public abstract class Shell {
             if (timerEnabled) {
                timer.begin();
             }
-            String result = run(commandName, splitArgs);
+            String result = run(commandName, splitArgs, line);
             if (result != null) {
                 output.println(result);
             }
@@ -680,6 +727,12 @@ public abstract class Shell {
     }
 
     public String run(String commandName, String[] args)
+        throws ShellException {
+
+        return run(commandName, args, null);
+    }
+
+    private String run(String commandName, String[] args, String line)
         throws ShellException {
 
         ShellCommand command = null;
@@ -695,18 +748,56 @@ public abstract class Shell {
             cmdArgs = args;
         }
 
+        final ShellCommand genCommand = getGeneralCommand();
+
         if (command != null) {
             cmdArgs = checkVerboseAndDebug(cmdArgs);
             if (!command.overrideJsonFlag()) {
                 cmdArgs = checkJson(cmdArgs);
             }
-            final String result = command.execute(cmdArgs, this);
-            exitCode = command.getExitCode();
-            return result;
+            try {
+                final String result = command.execute(cmdArgs, this);
+                exitCode = command.getExitCode();
+                return result;
+            } catch (CommandNotFoundException cnfe) {
+                /*
+                 * No sub command found, run with general command if it is
+                 * provided, otherwise throw the exception.
+                 */
+                if (genCommand == null) {
+                    throw cnfe;
+                }
+            }
+        } else {
+            if (genCommand == null) {
+                throw new ShellArgumentException("Could not find command: " +
+                    commandName + eol + getUsage());
+            }
         }
 
-        throw new ShellArgumentException(
-            "Could not find command: " + commandName + eol + getUsage());
+        /*
+         * Use general command to execute the line, the passing in argument
+         * is the whole command line.
+         */
+        final String cmdLine = (line != null) ? line : joinWithSpace(args);
+        final String result = genCommand.execute(new String[]{cmdLine}, this);
+        exitCode = genCommand.getExitCode();
+        return result;
+    }
+
+    /*
+     * Returns a string that consists of a array of strings joined with space
+     * character.
+     */
+    private String joinWithSpace(final String[] args) {
+        final StringBuilder sb = new StringBuilder();
+        for (String arg : args) {
+            if (sb.length() > 0) {
+                sb.append(" ");
+            }
+            sb.append(arg);
+        }
+        return sb.toString();
     }
 
     public boolean getVerbose() {
@@ -715,7 +806,7 @@ public abstract class Shell {
 
     /** Returns whether to print debugging output. */
     public boolean getDebug() {
-        return debug;
+        return (debug || global_debug);
     }
 
     /**
@@ -740,6 +831,15 @@ public abstract class Shell {
 
     public void setVerbose(boolean val) {
         global_verbose = val;
+    }
+
+    public boolean toggleDebug() {
+        global_debug = !global_debug;
+        return global_debug;
+    }
+
+    public void setDebug(boolean val) {
+        global_debug = val;
     }
 
     /* Enable or disable time measurement */
@@ -825,6 +925,10 @@ public abstract class Shell {
         output.println(toJsonReport(command, cmdResult));
     }
 
+    public boolean isJlineEventDesignatorDisabled() {
+        return disableJlineEventDesignator;
+    }
+
     public static String makeWhiteSpace(int indent) {
         String ret = "";
         for (int i = 0; i < indent; i++) {
@@ -842,14 +946,18 @@ public abstract class Shell {
         throws ShellException {
 
         for (String s : args) {
-            String sl = s.toLowerCase();
-            if (sl.equals("-help") ||
-                sl.equals("help") ||
-                sl.equals("?") ||
-                sl.equals("-?")) {
+            if (isHelpFlag(s)) {
                 throw new ShellHelpException(command);
             }
         }
+    }
+
+    static boolean isHelpFlag(final String flag) {
+        final String sl = flag.toLowerCase();
+        return  (sl.equals("-help") ||
+                 sl.equals("help") ||
+                 sl.equals("?") ||
+                 sl.equals("-?"));
     }
 
     /*
@@ -930,6 +1038,13 @@ public abstract class Shell {
     }
 
     /**
+     * Returns true if the line is comment.
+     */
+    public static boolean isComment(final String line) {
+        return line.startsWith(COMMENT_MARK);
+    }
+
+    /**
      * Output status information during command execution in non-json mode. It
      * differs from verboseOutput() in that the message will be output even in
      * non-verbose mode.
@@ -966,7 +1081,7 @@ public abstract class Shell {
 
             FileReader fr = null;
             BufferedReader br = null;
-            String retString = "";
+            String retString = null;
             try {
                 final CommandLinesParser clp = new CommandLinesParser(shell);
                 fr = new FileReader(path);
@@ -978,7 +1093,15 @@ public abstract class Shell {
                        !shell.getTerminate() &&
                        shell.getExitCode() == Shell.EXIT_OK) {
                     try {
-                        clp.appendLine(line);
+                        if (line.trim().isEmpty()) {
+                            /*
+                             * The empty line indicates the termination of
+                             * command, so append line terminator ';'.
+                             */
+                            clp.appendLine(String.valueOf(LINE_TERMINATOR));
+                        } else {
+                            clp.appendLine(line);
+                        }
                     } catch (Exception e) {
                         final String[] commands = clp.getCommands();
                         assert(commands.length == 1);
@@ -1004,21 +1127,22 @@ public abstract class Shell {
                     /* Execute commands if parsing is done. */
                     final String[] commands = clp.getCommands();
                     if (commands != null) {
-                        for (String cmd: commands) {
-                            cmd = cmd.trim();
-                            try {
-                                shell.runLine(cmd);
-                            } catch (Exception e) {
-                                final String msg =
-                                    handleExecuteException(shell, cmd, e);
-                                if (msg != null) {
-                                    retString = msg;
-                                    break LoopReadLine;
-                                }
-                            }
+                        retString = executeCommands(shell, commands);
+                        if (retString != null) {
+                            break LoopReadLine;
                         }
                     }
                     clp.reset();
+                }
+
+                /*
+                 * If there are left command(s) not executed after the whole
+                 * file has been read, handle them.
+                 */
+                if (retString == null && clp.hasCommand()) {
+                    final String[] commands = clp.getCommands(false);
+                    assert (commands != null);
+                    retString = executeCommands(shell, commands);
                 }
                 exitCode = shell.getExitCode();
             } catch (IOException ioe) {
@@ -1043,7 +1167,29 @@ public abstract class Shell {
                 /* If JSON enable, don't output LoadCommand status. */
                 return "";
             }
-            return retString;
+            return ((retString == null) ? "" : retString);
+        }
+
+        /**
+         * Execute the commands, returns not-null message if one of commands
+         * executed failed and the exception is handled, otherwise return null.
+         */
+        private String executeCommands(final Shell shell,
+                                       final String[] commands) {
+
+            for (String cmd: commands) {
+                cmd = cmd.trim();
+                try {
+                    shell.runLine(cmd);
+                } catch (Exception e) {
+                    final String msg =
+                        handleExecuteException(shell, cmd, e);
+                    if (msg != null) {
+                        return msg;
+                    }
+                }
+            }
+            return null;
         }
 
         /**
@@ -1451,7 +1597,8 @@ public abstract class Shell {
 
             /* Read "?", then terminate the parsing  */
             if (command.equalsIgnoreCase(HELP_COMMAND)) {
-                sb.append(" -help");
+                sb.append(" ");
+                sb.append(HELP_COMMAND);
                 state = ParseState.PARSE_DONE;
                 return;
             }
@@ -1541,12 +1688,24 @@ public abstract class Shell {
 
         /*
          * Returns the array of commands if parsing state is PARSE_DONE.
-         * For none-complete states like SINGLE_LINE, MULTI_LINE_TERM and
-         * MULTI_LINE_CONT, returns null. If state is PARSE_DONE_EXECUTED,
-         * the command was executed so return null as well.
          */
         String[] getCommands() {
-            if (state == ParseState.PARSE_DONE) {
+            return getCommands(true);
+        }
+
+        /*
+         * Returns the array of commands.
+         *
+         * If parseDone is true, then returns the commands if parsing state is
+         * PARSE_DONE. For none-complete states like SINGLE_LINE,
+         * MULTI_LINE_TERM and MULTI_LINE_CONT, returns null. If state is
+         * PARSE_DONE_EXECUTED, the command was executed so return null as well.
+         *
+         * If parseDone is false, then returns the commands whatever the parsing
+         * state is.
+         */
+        String[] getCommands(boolean parseDone) {
+            if (!parseDone || state == ParseState.PARSE_DONE) {
                 return parseCommandLines(sb.toString());
             }
             return null;
@@ -1556,6 +1715,10 @@ public abstract class Shell {
         void reset() {
             state = ParseState.SINGLE_LINE;
             sb.setLength(0);
+        }
+
+        boolean hasCommand() {
+            return sb.length() > 0;
         }
 
         /*
@@ -1570,6 +1733,16 @@ public abstract class Shell {
         private boolean checkCompleted(String command)
             throws Exception {
 
+            if (isComment(command)) {
+                return true;
+            }
+            /*
+             * The command line of general command should be terminated with
+             * terminator.
+             */
+            if (isGeneralCommand(command)) {
+                return false;
+            }
             try {
                 shell.runLine(command, true);
                 return true;
@@ -1585,6 +1758,17 @@ public abstract class Shell {
             } catch (Exception e) {
                 throw e;
             }
+        }
+
+        private boolean isGeneralCommand(String command) {
+            if (shell.getGeneralCommand() == null) {
+                return false;
+            }
+            if (shell.getCurrentCommand() != null) {
+                return false;
+            }
+            final String[] args = command.split(" ");
+            return (shell.findCommand(args[0]) == null);
         }
 
         /*

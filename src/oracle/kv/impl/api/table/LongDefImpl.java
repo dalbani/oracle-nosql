@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,39 +43,41 @@
 
 package oracle.kv.impl.api.table;
 
-import static oracle.kv.impl.api.table.TableJsonUtils.MIN;
-import static oracle.kv.impl.api.table.TableJsonUtils.MAX;
-
-import oracle.kv.impl.util.SortableString;
-import oracle.kv.table.FieldDef;
-import oracle.kv.table.LongDef;
+import com.sleepycat.persist.model.Persistent;
 
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.ObjectNode;
 
-import com.sleepycat.persist.model.Persistent;
+import static oracle.kv.impl.api.table.TableJsonUtils.MAX;
+import static oracle.kv.impl.api.table.TableJsonUtils.MIN;
+import oracle.kv.impl.util.SortableString;
+
+import oracle.kv.table.LongDef;
 
 /**
  * LongDefImpl implements the LongDef interface.
  */
 @Persistent(version=1)
-class LongDefImpl extends FieldDefImpl
-    implements LongDef {
+public class LongDefImpl extends FieldDefImpl implements LongDef {
 
     private static final long serialVersionUID = 1L;
+
     /*
-     * These are not final to allow for schema evolution.
+     * min and max are inclusive
      */
-    private final Long min;
-    private final Long max;
+    private Long min;
+    private Long max;
     private int encodingLength;
 
-    LongDefImpl(String description,
-                Long min, Long max) {
-        super(FieldDef.Type.LONG, description);
+    LongDefImpl(String description, Long min, Long max) {
+        super(Type.LONG, description);
         this.min = min;
         this.max = max;
         validate();
+    }
+
+    LongDefImpl(String description) {
+        this(description, null, null);
     }
 
     LongDefImpl() {
@@ -92,34 +94,20 @@ class LongDefImpl extends FieldDefImpl
         encodingLength = impl.encodingLength;
     }
 
+    /*
+     * Public api methods from Object and FieldDef
+     */
+
     @Override
-    public boolean isLong() {
-        return true;
+    public LongDefImpl clone() {
+        return new LongDefImpl(this);
     }
 
     @Override
-    public LongDef asLong() {
-        return this;
-    }
-
-    @Override
-    public Long getMin() {
-        return min;
-    }
-
-    @Override
-    public Long getMax() {
-        return max;
-    }
-
-    @Override
-    public boolean isValidKeyField() {
-        return true;
-    }
-
-    @Override
-    public boolean isValidIndexField() {
-        return true;
+    public int hashCode() {
+        return super.hashCode() +
+            (min != null ? min.hashCode() : 0) +
+            (max != null ? max.hashCode() : 0);
     }
 
     @Override
@@ -133,11 +121,52 @@ class LongDefImpl extends FieldDefImpl
     }
 
     @Override
-    public int hashCode() {
-        return super.hashCode() +
-            (min != null ? min.hashCode() : 0) +
-            (max != null ? max.hashCode() : 0);
+    public boolean isValidKeyField() {
+        return true;
     }
+
+    @Override
+    public boolean isValidIndexField() {
+        return true;
+    }
+
+    @Override
+    public boolean isLong() {
+        return true;
+    }
+
+    @Override
+    public boolean isAtomic() {
+        return true;
+    }
+
+    @Override
+    public boolean isNumeric() {
+        return true;
+    }
+
+    @Override
+    public LongDef asLong() {
+        return this;
+    }
+
+    /*
+     * Public api methods from LongDef
+     */
+
+    @Override
+    public Long getMin() {
+        return min;
+    }
+
+    @Override
+    public Long getMax() {
+        return max;
+    }
+
+    /*
+     * FieldDefImpl internal api methods
+     */
 
     @Override
     int getEncodingLength() {
@@ -145,11 +174,30 @@ class LongDefImpl extends FieldDefImpl
     }
 
     @Override
+    public boolean hasMin() {
+        return min != null;
+    }
+
+    @Override
+    public boolean hasMax() {
+        return max != null;
+    }
+
+    @Override
+    public boolean isSubtype(FieldDefImpl superType) {
+
+        if (superType.isLong() ||
+            superType.isAny() ||
+            superType.isAnyAtomic()) {
+            return true;
+        }
+
+        return false;
+    }
+
+    @Override
     void toJson(ObjectNode node) {
         super.toJson(node);
-        /*
-         * Add min, max
-         */
         if (min != null) {
             node.put(MIN, min);
         }
@@ -159,40 +207,19 @@ class LongDefImpl extends FieldDefImpl
     }
 
     @Override
-    public LongDefImpl clone() {
-        return new LongDefImpl(this);
+    public LongValueImpl createLong(long value) {
+
+        return (hasMin() || hasMax() ?
+                new LongRangeValue(value, this) :
+                new LongValueImpl(value));
     }
 
     @Override
-    public LongValueImpl createLong(long value) {
-        validateRange(value);
-        return new LongValueImpl(value);
-    }
+    LongValueImpl createLong(String value) {
 
-    private void validate() {
-        /* Make sure min <= max */
-        if (min != null && max != null) {
-            if (min > max) {
-                throw new IllegalArgumentException
-                    ("Invalid minimum or maximum value");
-            }
-        }
-        encodingLength = SortableString.encodingLength(min, max);
-    }
-
-    /**
-     * Validates the value against the range if one exists.
-     */
-    private void validateRange(long val) {
-        /* min/max are inclusive */
-        if ((min != null && val < min) ||
-            (max != null && val > max)) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("Value, ");
-            sb.append(val);
-            sb.append(", is outside of the allowed range");
-            throw new IllegalArgumentException(sb.toString());
-        }
+        return (hasMin() || hasMax() ?
+                new LongRangeValue(value, this) :
+                new LongValueImpl(value));
     }
 
     @Override
@@ -205,5 +232,35 @@ class LongDefImpl extends FieldDefImpl
                 ("Default value for type LONG is not long");
         }
         return createLong(node.getLongValue());
+    }
+
+    /*
+     * Local methods
+     */
+
+    private void validate() {
+
+        if (min != null && max != null) {
+            if (min > max) {
+                throw new IllegalArgumentException
+                    ("Invalid minimum or maximum value");
+            }
+        }
+        encodingLength = SortableString.encodingLength(min, max);
+    }
+
+    /**
+     * Validates the value against the range if one exists.
+     * min/max are inclusive.
+     */
+    void validateValue(long val) {
+
+        if ((min != null && val < min) || (max != null && val > max)) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Value, ");
+            sb.append(val);
+            sb.append(", is outside of the allowed range");
+            throw new IllegalArgumentException(sb.toString());
+        }
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,25 +43,25 @@
 
 package oracle.kv.shell;
 
-import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
-import java.io.FileReader;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
-import oracle.kv.impl.admin.client.CommandShell;
-import oracle.kv.impl.api.table.TableJsonUtils;
-import oracle.kv.impl.util.CommandParser;
+import org.apache.avro.Schema;
+import org.codehaus.jackson.JsonNode;
+import org.codehaus.jackson.JsonProcessingException;
+
+import oracle.kv.FaultException;
 import oracle.kv.KVStore;
 import oracle.kv.Key;
 import oracle.kv.Value;
-import oracle.kv.avro.AvroCatalog;
-import oracle.kv.avro.JsonAvroBinding;
-import oracle.kv.avro.JsonRecord;
+import oracle.kv.impl.admin.client.CommandShell;
+import oracle.kv.impl.api.table.TableJsonUtils;
+import oracle.kv.impl.util.CommandParser;
 import oracle.kv.shell.CommandUtils.RunTableAPIOperation;
 import oracle.kv.table.FieldDef;
 import oracle.kv.table.FieldValue;
@@ -70,14 +70,12 @@ import oracle.kv.table.RecordValue;
 import oracle.kv.table.Row;
 import oracle.kv.table.Table;
 import oracle.kv.table.TableAPI;
+import oracle.kv.table.WriteOptions;
 import oracle.kv.util.shell.CommandWithSubs;
+import oracle.kv.util.shell.LoadTableUtils;
 import oracle.kv.util.shell.Shell;
 import oracle.kv.util.shell.ShellCommand;
 import oracle.kv.util.shell.ShellException;
-
-import org.apache.avro.Schema;
-import org.codehaus.jackson.JsonNode;
-import org.codehaus.jackson.JsonProcessingException;
 
 public class PutCommand extends CommandWithSubs {
     final static String VALUE_FLAG = "-value";
@@ -260,13 +258,14 @@ public class PutCommand extends CommandWithSubs {
             return PUT_KV_DESCRIPTION;
         }
 
+        @SuppressWarnings("deprecation")
         private Value createJsonValue(String schema,
                                       InputStream content,
                                       KVStore store)
             throws ShellException {
 
             try {
-                AvroCatalog catalog = store.getAvroCatalog();
+                oracle.kv.avro.AvroCatalog catalog = store.getAvroCatalog();
                 catalog.refreshSchemaCache(null);
                 Map<String, Schema> schemaMap = catalog.getCurrentSchemas();
                 Schema sch = schemaMap.get(schema);
@@ -276,8 +275,10 @@ public class PutCommand extends CommandWithSubs {
                 }
                 JsonNode obj =
                     TableJsonUtils.getObjectMapper().readTree(content);
-                JsonAvroBinding jsonBinding = catalog.getJsonBinding(sch);
-                return jsonBinding.toValue(new JsonRecord(obj, sch));
+                oracle.kv.avro.JsonAvroBinding jsonBinding =
+                    catalog.getJsonBinding(sch);
+                return jsonBinding.toValue(new oracle.kv.avro.JsonRecord(obj,
+                                                                         sch));
             } catch (JsonProcessingException jpe) {
                 throw new ShellException(eolt +
                                          "Could not create JSON from input: " +
@@ -339,7 +340,7 @@ public class PutCommand extends CommandWithSubs {
             "existing record.";
 
         private final static String currentPutParams = "currentPutParams";
-        private TableCmdWithSubs cmdSubs = new TablePutSubs();
+        private final TableCmdWithSubs cmdSubs = new TablePutSubs();
 
         PutTableCommand() {
             super(TABLE_COMMAND, 3);
@@ -385,11 +386,17 @@ public class PutCommand extends CommandWithSubs {
                     shell.requiredArg(TABLE_FLAG, this);
                 }
 
-                final TableAPI tableImpl =
-                    ((CommandShell)shell).getStore().getTableAPI();
+                final CommandShell cmdShell = ((CommandShell)shell);
+                final TableAPI tableImpl = cmdShell.getStore().getTableAPI();
                 Table table = CommandUtils.findTable(tableImpl, tableName);
+
+                final WriteOptions wro =
+                    new WriteOptions(cmdShell.getStoreDurability(),
+                                     cmdShell.getRequestTimeout(),
+                                     TimeUnit.MILLISECONDS);
+
                 if (fileName != null) {
-                    return putJsonFromFile(tableImpl, table, fileName,
+                    return putJsonFromFile(tableImpl, table, fileName, wro,
                                            ifAbsent, isUpdate, jsonExact);
                 }
                 Row row = null;
@@ -403,7 +410,7 @@ public class PutCommand extends CommandWithSubs {
                     } catch (IllegalArgumentException iae) {
                         throw new ShellException(iae.getMessage());
                     }
-                    return doPutRow(tableImpl, row, ifAbsent, false);
+                    return doPutRow(tableImpl, row, wro, ifAbsent);
                 }
                 row = table.createRow();
                 ShellCommand cmd = this.clone();
@@ -416,11 +423,11 @@ public class PutCommand extends CommandWithSubs {
             return cmdSubs.execute(putParams, args, shell);
         }
 
-        private Row createRowFromJson(TableAPI tableImpl,
-                                      Table table,
-                                      String json,
-                                      boolean isUpdate,
-                                      boolean isExact) {
+        private static Row createRowFromJson(TableAPI tableImpl,
+                                             Table table,
+                                             String json,
+                                             boolean isUpdate,
+                                             boolean isExact) {
             Row row;
             if (isUpdate == true) {
                 PrimaryKey key = table.createPrimaryKeyFromJson(json, false);
@@ -437,77 +444,62 @@ public class PutCommand extends CommandWithSubs {
             return row;
         }
 
-        private String putJsonFromFile(TableAPI tableImpl, Table table,
-                                       String fileName, Boolean ifAbsent,
-                                       boolean isUpdate, boolean jsonExact)
+        private String putJsonFromFile(final TableAPI tableImpl,
+                                       final Table table,
+                                       final String fileName,
+                                       final WriteOptions wro,
+                                       final Boolean ifAbsent,
+                                       final boolean isUpdate,
+                                       final boolean jsonExact)
             throws ShellException {
 
-            BufferedReader br = null;
+            final StringBuilder message = new StringBuilder();
+            long numRows = 0;
             try {
-                br = new BufferedReader(new FileReader(fileName));
-                Row row = null;
-                String line;
-                int numRows = 0;
-                while((line = br.readLine()) != null) {
+                numRows = new LoadTableUtils.Loader(tableImpl) {
+                    @Override
+                    public Row createRowFromJson(Table target, String json) {
+                        return PutTableCommand.createRowFromJson(tableImpl,
+                                                                 table,
+                                                                 json,
+                                                                 isUpdate,
+                                                                 jsonExact);
+                    }
 
-                    /*
-                     * Skip comment lines or lines without any "{" character.
-                     * The JSON parser handles leading white space by skipping.
-                     */
-                    if (isComment(line)) {
-                        continue;
+                    @Override
+                    public boolean doPut(TableAPI tableAPI,
+                                         Row row,
+                                         WriteOptions options) {
+
+                        PutResult ret = executePutOp(tableAPI, row,
+                                                     options, ifAbsent);
+                        if (ret == PutResult.NONE) {
+                            message.append(getReturnMessage(ret,
+                                                            ifAbsent,
+                                                            row));
+                            return false;
+                        }
+                        return true;
                     }
-                    try {
-                        row = createRowFromJson(tableImpl, table, line,
-                                                isUpdate, jsonExact);
-                    } catch (IllegalArgumentException iae) {
-                        /*
-                         * There may be cases where the user wants to continue
-                         * after a single row failure.  That is not possible
-                         * right now but is something to consider.
-                         */
-                        throw new ShellException(iae.getMessage());
-                    }
-                    ++numRows;
-                    String error = doPutRow(tableImpl, row, ifAbsent, true);
-                    if (error != null) {
-                        return error;
-                    }
-                }
-                return new StringBuilder()
-                    .append((isUpdate ? "Updated " : "Inserted "))
-                    .append(numRows)
-                    .append((numRows > 1 ? " rows in ":" row in "))
-                    .append(table.getFullName())
-                    .append(" table").toString();
-            } catch (FileNotFoundException fnf) {
-                throw new ShellException("File not found: " + fileName, fnf);
+                }.loadJsonToTable(table, fileName, wro, true);
+            } catch (IllegalArgumentException iae) {
+                throw new ShellException(iae.getMessage(), iae);
             } catch (IOException ioe) {
-                throw new ShellException("IO error reading file: " + fileName,
-                                         ioe);
-            } finally {
-                if (br != null) {
-                    try {
-                        br.close();
-                    } catch (IOException ignored) {
-                    }
-                }
+                throw new ShellException(ioe.getMessage(), ioe);
+            } catch (FaultException fe) {
+                throw new ShellException(fe.getMessage(), fe);
             }
-        }
 
-        /**
-         * Returns true if the line has a comment (#) character before the start
-         * of JSON, as indicated by "{".  Skip lines that have no "{" at all.
-         * This could logically be treated as an error but it is not.
-         */
-        private static boolean isComment(String line) {
-            int jsonStartIdx = line.indexOf('{');
-            int commentIdx = line.indexOf('#');
-            if ((jsonStartIdx < 0) || (commentIdx >=0 &&
-                                       jsonStartIdx > commentIdx)) {
-                return true;
+            if (message.length() > 0) {
+                return message.toString();
             }
-            return false;
+            final String op = (ifAbsent == null) ? "Loaded " :
+                                (ifAbsent ? "Inserted " : "Updated ");
+            return message.append(op)
+                    .append(numRows)
+                    .append((numRows > 1 ? " rows to ":" row to "))
+                    .append(table.getFullName())
+                    .toString();
         }
 
         private static class TablePutSubs extends TableCmdWithSubs {
@@ -541,10 +533,10 @@ public class PutCommand extends CommandWithSubs {
         }
 
         private static class PutArgs {
-            private String fieldName;
+            private final String fieldName;
             private FieldValue fieldValue;
-            private Boolean ifAbsent;
-            private boolean isUpdate;
+            private final Boolean ifAbsent;
+            private final boolean isUpdate;
 
             PutArgs(String name, FieldValue value) {
                 this(name, value, null, false);
@@ -682,8 +674,8 @@ public class PutCommand extends CommandWithSubs {
                 "-file flag can be used to input binary value from " +
                 "a file" + eolt + "for BINARY or FIXED_BINARY field.";
 
-            private boolean valueIsNullable;
-            private boolean fieldIsRequired;
+            private final boolean valueIsNullable;
+            private final boolean fieldIsRequired;
 
             protected TableAddValueSub() {
                 this(true, true);
@@ -851,7 +843,7 @@ public class PutCommand extends CommandWithSubs {
             extends TableCmdSubCommand {
 
             private static final String VAR_NAME = "currentVariable";
-            private boolean fieldIsRequired;
+            private final boolean fieldIsRequired;
 
             TableAddComplexValueSub(String name, int prefixMatchLength) {
                 this(name, prefixMatchLength, true);
@@ -1158,12 +1150,19 @@ public class PutCommand extends CommandWithSubs {
                 }
 
                 String retString = null;
-                final TableAPI tableImpl =
-                    ((CommandShell)shell).getStore().getTableAPI();
                 final FieldValue fieldValue = getCurrentFieldValue();
+
                 if (fieldValue.isRow()) {
+                    final CommandShell cmdShell = (CommandShell)shell;
+                    final TableAPI tableImpl =
+                        cmdShell.getStore().getTableAPI();
+                    final WriteOptions wro =
+                        new WriteOptions(cmdShell.getStoreDurability(),
+                                         cmdShell.getRequestTimeout(),
+                                         TimeUnit.MICROSECONDS);
+
                     retString = doPutRow(tableImpl, fieldValue.asRow(),
-                                         isPutIfAbsent(), false);
+                                         wro, isPutIfAbsent());
                     shell.popCurrentCommand();
                 } else {
                     String fieldName = getCurrentFieldName();
@@ -1183,53 +1182,91 @@ public class PutCommand extends CommandWithSubs {
 
         private static String doPutRow(final TableAPI tableImpl,
                                        final Row row,
-                                       final Boolean ifAbsent,
-                                       final boolean returnErrorOnly)
+                                       final WriteOptions options,
+                                       final Boolean ifAbsent)
             throws ShellException {
 
             final StringBuilder sb = new StringBuilder();
             new RunTableAPIOperation() {
                 @Override
                 void doOperation(){
-                    boolean updated = false;
-                    if (ifAbsent != null) {
-                        if (ifAbsent) {
-                            if (tableImpl.putIfAbsent(row, null, null)
-                                    == null) {
-                                sb.append("Operation failed, ");
-                                sb.append("A record was already present ");
-                                sb.append("with the given primary key: ");
-                                sb.append(row.createPrimaryKey()
-                                          .toJsonString(false));
-                            }
-                        } else {
-                            if (tableImpl.putIfPresent(row, null, null)
-                                    == null) {
-                                sb.append("Operation failed, ");
-                                sb.append("No existing record was present ");
-                                sb.append("with the given primary key: ");
-                                sb.append(row.createPrimaryKey()
-                                          .toJsonString(false));
-                            } else {
-                                updated = true;
-                            }
-                        }
-                    } else {
-                        if (tableImpl.putIfAbsent(row, null, null) == null) {
-                            tableImpl.putIfPresent(row, null, null);
-                            updated = true;
-                        }
-                    }
-                    if (sb.length() == 0 && !returnErrorOnly) {
-                        sb.append("Operation successful, row ");
-                        sb.append((updated?"updated.":"inserted."));
-                    }
+                    PutResult putResult = executePutOp(tableImpl, row,
+                                                       options, ifAbsent);
+                    String ret = getReturnMessage(putResult, ifAbsent, row);
+                    sb.append(ret);
                 }
             }.run();
             if (sb.length() == 0) {
                 return null;
             }
             return sb.toString();
+        }
+
+        /**
+         * An enumeration of put result.
+         */
+        private enum PutResult {
+            INSERTED,   /* Put record successfully using putIfAbsent() */
+            UPDATED,    /* Put record successfully using putIfPresent() */
+            NONE        /* No row is inserted or updated if -if-absent is specified
+                           but a record was already present with the given ken or
+                           if -if-present is specified but no existing record was
+                           present with the given primary key. */
+        }
+
+        /**
+         * Executes put operation, returns PutResult object.
+         *
+         *  @param tableImpl the TableAPI object
+         *  @param row the row to be put to store
+         *  @param options the WriteOptions used for put operation.
+         *  @param ifAbsent a flag that indicates to use putIfAbsent() if true or
+         *          use putIfPresent() if false or attempt to use putIfAbsent()
+         *          firstly then putIfPresent() if it is null.
+         *
+         *  @return PutResult object.
+         */
+        private static PutResult executePutOp(TableAPI tableImpl,
+                                              Row row,
+                                              WriteOptions options,
+                                              Boolean ifAbsent) {
+            if (ifAbsent != null) {
+                if (ifAbsent) {
+                    if (tableImpl.putIfAbsent(row, null, options) != null) {
+                        return PutResult.INSERTED;
+                    }
+                } else {
+                    if (tableImpl.putIfPresent(row, null, options) != null) {
+                        return PutResult.UPDATED;
+                    }
+                }
+                return PutResult.NONE;
+            }
+            if (tableImpl.putIfAbsent(row, null, options) != null) {
+                return PutResult.INSERTED;
+            }
+            tableImpl.putIfPresent(row, null, options);
+            return PutResult.UPDATED;
+        }
+
+        /**
+         * Returns the message of put result.
+         */
+        private static String getReturnMessage(PutResult putResult,
+                                               Boolean ifAbsent,
+                                               Row row) {
+
+            final String keyString = row.createPrimaryKey().toJsonString(false);
+            if (putResult == PutResult.NONE) {
+                if (ifAbsent) {
+                    return "Operation failed, A record was already present " +
+                        "with the given primary key: " + keyString;
+                }
+                return "Operation failed, No existing record was present with " +
+                    "the given primary key: " + keyString;
+            }
+            return "Operation successful, row " +
+                ((putResult == PutResult.UPDATED)? "updated.":"inserted.");
         }
     }
 }

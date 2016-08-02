@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,22 +43,12 @@
 
 package oracle.kv.impl.admin.client;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.PrintStream;
-import java.io.StringReader;
 import java.rmi.RemoteException;
-import java.text.NumberFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Enumeration;
-import java.util.HashMap;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Map.Entry;
-import java.util.Properties;
 import java.util.Set;
 import java.util.SortedMap;
 
@@ -74,23 +64,14 @@ import oracle.kv.impl.api.table.TableEvolver;
 import oracle.kv.impl.api.table.TableImpl;
 import oracle.kv.impl.api.table.TableMetadata;
 import oracle.kv.impl.metadata.Metadata.MetadataType;
-import oracle.kv.impl.param.ParameterMap;
-import oracle.kv.impl.param.ParameterUtils;
 import oracle.kv.impl.util.CommandParser;
 import oracle.kv.table.FieldDef;
 import oracle.kv.table.FieldDef.Type;
-import oracle.kv.table.FieldValue;
-import oracle.kv.table.Index;
-import oracle.kv.table.IndexKey;
-import oracle.kv.table.Row;
 import oracle.kv.table.Table;
-import oracle.kv.table.TableUtils;
 import oracle.kv.util.shell.CommandWithSubs;
 import oracle.kv.util.shell.Shell;
 import oracle.kv.util.shell.ShellCommand;
 import oracle.kv.util.shell.ShellException;
-
-import com.sleepycat.je.util.DbCacheSize;
 
 class TableCommand extends CommandWithSubs {
     final static String TABLE_NAME_FLAG = "-name";
@@ -105,11 +86,7 @@ class TableCommand extends CommandWithSubs {
     final static String TYPE_FLAG = "-type";
     final static String DEFAULT_FLAG = "-default";
     final static String NOT_NULLABLE_FLAG = "-not-nullable";
-    final static String MAX_FLAG = "-max";
-    final static String MIN_FLAG = "-min";
     final static String SIZE_FLAG = "-size";
-    final static String MAXEXCL_FLAG = "-max-exclusive";
-    final static String MINEXCL_FLAG = "-min-exclusive";
     final static String ENUM_VALUE_FLAG = "-enum-values";
     final static String SCHEMA_NAME_FLAG = "-name";
 
@@ -125,11 +102,7 @@ class TableCommand extends CommandWithSubs {
     final static String TYPE_FLAG_DESC = TYPE_FLAG + " <type>";
     final static String DEFAULT_FLAG_DESC = DEFAULT_FLAG + " <value>";
     final static String NOT_NULLABLE_FLAG_DESC = NOT_NULLABLE_FLAG;
-    final static String MAX_FLAG_DESC = MAX_FLAG + " <value>";
-    final static String MIN_FLAG_DESC = MIN_FLAG + " <value>";
     final static String SIZE_FLAG_DESC = SIZE_FLAG + " <size>";
-    final static String MAXEXCL_FLAG_DESC = MAXEXCL_FLAG;
-    final static String MINEXCL_FLAG_DESC = MINEXCL_FLAG;
     final static String ENUM_VALUE_FLAG_DESC =
         ENUM_VALUE_FLAG + " <value[,value[,...]]>";
     final static String SCHEMA_NAME_FLAG_DESC =
@@ -140,8 +113,7 @@ class TableCommand extends CommandWithSubs {
                        Arrays.asList(new TableClearSub(),
                                      new TableCreateSub(),
                                      new TableEvolveSub(),
-                                     new TableListSub(),
-                                     new TableSizeSub());
+                                     new TableListSub());
 
     TableCommand() {
         super(subs, "table", 3, 2);
@@ -712,10 +684,6 @@ class TableCommand extends CommandWithSubs {
             FieldDef.Type type = null;
             String defVal = null;
             Boolean nullable = null;
-            String max = null;
-            String min = null;
-            Boolean maxExcl = null;
-            Boolean minExcl = null;
             String size = null;
             String desc = null;
             String[] values = null;
@@ -737,14 +705,6 @@ class TableCommand extends CommandWithSubs {
                     defVal = Shell.nextArg(args, i++, this);
                 } else if (NOT_NULLABLE_FLAG.equals(arg)) {
                     nullable = false;
-                } else if (MAX_FLAG.equals(arg)) {
-                    max = Shell.nextArg(args, i++, this);
-                } else if (MIN_FLAG.equals(arg)) {
-                    min = Shell.nextArg(args, i++, this);
-                } else if (MAXEXCL_FLAG.equals(arg)) {
-                    maxExcl = true;
-                } else if (MINEXCL_FLAG.equals(arg)) {
-                    minExcl = true;
                 } else if (SIZE_FLAG.equals(arg)) {
                     size = Shell.nextArg(args, i++, this);
                 } else if (ENUM_VALUE_FLAG.equals(arg)) {
@@ -778,18 +738,11 @@ class TableCommand extends CommandWithSubs {
                 shell.requiredArg(SIZE_FLAG, this);
             }
 
-            /* check if the property can be used for the data type. */
-            if (min != null || max != null) {
-                validateProperty(tb, type, MIN_FLAG);
-            }
             if (nullable != null) {
                 validateProperty(tb, type, NOT_NULLABLE_FLAG);
             }
             if (defVal != null) {
                 validateProperty(tb, type, DEFAULT_FLAG);
-            }
-            if (minExcl != null || maxExcl != null) {
-                validateProperty(tb, type, MINEXCL_FLAG);
             }
             if (size != null) {
                 validateProperty(tb, type, SIZE_FLAG);
@@ -799,8 +752,7 @@ class TableCommand extends CommandWithSubs {
             }
 
             addField(shell, tb, fname, type, defVal,
-                     nullable, min, max, minExcl, maxExcl, size,
-                     desc, values);
+                     nullable, size, desc, values);
             return null;
         }
 
@@ -808,14 +760,7 @@ class TableCommand extends CommandWithSubs {
                                       String propFlag)
             throws ShellException{
 
-            if (propFlag.equals(MIN_FLAG)) {
-                if (type == Type.BOOLEAN || type == Type.BINARY ||
-                    type == Type.ENUM || type == Type.FIXED_BINARY) {
-                    invalidArgument
-                        (MIN_FLAG + " and " + MAX_FLAG +
-                         " is not allowed for type " + type);
-                }
-            } else if (propFlag.equals(DEFAULT_FLAG) ||
+            if (propFlag.equals(DEFAULT_FLAG) ||
                        propFlag.equals(NOT_NULLABLE_FLAG)) {
                 if (tabBuilder.isCollectionBuilder() ||
                     (type == Type.BINARY || type == Type.FIXED_BINARY)) {
@@ -830,12 +775,6 @@ class TableCommand extends CommandWithSubs {
                         sb.append(type);
                     }
                     invalidArgument(sb.toString());
-                }
-            } else if (propFlag.equals(MINEXCL_FLAG)) {
-                if (type != Type.STRING){
-                    invalidArgument
-                        (MINEXCL_FLAG + " and " + MAXEXCL_FLAG +
-                         " can only be used with " + Type.STRING);
                 }
             } else if (propFlag.equals(SIZE_FLAG)) {
                 if (type != Type.FIXED_BINARY) {
@@ -860,30 +799,19 @@ class TableCommand extends CommandWithSubs {
 
         private void addField(Shell shell, TableBuilderBase tabBuilder,
                               String fname, FieldDef.Type type, String defVal,
-                              Boolean nullable,
-                              String min, String max, Boolean minExcl,
-                              Boolean maxExcl, String size, String desc,
+                              Boolean nullable, String size, String desc,
                               String[] values)
             throws ShellException {
 
             switch (type) {
             case INTEGER: {
                 Integer idef = null;
-                Integer imax = null;
-                Integer imin = null;
 
                 if (defVal != null) {
                     idef = getValidIntVal(defVal);
                 }
-                if (min != null) {
-                    imin = getValidIntVal(min);
-                }
-                if (max != null) {
-                    imax = getValidIntVal(max);
-                }
                 try {
-                    tabBuilder.addInteger(fname, desc, nullable,
-                                          idef, imin, imax);
+                    tabBuilder.addInteger(fname, desc, nullable, idef);
                 } catch (IllegalArgumentException iae) {
                     throw new ShellException(iae.getMessage(), iae);
                 } catch (IllegalCommandException ice) {
@@ -893,20 +821,11 @@ class TableCommand extends CommandWithSubs {
             }
             case LONG: {
                 Long ldef = null;
-                Long lmax = null;
-                Long lmin = null;
                 if (defVal != null) {
                     ldef = getValidLongVal(defVal);
                 }
-                if (min != null) {
-                    lmin = getValidLongVal(min);
-                }
-                if (max != null) {
-                    lmax = getValidLongVal(max);
-                }
                 try {
-                    tabBuilder.addLong(fname, desc, nullable,
-                                       ldef, lmin, lmax);
+                    tabBuilder.addLong(fname, desc, nullable, ldef);
                 } catch (IllegalArgumentException iae) {
                     throw new ShellException(iae.getMessage(), iae);
                 } catch (IllegalCommandException ice) {
@@ -916,20 +835,11 @@ class TableCommand extends CommandWithSubs {
             }
             case DOUBLE:{
                 Double ddef = null;
-                Double dmax = null;
-                Double dmin = null;
                 if (defVal != null) {
                     ddef = getValidDoubleVal(defVal);
                 }
-                if (min != null) {
-                    dmin = getValidDoubleVal(min);
-                }
-                if (max != null) {
-                    dmax = getValidDoubleVal(max);
-                }
                 try {
-                    tabBuilder.addDouble(fname, desc, nullable,
-                                         ddef, dmin, dmax);
+                    tabBuilder.addDouble(fname, desc, nullable, ddef);
                 } catch (IllegalArgumentException iae) {
                     throw new ShellException(iae.getMessage(), iae);
                 } catch (IllegalCommandException ice) {
@@ -939,20 +849,11 @@ class TableCommand extends CommandWithSubs {
             }
             case FLOAT:{
                 Float fdef = null;
-                Float fmax = null;
-                Float fmin = null;
                 if (defVal != null) {
                     fdef = getValidFloatVal(defVal);
                 }
-                if (min != null) {
-                    fmin = getValidFloatVal(min);
-                }
-                if (max != null) {
-                    fmax = getValidFloatVal(max);
-                }
                 try {
-                    tabBuilder.addFloat(fname, desc, nullable,
-                                        fdef, fmin, fmax);
+                    tabBuilder.addFloat(fname, desc, nullable, fdef);
                 } catch (IllegalArgumentException iae) {
                     throw new ShellException(iae.getMessage(), iae);
                 } catch (IllegalCommandException ice) {
@@ -962,10 +863,7 @@ class TableCommand extends CommandWithSubs {
             }
             case STRING:
                 try {
-                    tabBuilder.addString(fname, desc,
-                                         nullable, defVal, min, max,
-                                         (minExcl != null)?(!minExcl):null,
-                                         (maxExcl != null)?(!maxExcl):null);
+                    tabBuilder.addString(fname, desc, nullable, defVal);
                 } catch (IllegalArgumentException iae) {
                     throw new ShellException(iae.getMessage(), iae);
                 } catch (IllegalCommandException ice) {
@@ -1111,11 +1009,6 @@ class TableCommand extends CommandWithSubs {
                 " ["+ NOT_NULLABLE_FLAG_DESC + "] " +
                 eolt +
                 "[" + DEFAULT_FLAG_DESC + "] " +
-                "[" + MAX_FLAG_DESC + "] " +
-                "[" + MIN_FLAG_DESC + "] " +
-                eolt +
-                "[" + MAXEXCL_FLAG_DESC + "] " +
-                "[" + MINEXCL_FLAG_DESC + "] " +
                 "[" + DESC_FLAG_DESC + "] " +
                 eolt +
                 "[" + SIZE_FLAG_DESC + "] " +
@@ -1811,702 +1704,6 @@ class TableCommand extends CommandWithSubs {
         protected String getCommandDescription() {
             return "Exit the building operation, canceling the table(or field)"+
                     eolt + "under construction.";
-        }
-    }
-
-    /* Table size command */
-    static class TableSizeSub extends SubCommand {
-        static final String COMMAND_NAME = "size";
-
-        static final String NROWS_FLAG = "-rows";
-        static final String NROWS_FLAG_DESC = NROWS_FLAG + " <num>";
-        static final String JSON_FLAG = "-json";
-        static final String JSON_FLAG_DESC = JSON_FLAG + " <string>";
-        static final String PRIMARYKEY_FLAG = "-primarykey";
-        static final String PRIMARYKEY_FLAG_DESC = PRIMARYKEY_FLAG;
-        static final String INDEX_FLAG = "-index";
-        static final String INDEX_FLAG_DESC = INDEX_FLAG + " <name>";
-        static final String KEY_PREFIX_FLAG = "-keyprefix";
-        static final String KEY_PREFIX_FLAG_DESC = KEY_PREFIX_FLAG + " <size>";
-
-        static final String COMMAND_SYNTAX =
-            "table " + COMMAND_NAME + " " + TABLE_NAME_FLAG_DESC +
-            " " + JSON_FLAG_DESC + eolt + " [" + NROWS_FLAG_DESC +
-            " [[" + PRIMARYKEY_FLAG_DESC + " | " + INDEX_FLAG_DESC  + "] " +
-            KEY_PREFIX_FLAG_DESC +  "]+]";
-
-        static final String COMMAND_DESCRIPTION  =
-            "Calculates key and data sizes for the specified table using the " +
-            "row" + eolt + "input, optionally estimating the NoSQL DB cache " +
-            "size required for a" + eolt + "specified number of rows of the " +
-            "same format.  Running this command on" + eolt + "multiple sample" +
-            " rows can help determine the necessary cache size for" + eolt +
-            "desired store performance." + eolt +
-            JSON_FLAG + " specifies a sample row used for the " +
-            "calculation." + eolt +
-            NROWS_FLAG + " specifies the number of rows to use for the cache " +
-            "size calculation." + eolt +
-            INDEX_FLAG + " or " + PRIMARYKEY_FLAG + " and " + KEY_PREFIX_FLAG +
-            " are used to specify the expected" + eolt +
-            "commonality of index keys in terms of number of bytes.";
-
-        protected TableSizeSub() {
-            super(COMMAND_NAME, 3);
-        }
-
-        @Override
-        public String execute(String[] args, Shell shell)
-            throws ShellException {
-
-            Shell.checkHelp(args, this);
-            String tableName = null;
-            String jsonString = null;
-            long nRows = 0;
-            boolean calcCacheSize = false;
-            Map<String, Integer> keyPrefixSizes =
-                new HashMap<String, Integer>();
-            int primarykeyPrefix = 0;
-            for (int i = 1; i < args.length; i++) {
-                String arg = args[i];
-                if (TABLE_NAME_FLAG.equals(arg)) {
-                    tableName = Shell.nextArg(args, i++, this);
-                } else if (NROWS_FLAG.equals(arg)) {
-                    nRows = parseLongArg(Shell.nextArg(args, i++, this));
-                } else if (JSON_FLAG.equals(arg)) {
-                    jsonString = Shell.nextArg(args, i++, this);
-                } else if (PRIMARYKEY_FLAG.equals(arg) ||
-                           INDEX_FLAG.equals(arg)) {
-                    String idxName = null;
-                    if (INDEX_FLAG.equals(arg)) {
-                        idxName = Shell.nextArg(args, i++, this);
-                    }
-                    if (++i < args.length) {
-                        arg = args[i];
-                        if (KEY_PREFIX_FLAG.equals(arg)) {
-                            int size = parseIntArg(
-                                Shell.nextArg(args, i++, this));
-                            if (idxName == null) {
-                                primarykeyPrefix = size;
-                            } else {
-                                keyPrefixSizes.put(idxName, size);
-                            }
-                        } else {
-                            invalidArgument(arg + ", " + KEY_PREFIX_FLAG +
-                                            " is reqired");
-                        }
-                    } else {
-                        shell.requiredArg(KEY_PREFIX_FLAG, this);
-                    }
-                } else {
-                    shell.unknownArgument(arg, this);
-                }
-            }
-
-            if (tableName == null) {
-                shell.requiredArg(TABLE_NAME_FLAG, this);
-            }
-            if (jsonString == null) {
-                shell.requiredArg(JSON_FLAG, this);
-            }
-
-            if (nRows > 0) {
-                calcCacheSize = true;
-            }
-            final Table table = findTable(tableName, true, shell);
-            if (!keyPrefixSizes.isEmpty()) {
-                for (Entry<String, Integer> entry: keyPrefixSizes.entrySet()) {
-                    String idxName = entry.getKey();
-                    if (table.getIndex(entry.getKey()) == null) {
-                        throw new ShellException("Index does not exist: " +
-                            idxName + " on table: " + tableName);
-                    }
-                }
-            }
-
-            Row row = null;
-            try {
-                row = table.createRowFromJson(jsonString, false);
-            } catch (IllegalArgumentException iae) {
-                throw new ShellException(iae.getMessage(), iae);
-            }
-            /* Check if the primary key fields are not null. */
-            validatePrimaryKeyFields(row);
-
-            /* Calculate the primary key sizes, data size and index key sizes.*/
-            int primaryKeySize = TableUtils.getKeySize(row);
-            int dataSize = TableUtils.getDataSize(row);
-            Map<String, Integer> indexKeySizes = calcIndexesKeySize(row);
-
-            /* Calculate the DbCacheSize. */
-            Map<String, Properties> cacheInfoMap = null;
-            if (calcCacheSize) {
-                String[] jeParams = getJEConfigParams();
-                cacheInfoMap = calcDbCacheSize((TableImpl)table, nRows,
-                                               primaryKeySize, dataSize,
-                                               primarykeyPrefix, indexKeySizes,
-                                               keyPrefixSizes, jeParams);
-            }
-
-            /* Generate the output information. */
-            StringBuilder sb = new StringBuilder();
-            sb.append(eol);
-            sb.append(genKeySizesInfo(primaryKeySize, dataSize, indexKeySizes));
-            if (cacheInfoMap != null) {
-                sb.append(eol);
-                sb.append(genCacheSizeInfo(cacheInfoMap));
-            }
-            return sb.toString();
-        }
-
-        private void validatePrimaryKeyFields(Row row)
-            throws ShellException {
-
-            List<String> pkFields = row.createPrimaryKey().getFields();
-            for (String field: pkFields) {
-                FieldValue fv = row.get(field);
-                if (fv == null || fv.isNull()) {
-                    throw new ShellException("Primary key field cannot " +
-                                             "be null: " + field);
-                }
-            }
-        }
-
-        private long parseLongArg(String arg)
-            throws ShellException {
-
-            long value = parseLong(arg);
-            if (value <= 0) {
-                invalidArgument(arg);
-            }
-            return value;
-        }
-
-        private int parseIntArg(String arg)
-            throws ShellException {
-
-            int value = parseInt(arg);
-            if (value <= 0) {
-                invalidArgument(arg);
-            }
-            return value;
-        }
-
-        private Map<String, Integer> calcIndexesKeySize(Row row)
-            throws ShellException {
-
-            Map<String, Index> indexes =
-                row.getTable().getIndexes(Index.IndexType.SECONDARY);
-            if (indexes == null || indexes.isEmpty()) {
-                return null;
-            }
-            Map<String, Integer> sizeMap = new LinkedHashMap<String, Integer>();
-            for (Entry<String, Index> entry: indexes.entrySet()) {
-                IndexKey key;
-                try {
-                    key = entry.getValue().createIndexKey(row);
-                } catch (IllegalArgumentException iae) {
-                    throw new ShellException("Failed to create index key " +
-                                             "for " + entry.getKey() + ": " +
-                                             iae.getMessage(), iae);
-                }
-                sizeMap.put(entry.getKey(), TableUtils.getKeySize(key));
-            }
-            return sizeMap;
-        }
-
-        private Map<String, Properties> calcDbCacheSize(TableImpl table,
-                                  long nRows, int primaryKeySize,
-                                  int dataSize, int primaryKeyPrefix,
-                                  Map<String, Integer> indexKeySizes,
-                                  Map<String, Integer> indexKeyPrefixSizes,
-                                  String[] jeParams)
-            throws ShellException {
-
-            Map<String, Properties> map =
-                new LinkedHashMap<String, Properties>();
-
-            /**
-             * Calculate the DbCacheSize for primary db:
-             * Primary db key prefix = length of table id string + 1.
-             *  - table id: the common key prefix of a table.
-             *  - Additional 1 byte: key component delimiter that system added.
-             */
-            primaryKeyPrefix += table.getIdString().length() + 1;
-            Properties props = runDbCacheSize(nRows, primaryKeySize, dataSize,
-                                              primaryKeyPrefix, jeParams, null);
-            map.put("Table", props);
-            if (indexKeySizes == null) {
-                return map;
-            }
-
-            /* Calculate the DbCacheSize for indexes. */
-            for (Entry<String, Index> entry:
-                table.getIndexes(Index.IndexType.SECONDARY).entrySet()) {
-            	
-                final String indexName = entry.getKey();
-                final int keySize = indexKeySizes.get(indexName);
-                int keyPrefixSize = 0;
-                if (indexKeyPrefixSizes != null &&
-                    indexKeyPrefixSizes.containsKey(indexName)) {
-                    keyPrefixSize = indexKeyPrefixSizes.get(indexName);
-                }
-                props = runDbCacheSize(nRows, keySize, primaryKeySize,
-                                       keyPrefixSize, jeParams,
-                                       new String[] {"-duplicates"});
-                map.put(indexName, props);
-            }
-            return map;
-        }
-
-        private Properties runDbCacheSize(long nRows, int keySize,
-                                          int dataSize, int keyPrefixSize,
-                                          String[] jeParams,
-                                          String[] otherParams)
-            throws ShellException {
-
-            String[] args = getDbCacheSizeArgs(keySize, dataSize,
-                                               keyPrefixSize, nRows,
-                                               jeParams, otherParams);
-            /**
-             * Currently, just call DbCacheSize.main() to perform
-             * calculation on required cache size, then parse the output
-             * PrintStream to get the result.
-             */
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            PrintStream ps = new PrintStream(baos);
-            PrintStream old = System.out;
-            System.setOut(ps);
-            try {
-                DbCacheSize.main(args);
-            } catch (Throwable e) {
-                throw new ShellException(e.getMessage());
-            }
-            String ret = baos.toString();
-            System.out.flush();
-            System.setOut(old);
-            Properties props = null;
-            if (ret != null) {
-                props = new Properties();
-                try {
-                    props.load(new StringReader(ret));
-                } catch (IOException e) {
-                    throw new ShellException(e.getMessage(), e);
-                }
-            }
-            return props;
-        }
-
-        /* Get the arguments for DbCacheSize. */
-        private String[] getDbCacheSizeArgs(int keySize, int dataSize,
-                                            int keyPerfixsize, long nRows,
-                                            String[] jeParams,
-                                            String[] otherParams) {
-
-            String[] basicArgs = new String[] {
-                "-records", String.valueOf(nRows),
-                "-key", String.valueOf(keySize),
-                "-data", String.valueOf(dataSize),
-                "-keyprefix", String.valueOf(keyPerfixsize),
-                "-outputproperties",
-                "-replicated"
-            };
-            int nArgs = basicArgs.length;
-            if (jeParams != null) {
-                nArgs += jeParams.length;
-            }
-            if (otherParams != null) {
-                nArgs += otherParams.length;
-            }
-
-            String[] args = null;
-            if (nArgs > basicArgs.length) {
-                args = new String[nArgs];
-                int i = 0;
-                System.arraycopy(basicArgs, 0, args, i, basicArgs.length);
-                i += basicArgs.length;
-                if (jeParams != null) {
-                    System.arraycopy(jeParams, 0, args, i, jeParams.length);
-                    i += jeParams.length;
-                }
-                if (otherParams != null) {
-                    System.arraycopy(otherParams, 0, args, i,
-                                     otherParams.length);
-                }
-            } else {
-                args = basicArgs;
-            }
-            return args;
-        }
-
-        /* Get all JE configuration parameters used in kvstore. */
-        private String[] getJEConfigParams() {
-            ParameterUtils pu = new ParameterUtils(new ParameterMap());
-            Properties props = pu.getRNRepEnvConfig().getProps();
-            if (props == null || props.isEmpty()) {
-                return null;
-            }
-            String[] jeParams = new String[props.size() * 2];
-            Enumeration<?> e = props.propertyNames();
-            int i = 0;
-            while (e.hasMoreElements()) {
-                String key = (String) e.nextElement();
-                jeParams[i++] = "-" + key;
-                jeParams[i++] = props.getProperty(key);
-            }
-            return jeParams;
-        }
-
-        /* Generate the output of key average sizes information. */
-        private String genKeySizesInfo(int keySize, int dataSize,
-                                       Map<String, Integer> indexSizes) {
-
-            String title = "Key and Data Size";
-            Map<String, Integer> map = new LinkedHashMap<String, Integer>();
-            map.put("Primary Key", keySize);
-            map.put("Data", dataSize);
-            if (indexSizes != null) {
-                for (Entry<String, Integer> entry: indexSizes.entrySet()) {
-                    map.put("Index Key of " + entry.getKey(), entry.getValue());
-                }
-            }
-            return formatKeySizesInfo(title, map);
-        }
-
-        /* Format the output for sizes information. */
-        private String formatKeySizesInfo(String title,
-                                          Map<String, Integer> sizes) {
-
-            StringBuilder sb = new StringBuilder();
-            sb.append(formatTableTitle(title));
-            sb.append(formatKeySizesTable(sizes));
-            return sb.toString();
-        }
-
-        private String formatKeySizesTable(Map<String, Integer> sizes) {
-            Column colName = new Column("Name");
-            Column colSize = new Column("Number of Bytes");
-            colName.appendGroupDelimiter();
-            colSize.appendGroupDelimiter();
-            for (Entry<String, Integer> entry: sizes.entrySet()) {
-                /* Object name */
-                colName.appendData(entry.getKey());
-                /* Number of bytes */
-                colSize.appendData(entry.getValue().toString(),
-                                      Column.Align.CENTER);
-            }
-            return formatColumnsOutput(new Column[]{colName, colSize}, "  ");
-        }
-
-        /* Generate the output of DbCacheSize information. */
-        private String genCacheSizeInfo(Map<String, Properties> cacheSizesMap)
-            throws ShellException {
-
-            final String titleCacheOverhead = "Environment Cache Overhead";
-            final String titleCacheSize = "Database Cache Sizes";
-            final String footCacheSize =
-                "For further information see the DbCacheSize javadoc.";
-            final String propNames[] = new String[] {
-                "internalNodes",
-                "internalNodesAndVersions",
-                "allNodes"
-            };
-            final String descriptions[] = new String [] {
-                "Internal nodes only",
-                "Internal nodes and record versions",
-                "Internal nodes and leaf nodes"
-            };
-            final String columnNames[] = new String[] {
-                "Name", "Number of Bytes", "Description"
-            };
-            final String propOverhead = "overhead";
-            final String totalName = "Total";
-            final NumberFormat INT_FORMAT = NumberFormat.getIntegerInstance();
-
-            int nValues = propNames.length;
-            long sum[] = new long[nValues];
-            long cacheOverhead = 0;
-            Map<String, LinkedHashMap<String, String>> result =
-                new LinkedHashMap<String, LinkedHashMap<String, String>>();
-            for (Entry<String, Properties> info: cacheSizesMap.entrySet()) {
-                Properties props = info.getValue();
-                if (cacheOverhead == 0) {
-                    cacheOverhead = getPropLongValue(props, propOverhead);
-                }
-                LinkedHashMap<String, String> map =
-                    new LinkedHashMap<String, String>(nValues);
-                long value[] = new long[nValues];
-                for (int i = 0; i < value.length; i++) {
-                    value[i] = getPropLongValue(props, propNames[i]);
-                    sum[i] += value[i];
-                    map.put(descriptions[i], INT_FORMAT.format(value[i]));
-                }
-                result.put(info.getKey(), map);
-            }
-            /* Added sum information to result. */
-            LinkedHashMap<String, String> map =
-                new LinkedHashMap<String, String>(nValues);
-            for (int i = 0; i < nValues; i++) {
-                map.put(descriptions[i], INT_FORMAT.format(sum[i]));
-            }
-            result.put(totalName, map);
-
-            /* Generate cache overhead information */
-            String output = formatCacheOverHeadInfo(titleCacheOverhead,
-                String.format("%s minimum bytes",
-                              INT_FORMAT.format(cacheOverhead)));
-
-            /* Generate cache size information */
-            output += formatCacheSizeInfo(titleCacheSize, columnNames,
-                                          result, footCacheSize);
-            return output;
-        }
-
-        private long getPropLongValue(Properties props, String propName)
-            throws ShellException {
-
-            String value = props.getProperty(propName);
-            if (value == null) {
-                return 0;
-            }
-            try {
-                return Long.parseLong(props.getProperty(propName));
-            } catch (NumberFormatException nfe) {
-                throw new ShellException("Value of property '" + propName +
-                    "' is not long value: " + value);
-            }
-        }
-
-        /* Format cache overhead information. */
-        private String formatCacheOverHeadInfo(String title, String subHead) {
-
-            StringBuilder sb = new StringBuilder();
-            sb.append(formatTableTitle(title));
-            if (subHead != null) {
-                sb.append(subHead);
-                sb.append(eol);
-                sb.append(eol);
-            }
-            return sb.toString();
-        }
-
-        /* Format cache sizes information. */
-        private String formatCacheSizeInfo(String title, String columnNames[],
-                Map<String, LinkedHashMap<String, String>> result,
-                String foot) {
-
-            StringBuilder sb = new StringBuilder();
-            sb.append(formatTableTitle(title));
-            if (result != null) {
-                sb.append(formatCacheSizeTable(columnNames, result));
-            }
-            if (foot != null) {
-                sb.append(eol);
-                sb.append(foot);
-                sb.append(eol);
-            }
-            return sb.toString();
-        }
-
-        private String formatCacheSizeTable(String[] headers,
-                Map<String, LinkedHashMap<String, String>> result) {
-
-            Column[] columns = new Column[headers.length];
-            for (int i = 0; i < columns.length ; i++) {
-                columns[i] = new Column(headers[i]);
-                columns[i].appendGroupDelimiter();
-            }
-
-            int i = 0;
-            for (Entry<String, LinkedHashMap<String, String>> entry:
-                 result.entrySet()) {
-
-                String key = entry.getKey();
-                HashMap<String, String> map = entry.getValue();
-                boolean appendDelimiter = false;
-                if (++i < result.size()) {
-                    appendDelimiter = true;
-                }
-
-                /* Object name */
-                Column column = columns[0];
-                for (int j = 0; j < map.size(); j++) {
-                    if (j == map.size()/2) {
-                        column.appendData(key);
-                    } else {
-                        column.appendData("");
-                    }
-                }
-                if (appendDelimiter) {
-                    column.appendGroupDelimiter();
-                }
-
-                /* Number of bytes */
-                column = columns[1];
-                for (String text: map.values()) {
-                    column.appendData(text, Column.Align.RIGHT);
-                }
-                if (appendDelimiter) {
-                    column.appendGroupDelimiter();
-                }
-
-                /* Description */
-                column = columns[2];
-                for (String text: map.keySet()) {
-                    column.appendData(text);
-                }
-                if (appendDelimiter) {
-                    column.appendGroupDelimiter();
-                }
-            }
-            return formatColumnsOutput(columns, "  ");
-        }
-
-        private String formatTableTitle(String title) {
-            final String appending = "===";
-            return String.format("%s %s %s" + eol + eol,
-                                 appending, title, appending);
-        }
-
-        private String formatColumnsOutput(Column columns[],
-                                           final String separator) {
-            StringBuilder sb = new StringBuilder();
-            int nRows = columns[0].getSize();
-            for (int i = 0; i < nRows; i++) {
-                for (Column col: columns) {
-                    sb.append(col.getFormatedText(i));
-                    sb.append(separator);
-                }
-                sb.append(eol);
-            }
-            return sb.toString();
-        }
-
-        /**
-         * Class Column is to store elements of a column in table.
-         * For each cell in a column, it contains the text and alignment
-         * information.
-         */
-        private static class Column{
-            private final static char GROURP_SEP = '-';
-            private final List<Cell> cells;
-            private int width;
-            private final char separator;
-
-            static enum Align{
-                LEFT,
-                RIGHT,
-                CENTER
-            }
-            static class Cell {
-                static final Align ALIGN_DEF = Align.LEFT;
-                private final String text;
-                private final Align align;
-                private final boolean isGroupSep;
-
-                Cell(String text, Align align) {
-                    this(text, align, false);
-                }
-
-                Cell(String text, Align align, boolean isGroupSep) {
-                    this.text = text;
-                    this.align = ((align == null)? ALIGN_DEF : align);
-                    this.isGroupSep = isGroupSep;
-                }
-
-                String getText() {
-                    return text;
-                }
-
-                Align getAlign() {
-                    return align;
-                }
-
-                boolean isGroupSepartor() {
-                    return isGroupSep;
-                }
-            }
-
-            Column(String title) {
-                this(title, GROURP_SEP);
-            }
-
-            Column(String title, char groupSeparator) {
-                cells = new ArrayList<Cell>();
-                width = 0;
-                appendData(title, Align.CENTER);
-                separator = groupSeparator;
-            }
-
-            void appendData(String text) {
-                appendData(text, null);
-            }
-
-            void appendData(String text, Align align) {
-                if (text == null) {
-                    text = "";
-                }
-                cells.add(new Cell(text, align));
-                if (text.length() > width) {
-                    width = text.length();
-                }
-            }
-
-            void appendGroupDelimiter() {
-                cells.add(new Cell("", null, true));
-            }
-
-            int getSize() {
-                return cells.size();
-            }
-
-            String getFormatedText(int index) {
-                if (index < 0 || index >= cells.size()) {
-                    return "";
-                }
-
-                Cell cell = cells.get(index);
-                String text = cell.getText();
-                switch (cell.getAlign()) {
-                case LEFT:
-                    text = padRight(text, width);
-                    break;
-                case RIGHT:
-                    text = padLeft(text, width);
-                    break;
-                case CENTER:
-                    int padding = width - text.length();
-                    if (padding <= 0) {
-                        return text;
-                    }
-                    int left = padding / 2 + text.length();
-                    text = padRight(padLeft(text, left), width);
-                    break;
-                default:
-                    break;
-                }
-                if (cell.isGroupSepartor()) {
-                    return text.replace(' ', separator);
-                }
-                return text;
-            }
-
-            private String padLeft(String s, int n) {
-                return String.format("%1$" + n + "s", s);
-            }
-
-            private String padRight(String s, int n) {
-                return String.format("%1$-" + n + "s", s);
-            }
-        }
-
-        @Override
-        protected String getCommandSyntax() {
-            return COMMAND_SYNTAX;
-        }
-
-        @Override
-        protected String getCommandDescription() {
-            return COMMAND_DESCRIPTION;
         }
     }
 

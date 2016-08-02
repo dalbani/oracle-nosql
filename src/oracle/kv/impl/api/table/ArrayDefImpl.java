@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,35 +43,35 @@
 
 package oracle.kv.impl.api.table;
 
-import static oracle.kv.impl.api.table.TableJsonUtils.COLLECTION;
-
 import java.util.ListIterator;
 
+import com.sleepycat.persist.model.Persistent;
 import oracle.kv.impl.util.JsonUtils;
 import oracle.kv.table.ArrayDef;
 import oracle.kv.table.FieldDef;
-
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.ObjectNode;
 
-import com.sleepycat.persist.model.Persistent;
+import static oracle.kv.impl.api.table.TableJsonUtils.COLLECTION;
 
 /**
  * ArrayDefImpl implements the ArrayDef interface.
  */
 @Persistent(version=1)
-class ArrayDefImpl extends FieldDefImpl implements ArrayDef {
+public class ArrayDefImpl extends FieldDefImpl implements ArrayDef {
 
     private static final long serialVersionUID = 1L;
+
     private final FieldDefImpl element;
 
-    ArrayDefImpl(FieldDefImpl element,
-                 String description) {
+    ArrayDefImpl(FieldDefImpl element, String description) {
+
         super(FieldDef.Type.ARRAY, description);
         if (element == null) {
             throw new IllegalArgumentException
                 ("Array has no field and cannot be built");
         }
+
         this.element = element;
     }
 
@@ -92,29 +92,18 @@ class ArrayDefImpl extends FieldDefImpl implements ArrayDef {
         element = null;
     }
 
-    @Override
-    public FieldDef getElement() {
-        return element;
-    }
-
-    @Override
-    public boolean isArray() {
-        return true;
-    }
-
-    @Override
-    public ArrayDef asArray() {
-        return this;
-    }
-
-    /**
-     * Arrays are allowed to be indexed if the array contain a type that is
-     * allowed in an index.
+    /*
+     * Public api methods from Object and FieldDef
      */
+
     @Override
-    public boolean isValidIndexField() {
-        return (element.isValidIndexField() &&
-                !element.isArray() && !element.isMap());
+    public ArrayDefImpl clone() {
+        return new ArrayDefImpl(this);
+    }
+
+    @Override
+    public int hashCode() {
+        return element.hashCode();
     }
 
     @Override
@@ -126,18 +115,103 @@ class ArrayDefImpl extends FieldDefImpl implements ArrayDef {
     }
 
     @Override
-    public int hashCode() {
-        return element.hashCode();
+    public boolean isArray() {
+        return true;
     }
 
     @Override
-    public ArrayDefImpl clone() {
-        return new ArrayDefImpl(this);
+    public boolean isComplex() {
+        return true;
+    }
+
+    @Override
+    public ArrayDef asArray() {
+        return this;
     }
 
     @Override
     public ArrayValueImpl createArray() {
         return new ArrayValueImpl(this);
+    }
+
+    /*
+     * Public api methods from ArrayDef
+     */
+
+    @Override
+    public FieldDef getElement() {
+        return element;
+    }
+
+    /*
+     * FieldDefImpl internal api methods
+     */
+
+    @Override
+    public boolean isPrecise() {
+        return element.isPrecise();
+    }
+
+    @Override
+    public boolean isSubtype(FieldDefImpl superType) {
+
+        if (superType.isArray()) {
+            ArrayDefImpl supArray = (ArrayDefImpl)superType;
+            return element.isSubtype(supArray.element);
+        } else if (superType.isAny()) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    /**
+     * Find the FieldDef defined by the list of field names.
+     *
+     * Arrays are odd in that they have no field names, so when this function is
+     * called its own name has already been consumed by the caller so the name
+     * is passed directly to the element.
+     *
+     * If, somehow, this is called when the element is a simple type it's
+     * findField method will return null, which is handled by the caller.
+     *
+     * Examples:
+     * arrayField.a -- address the "a" field of the array's element, which must
+     *    be a map or record
+     * arrayField.a.b address the "b" field of the field contained in the "a"
+     *    field of the array's element.
+     */
+    @Override
+    FieldDefImpl findField(ListIterator<String> fieldPath) {
+
+        /*
+         * Peek at the current component.  If it is [], consume it,
+         * and keep going. This allows operations to target the element
+         * itself vs a field contained in the element.
+         */
+        String component = fieldPath.next();
+        if (MapDefImpl.isMapValueTag(component)) {
+            if (!fieldPath.hasNext()) {
+                return element;
+            }
+        } else {
+            /* restore the state for the element to use */
+            fieldPath.previous();
+        }
+
+        /*
+         * Do not consume the current name, and pass everything to the element.
+         */
+        return element.findField(fieldPath);
+    }
+
+    /**
+     * If called for an array the fieldName applies to a field in the array's
+     * element, so pass it on.
+     */
+    @Override
+    FieldDefImpl findField(String fieldName) {
+        return element.findField(fieldName);
     }
 
     @Override
@@ -185,54 +259,5 @@ class ArrayDefImpl extends FieldDefImpl implements ArrayDef {
                 ("Default value for array must be null or an empty array");
         }
         return createArray();
-    }
-
-   /**
-     * Find the FieldDef defined by the list of field names.
-     *
-     * Arrays are odd in that they have no field names, so when this function is
-     * called its own name has already been consumed by the caller so the name
-     * is passed directly to the element.
-     *
-     * If, somehow, this is called when the element is a simple type it's
-     * findField method will return null, which is handled by the caller.
-     *
-     * Examples:
-     * arrayField.a -- address the "a" field of the array's element, which must
-     *    be a map or record
-     * arrayField.a.b address the "b" field of the field contained in the "a"
-     *    field of the array's element.
-     */
-    @Override
-    FieldDefImpl findField(ListIterator<String> fieldPath) {
-
-        /*
-         * Peek at the current component.  If it is [], consume it,
-         * and keep going. This allows operations to target the element
-         * itself vs a field contained in the element.
-         */
-        String component = fieldPath.next();
-        if (MapDefImpl.isMapValueTag(component)) {
-            if (!fieldPath.hasNext()) {
-                return element;
-            }
-        } else {
-            /* restore the state for the element to use */
-            fieldPath.previous();
-        }
-
-        /*
-         * Do not consume the current name, and pass everything to the element.
-         */
-        return element.findField(fieldPath);
-    }
-
-    /**
-     * If called for an array the fieldName applies to a field in the array's
-     * element, so pass it on.
-     */
-    @Override
-    FieldDefImpl findField(String fieldName) {
-        return element.findField(fieldName);
     }
 }

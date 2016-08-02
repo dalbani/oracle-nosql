@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -66,18 +66,21 @@ public class StartAddTextIndex extends UpdateMetadata<TableMetadata> {
     private final String indexName;
     private final String tableName;
     private final AnnotatedField[] ftsFields;
+    private final Map<String,String> properties;
     private final String description;
 
     @SuppressWarnings("unused")
     public StartAddTextIndex(MetadataPlan<TableMetadata> plan,
-                         String indexName,
-                         String tableName,
-                         AnnotatedField[] ftsFields,
-                         String description) {
+                             String indexName,
+                             String tableName,
+                             AnnotatedField[] ftsFields,
+                             Map<String,String> properties,
+                             String description) {
         super(plan);
         this.indexName = indexName;
         this.tableName = tableName;
         this.ftsFields = ftsFields;
+        this.properties = properties;
         this.description = description;
 
         /*
@@ -107,7 +110,8 @@ public class StartAddTextIndex extends UpdateMetadata<TableMetadata> {
         IndexImpl.populateMapFromAnnotatedFields(Arrays.asList(ftsFields),
                                                  fieldNames,
                                                  annotations);
-        new IndexImpl(indexName, table, fieldNames, annotations, description);
+        new IndexImpl(indexName, table, fieldNames, annotations,
+                      properties, description);
     }
 
     @Override
@@ -127,7 +131,8 @@ public class StartAddTextIndex extends UpdateMetadata<TableMetadata> {
                             tableName,
                             new ArrayList<AnnotatedField>
                                 (Arrays.asList(ftsFields)),
-                        description);
+                            properties,
+                            description);
             plan.getAdmin().saveMetadata(md, plan);
         }
         return md;

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,6 +43,7 @@
 
 package oracle.kv.impl.admin.topo;
 
+import java.io.Serializable;
 import java.text.DateFormat;
 import java.util.Date;
 
@@ -56,18 +57,20 @@ import com.sleepycat.persist.model.Entity;
 import com.sleepycat.persist.model.PrimaryKey;
 
 /**
- * A RealizedTopology is created as a byproduct when a topology changing plan 
+ * A RealizedTopology is created as a byproduct when a topology changing plan
  * executes. It's a snapshot of the changes created by the plan.
  */
 
 @Entity
-public class RealizedTopology {
+public class RealizedTopology implements Serializable {
     
+    private static final long serialVersionUID = 1;
+
     @PrimaryKey
     private Long deployStartMillis;
 
     /**
-     * Some, but not all RealizedTopologies are created by plans that take a 
+     * Some, but not all RealizedTopologies are created by plans that take a
      * TopologyCandidate as a parameter. If one has been provided to the plan,
      * it's saved here as part of the audit trail.
      */
@@ -82,7 +85,7 @@ public class RealizedTopology {
     }
 
     /**
-     * The very first initial empty topology 
+     * The very first initial empty topology
      */
     public RealizedTopology(String storeName) {
         topology = new Topology(storeName);

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -74,7 +74,10 @@ import oracle.kv.ValueBinding;
  * {@link GenericRecord}, a {@link JsonRecord}, or a {@link RawRecord}.
  *
  * @since 2.0
+ *
+ * @deprecated as of 4.0, use the table API instead.
  */
+@Deprecated
 public interface AvroBinding<T> extends ValueBinding<T> {
 
     /**

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,7 +45,9 @@ package oracle.kv.table;
 
 /**
  * ReturnRow is used with put and delete operations to return the previous row
- * value and version.
+ * value and version. If either property is returned the expiration time for the
+ * row will also be valid. If neither value nor version is returned expiration
+ * time is undefined.
  * <p>
  * A ReturnRow instance may be used as the {@code
  * prevRecord} parameter to methods such as {@link TableAPI#put(Row,
@@ -57,7 +59,8 @@ package oracle.kv.table;
  * properties are in cache.
  * </p>
  * <p>Note that because both properties are optional, the version property,
- * value property, or both properties may be null.</p>
+ * value property, or both properties may be null, in which case expiration
+ * time is undefined.</p>
  *
  * @since 3.0
  */
@@ -130,6 +133,3 @@ public interface ReturnRow extends Row {
         }
     }
 }
-
-
-

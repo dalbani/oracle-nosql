@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -63,7 +63,6 @@ import oracle.kv.impl.api.rgstate.RepNodeState;
 import oracle.kv.impl.api.table.TableChangeList;
 import oracle.kv.impl.api.table.TableImpl;
 import oracle.kv.impl.api.table.TableMetadata;
-import oracle.kv.impl.api.table.TableMetadataProxy;
 import oracle.kv.impl.fault.OperationFaultException;
 import oracle.kv.impl.fault.RNUnavailableException;
 import oracle.kv.impl.metadata.Metadata;
@@ -86,26 +85,32 @@ import oracle.kv.impl.security.login.LoginManager;
 import oracle.kv.impl.security.metadata.SecurityMetadata;
 import oracle.kv.impl.security.metadata.SecurityMetadata.KerberosInstance;
 import oracle.kv.impl.security.metadata.SecurityMetadataInfo;
-import oracle.kv.impl.security.metadata.SecurityMetadataProxy;
 import oracle.kv.impl.security.util.SNKrbInstance;
 import oracle.kv.impl.security.util.KerberosPrincipals;
 import oracle.kv.impl.test.TestStatus;
+import oracle.kv.impl.tif.TextIndexFeederManager;
+import oracle.kv.impl.tif.TextIndexFeederTopoTracker;
 import oracle.kv.impl.topo.Partition;
 import oracle.kv.impl.topo.PartitionId;
 import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.Topology;
-import oracle.kv.impl.topo.TopologyServerUtil;
+import oracle.kv.impl.topo.TopologyHolder;
 import oracle.kv.impl.util.TxnUtil;
+import oracle.kv.impl.util.SerializationUtil;
 import oracle.kv.impl.util.server.LoggerUtils;
 import oracle.kv.table.Index;
 
+import com.sleepycat.bind.tuple.LongBinding;
 import com.sleepycat.je.Database;
 import com.sleepycat.je.DatabaseConfig;
+import com.sleepycat.je.DatabaseEntry;
 import com.sleepycat.je.DatabaseException;
 import com.sleepycat.je.DbInternal;
 import com.sleepycat.je.Environment;
 import com.sleepycat.je.EnvironmentFailureException;
+import com.sleepycat.je.LockMode;
+import com.sleepycat.je.OperationStatus;
 import com.sleepycat.je.ReplicaConsistencyPolicy;
 import com.sleepycat.je.SecondaryDatabase;
 import com.sleepycat.je.Transaction;
@@ -123,10 +128,9 @@ import com.sleepycat.je.rep.UnknownMasterException;
 import com.sleepycat.je.rep.impl.RepImpl;
 import com.sleepycat.je.rep.impl.networkRestore.NetworkBackupStats;
 import com.sleepycat.persist.EntityStore;
+import com.sleepycat.persist.PrimaryIndex;
 import com.sleepycat.persist.StoreConfig;
 import com.sleepycat.persist.StoreNotFoundException;
-import com.sleepycat.persist.model.AnnotationModel;
-import com.sleepycat.persist.model.EntityModel;
 
 /**
  * A RepNode represents the data stored in a particular node. It is a member of
@@ -149,11 +153,22 @@ public class RepNode implements TopologyManager.PostUpdateListener,
     /* DB operation delays */
     private static final long RETRY_TIME_MS = 500;
 
-    /**
-     * Metadata store name. Note due to backward compatability, the old
-     * topology name is reused.
+    /* Name of the non-replicated database persisting the topology */
+    private static final String TOPOLOGY_DB_NAME = "TopologyDatabase";
+
+    /*
+     * Currently only one topology is stored with the key of 0. If this
+     * changes then we need to add more key constants or generate keys/entries
+     * at runtime.
      */
-    private static final String METADATA_STORE_NAME = "TopologyEntityStore";
+    private static final Long TOPOLOGY_KEY = new Long(0);
+    private static final DatabaseEntry TOPOLOGY_KEY_ENTRY = new DatabaseEntry();
+    static {
+        LongBinding.longToEntry(TOPOLOGY_KEY, TOPOLOGY_KEY_ENTRY);
+    }
+
+    /* Original DPL store holding the topology. */
+    private static final String TOPOLOGY_DPL_STORE_NAME = "TopologyEntityStore";
 
     private RepNodeId repNodeId;
 
@@ -195,6 +210,16 @@ public class RepNode implements TopologyManager.PostUpdateListener,
      * Manages the secondary database handles.
      */
     private TableManager tableManager;
+
+    /*
+     * Manage TextIndexFeeder within RepNode
+     */
+    private TextIndexFeederManager textIndexFeederManager;
+
+    /*
+     * Topology tracker for text index feeder
+     */
+    private TextIndexFeederTopoTracker textIndexFeederTopoTracker;
 
     /**
      * The manager for the environment holding all the databases for the
@@ -287,6 +312,14 @@ public class RepNode implements TopologyManager.PostUpdateListener,
             tableManager = new TableManager(this, params);
         }
 
+        /*
+         * tif relies on tableManager to get the text indices, so it must be
+         * initialized after tableManager is initialized.
+         */
+        if (textIndexFeederManager == null) {
+            textIndexFeederManager = new TextIndexFeederManager(this, params);
+        }
+
         /* Set up the security metadata manager */
         if (securityMDManager == null) {
             securityMDManager = new SecurityMetadataManager(
@@ -311,6 +344,15 @@ public class RepNode implements TopologyManager.PostUpdateListener,
 
             topoManager.addPreUpdateListener(topoSignatureManager);
             topoManager.addPostUpdateListener(topoSignatureManager);
+        }
+
+        if (textIndexFeederTopoTracker == null) {
+            textIndexFeederTopoTracker =
+                new TextIndexFeederTopoTracker(this,
+                                               textIndexFeederManager
+                                                   .getTextIndexFeeder(),
+                                               logger);
+            topoManager.addPostUpdateListener(textIndexFeederTopoTracker);
         }
     }
 
@@ -432,29 +474,21 @@ public class RepNode implements TopologyManager.PostUpdateListener,
                         "Failed in persistence of " + newTopology.getType() +
                         " metadata, environment not valid");
             }
+            updateDbHandles(env, true);
+
             try {
-                updateDbHandles(env, true);
+                writeTopology(newTopology, env, null);
 
-                EntityStore estore = null;
-                try {
-                    estore = getMetadataStore(env, true);
-                    TopologyServerUtil.persist(newTopology, estore, null);
-
-                    /*
-                     * Ensure it's in stable storage, since the database is
-                     * non-transactional. For unit tests, use WRITE_NO_SYNC
-                     * rather than SYNC, for improved performance.
-                     */
-                    final boolean flushSync =!TestStatus.isWriteNoSyncAllowed();
-                    env.flushLog(flushSync);
-                    logger.info("Topology stored seq#: " +
-                                newTopology.getSequenceNumber());
-                    return false;
-                } finally {
-                    if (estore != null) {
-                        TxnUtil.close(logger, env, estore, "topology");
-                    }
-                }
+                /*
+                 * Ensure it's in stable storage, since the database is
+                 * non-transactional. For unit tests, use WRITE_NO_SYNC
+                 * rather than SYNC, for improved performance.
+                 */
+                final boolean flushSync = !TestStatus.isWriteNoSyncAllowed();
+                env.flushLog(flushSync);
+                logger.log(Level.INFO, "Topology stored seq#: {0}",
+                           newTopology.getSequenceNumber());
+                return false;
             } catch (ReplicaWriteException | UnknownMasterException rwe) {
                 lastException = rwe;
             } catch (RuntimeException rte) {
@@ -575,6 +609,13 @@ public class RepNode implements TopologyManager.PostUpdateListener,
     }
 
     /**
+     * Returns the TextIndexFeederManager for this RepNode.
+     */
+    public TextIndexFeederManager getTextIndexFeederManager() {
+        return textIndexFeederManager;
+    }
+
+    /**
      * Sends a NOP to a node in the specified group. It attempts to send the NOP
      * to the master of that group if known. Otherwise it sends it to a random
      * node in the group.
@@ -665,6 +706,7 @@ public class RepNode implements TopologyManager.PostUpdateListener,
         migrationManager.noteStateChange(stateChangeEvent);
         tableManager.noteStateChange(stateChangeEvent);
         masterBalanceManager.noteStateChange(stateChangeEvent);
+        textIndexFeederManager.noteStateChange(stateChangeEvent);
 
         /* Inform statistics collector about state change event */
         if (repNodeService != null) {
@@ -744,6 +786,7 @@ public class RepNode implements TopologyManager.PostUpdateListener,
 
         migrationManager.shutdown(force);
         tableManager.shutdown();
+        textIndexFeederManager.shutdown(false);
         closeDbHandles(force);
 
         if (envManager != null) {
@@ -915,58 +958,30 @@ public class RepNode implements TopologyManager.PostUpdateListener,
          * Update the topology manager with a saved copy of the topology
          * from the store.
          */
-        EntityStore estore = null;
-        try {
-            estore = getMetadataStore(env, false);
+        final Topology topo = readTopology(env);
 
-            final Topology topo = TopologyServerUtil.fetch(estore, null);
-
-            /* The local topo could be null if there was a rollback */
-            if (topo == null) {
-                logger.info("Store did not contain a topology");
-            } else if (topoManager.update(topo)) {
-                logger.log(Level.INFO,
-                           "Topology fetched sequence#: {0}, updated " +
-                           "topology seq# {1}",
-                           new Object[]{topo.getSequenceNumber(),
-                                        topoManager.getTopology().
-                                                        getSequenceNumber()});
-            }
-        } catch (StoreNotFoundException sne) {
-            logger.info("Environment does not contain topology store.");
-        } finally {
-            if (estore != null) {
-                estore.close();
-            }
+        /* The local topo could be null if there was a rollback */
+        if (topo == null) {
+            logger.info("Store did not contain a topology");
+        } else if (topoManager.update(topo)) {
+            logger.log(Level.INFO,
+                       "Topology fetched sequence#: {0}, updated " +
+                       "topology seq# {1}",
+                       new Object[]{topo.getSequenceNumber(),
+                                    topoManager.getTopology().
+                                                    getSequenceNumber()});
         }
 
         /* Start thread to push HA state changes to the SNA. */
         masterBalanceManager.startTracker();
         migrationManager.startTracker();
         tableManager.startTracker();
-
+        textIndexFeederManager.startTracker();
         return env;
     }
 
     ReplicationNetworkConfig getRepNetConfig() {
         return envManager.getRepNetConfig();
-    }
-
-    /**
-     * Returns the EntityStore used by this RN. It's the caller's
-     * responsibility to close the handle.
-     */
-    private EntityStore getMetadataStore(Environment env, boolean allowCreate) {
-        /* Proxies for non-DLP metadata objects would be added here */
-	final EntityModel model = new AnnotationModel();
-        model.registerClass(TableMetadataProxy.class);
-        model.registerClass(SecurityMetadataProxy.class);
-        final StoreConfig stConfig = new StoreConfig();
-        stConfig.setAllowCreate(allowCreate);
-        stConfig.setTransactional(false);
-        stConfig.setModel(model);
-        stConfig.setReplicated(false);
-        return new EntityStore(env, METADATA_STORE_NAME, stConfig);
     }
 
     public RepNodeId getRepNodeId() {
@@ -1164,31 +1179,14 @@ public class RepNode implements TopologyManager.PostUpdateListener,
      * @param localVersion the version currently in the environment or null
      */
     void versionChange(Environment env, KVVersion localVersion) {
-
-        EntityStore estore = null;
-        try {
-            estore = getMetadataStore(env, false);
-
-            final Topology topo = TopologyServerUtil.fetch(estore, null);
-
-            if (topo == null) {
-                return;
-            }
-            if (topo.upgrade()) {
-                TopologyServerUtil.persist(topo, estore, null);
-            } else {
-                TopologyManager.checkVersion(logger, topo);
-            }
-        } catch (StoreNotFoundException sne) {
-
-            /*
-             * Environment does not yet contain a topology store. Nothing to
-             * upgrade.
-             */
-        } finally {
-            if (estore != null) {
-                estore.close();
-            }
+        final Topology topo = readTopology(env);
+        if (topo == null) {
+            return;
+        }
+        if (topo.upgrade()) {
+            writeTopology(topo, env, null);
+        } else {
+            TopologyManager.checkVersion(logger, topo);
         }
     }
 
@@ -1450,5 +1448,128 @@ public class RepNode implements TopologyManager.PostUpdateListener,
                 new SNKrbInstance[instanceNames.size()]));
         }
         return new KerberosPrincipals(null);
+    }
+
+    /**
+     * Reads the topology from the RNs persistent store. If the topology has
+     * not yet been initialized null is returned.
+     *
+     * @return the topology or null
+     */
+    private synchronized Topology readTopology(Environment env) {
+        Topology topo = null;
+        try (final Database db = getTopoDatabase(env)) {
+            final DatabaseEntry value = new DatabaseEntry();
+            final OperationStatus status = db.get(null, TOPOLOGY_KEY_ENTRY,
+                                                  value,
+                                                  LockMode.READ_UNCOMMITTED);
+            if (status == OperationStatus.SUCCESS) {
+                topo = SerializationUtil.getObject(value.getData(),
+                                                   Topology.class);
+            }
+        }
+
+        /*
+         * Try opening the DPL store to see if this was an upgrade. If so, read
+         * the topology from DPL, write it to the database if that was empty,
+         * and then remove the DPL store.
+         */
+        final TransactionConfig config = new TransactionConfig();
+        config.setLocalWrite(true);
+        Transaction txn = env.beginTransaction(null, config);
+        try {
+            final Topology dplTopo;
+            try (final EntityStore eStore = getTopoDPLStore(env)) {
+                final PrimaryIndex<String, TopologyHolder> ti =
+                     eStore.getPrimaryIndex(String.class, TopologyHolder.class);
+                final TopologyHolder holder = ti.get(txn,
+                                                     TopologyHolder.getKey(),
+                                                     LockMode.READ_UNCOMMITTED);
+                dplTopo = (holder == null) ? null : holder.getTopology();
+            } catch (StoreNotFoundException snfe) {
+                return topo;
+            }
+
+            /*
+             * If there was a topology in the DPL store, save it in the DB if
+             * none was there, or it is newer.
+             */
+            if ((dplTopo != null) &&
+                ((topo == null) ||
+                    (topo.getSequenceNumber() < dplTopo.getSequenceNumber()))) {
+                topo = dplTopo;
+                logger.log(Level.INFO,
+                           "Transfering topology #{0} from DPL store",
+                           topo.getSequenceNumber());
+                writeTopology(topo, env, txn);
+            }
+            removeDPLStore(env, txn);
+            txn.commit();
+            txn = null;
+        } finally {
+            TxnUtil.abort(txn);
+        }
+        return topo;
+    }
+
+    /**
+     * Writes the specified topology to the RNs persistent store.
+     *
+     * @param topo the topology to store
+     */
+    private synchronized void writeTopology(Topology topo, Environment env,
+                                            Transaction txn){
+        try (final Database db = getTopoDatabase(env)) {
+            final DatabaseEntry value =
+                            new DatabaseEntry(SerializationUtil.getBytes(topo));
+            db.put(txn, TOPOLOGY_KEY_ENTRY, value);
+        }
+    }
+
+    /**
+     * Gets the non-replicated database used to persist the topology. If the
+     * database does not exist, one will be created. It's the caller's
+     * responsibility to close the handle.
+     */
+    private Database getTopoDatabase(Environment env) {
+        assert Thread.holdsLock(this);
+        final DatabaseConfig dbConfig = new DatabaseConfig();
+        dbConfig.setAllowCreate(true);
+        dbConfig.setTransactional(true);
+        dbConfig.setReplicated(false);
+        return env.openDatabase(null, TOPOLOGY_DB_NAME, dbConfig);
+    }
+
+    /**
+     * Gets the EntityStore used by earlier releases to store the topology.
+     * It's the caller's responsibility to close the handle. If the EntityStore
+     * store does not exist, StoreNotFoundException is thrown.
+     *
+     * @throws StoreNotFoundException if the EntityStore does not exist
+     */
+    private EntityStore getTopoDPLStore(Environment env)
+        throws StoreNotFoundException {
+        assert Thread.holdsLock(this);
+        final StoreConfig stConfig = new StoreConfig();
+        stConfig.setAllowCreate(false);
+        stConfig.setTransactional(true);
+        stConfig.setReplicated(false);
+        stConfig.setReadOnly(true);
+        return new EntityStore(env, TOPOLOGY_DPL_STORE_NAME, stConfig);
+    }
+
+    /**
+     * Removes the databases associated with the DPL store. See EntityStore
+     * Javadoc for an explanation of this code.
+     */
+    private void removeDPLStore(Environment env, Transaction txn) {
+        assert Thread.holdsLock(this);
+        logger.info("Removing DPL store");
+        final String prefix = "persist#" + TOPOLOGY_DPL_STORE_NAME + "#";
+        for (String dbName : env.getDatabaseNames()) {
+            if (dbName.startsWith(prefix)) {
+                env.removeDatabase(txn, dbName);
+            }
+        }
     }
 }

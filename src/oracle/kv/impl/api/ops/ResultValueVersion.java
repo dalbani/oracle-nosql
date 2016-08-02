@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -46,19 +46,23 @@ package oracle.kv.impl.api.ops;
 import oracle.kv.Version;
 
 /**
- * Holds Value bytes and Version during result processing.
+ * Holds Value bytes, Version, and expiration time during result processing.
  */
 class ResultValueVersion {
 
     private final byte[] valueBytes;
     private final Version version;
+    private final long expirationTime;
 
     /**
      * Used internally to create an object with a value and version.
      */
-    public ResultValueVersion(byte[] valueBytes, Version version) {
+    public ResultValueVersion(byte[] valueBytes,
+                              Version version,
+                              long expirationTime) {
         this.valueBytes = valueBytes;
         this.version = version;
+        this.expirationTime = expirationTime;
     }
 
     public byte[] getValueBytes() {
@@ -67,5 +71,9 @@ class ResultValueVersion {
 
     public Version getVersion() {
         return version;
+    }
+
+    public long getExpirationTime() {
+        return expirationTime;
     }
 }

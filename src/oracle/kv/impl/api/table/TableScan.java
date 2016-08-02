@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,20 +43,22 @@
 
 package oracle.kv.impl.api.table;
 
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
 
 import oracle.kv.Depth;
-import oracle.kv.ParallelScanIterator;
+import oracle.kv.KeyValueVersion;
 import oracle.kv.StoreIteratorConfig;
 import oracle.kv.ValueVersion;
+import oracle.kv.Version;
 import oracle.kv.impl.api.KVStoreImpl;
+import oracle.kv.impl.api.KeySerializer;
 import oracle.kv.impl.api.Request;
 import oracle.kv.impl.api.StoreIteratorParams;
 import oracle.kv.impl.api.ops.Result;
+import oracle.kv.impl.api.ops.ResultKey;
 import oracle.kv.impl.api.ops.ResultKeyValueVersion;
 import oracle.kv.impl.api.ops.TableIterate;
 import oracle.kv.impl.api.ops.TableKeysIterate;
@@ -73,7 +75,7 @@ import oracle.kv.table.TableIteratorOptions;
  * Implementation of the table iterators. These iterators are partition- vs
  * shard-based. They extend the parallel scan code.
  */
-class TableScan {
+public class TableScan {
 
     /* Prevent construction */
     private TableScan() {}
@@ -126,9 +128,8 @@ class TableScan {
                                               targetTables);
         }
 
-        return new TableIteratorWrapper<Row>
-            (new ParallelScanIteratorImpl<Row>(apiImpl.getStore(),
-                                               config, params) {
+        return new ParallelScanIteratorImpl<Row>(apiImpl.getStore(),
+                                                 config, params) {
             @Override
             protected TableIterate generateGetterOp(byte[] resumeKey) {
                 return new TableIterate(params,
@@ -139,8 +140,10 @@ class TableScan {
 
             @Override
             protected void convertResult(Result result, List<Row> elementList) {
+
                 final List<ResultKeyValueVersion> byteKeyResults =
                     result.getKeyValueVersionList();
+
                 final Row[] rows = convertTableRowResults(apiImpl,
                                                           byteKeyResults,
                                                           key.getTable(),
@@ -152,22 +155,10 @@ class TableScan {
             }
 
             @Override
-            protected byte[] extractResumeKey(Result result,
-                                              List<Row> elementList) {
-                final List<ResultKeyValueVersion> byteKeyResults =
-                    result.getKeyValueVersionList();
-                final int cnt = byteKeyResults.size();
-                if (cnt == 0) {
-                    return null;
-                }
-                return byteKeyResults.get(cnt - 1).getKeyBytes();
-            }
-
-            @Override
             protected int compare(Row one, Row two) {
                 return one.compareTo(two);
             }
-        });
+        };
     }
 
     /**
@@ -195,16 +186,16 @@ class TableScan {
                             iterateOptions.getMaxConcurrentRequests());
         }
 
-        final StoreIteratorParams params =
-            new StoreIteratorParams(TableAPIImpl.getDirection(iterateOptions,
-                                                              key),
-                                    TableAPIImpl.getBatchSize(iterateOptions),
-                                    key.getKeyBytes(),
-                                    TableAPIImpl.makeKeyRange(key, getOptions),
-                                    Depth.PARENT_AND_DESCENDANTS,
-                                    TableAPIImpl.getConsistency(iterateOptions),
-                                    TableAPIImpl.getTimeout(iterateOptions),
-                                   TableAPIImpl.getTimeoutUnit(iterateOptions));
+        final StoreIteratorParams params = new StoreIteratorParams(
+            TableAPIImpl.getDirection(iterateOptions,
+                                      key),
+            TableAPIImpl.getBatchSize(iterateOptions),
+            key.getKeyBytes(),
+            TableAPIImpl.makeKeyRange(key, getOptions),
+            Depth.PARENT_AND_DESCENDANTS,
+            TableAPIImpl.getConsistency(iterateOptions),
+            TableAPIImpl.getTimeout(iterateOptions),
+            TableAPIImpl.getTimeoutUnit(iterateOptions));
 
         /*
          * If the major key is complete do single-partition iteration.
@@ -216,9 +207,8 @@ class TableScan {
                                               targetTables);
         }
 
-        return new TableIteratorWrapper<PrimaryKey>
-            (new ParallelScanIteratorImpl<PrimaryKey>(apiImpl.getStore(),
-                                                      config, params) {
+        return new ParallelScanIteratorImpl<PrimaryKey>(apiImpl.getStore(),
+                                                        config, params) {
             @Override
             protected TableKeysIterate generateGetterOp(byte[] resumeKey) {
                 return new TableKeysIterate(params,
@@ -230,7 +220,7 @@ class TableScan {
             @Override
             protected void convertResult(Result result,
                                          List<PrimaryKey> elementList) {
-                final List<byte[]> byteKeyResults = result.getKeyList();
+                final List<ResultKey> byteKeyResults = result.getKeyList();
                 final PrimaryKey[] keys =
                     convertTableKeyResults(byteKeyResults,
                                            key.getTable(),
@@ -243,22 +233,99 @@ class TableScan {
             }
 
             @Override
-            protected byte[] extractResumeKey(Result result,
-                                              List<PrimaryKey> elementList) {
-                final List<byte[]> byteKeyResults = result.getKeyList();
-                final int cnt = byteKeyResults.size();
-                if (cnt == 0) {
-                    return null;
-                }
-                return byteKeyResults.get(cnt - 1);
-            }
-
-            @Override
             protected int compare(PrimaryKey one, PrimaryKey two) {
                 return one.compareTo(two);
             }
-        });
+        };
     }
+
+    /**
+    * Creates a table iterator returning table record key/values.
+    *
+    * @param store
+    * @param key
+    * @param getOptions
+    * @param iterateOptions
+    *
+    * @return a table iterator
+    */
+   static TableIterator<KeyValueVersion>
+       createTableKVIterator(final TableAPIImpl apiImpl,
+                             final TableKey key,
+                             final MultiRowOptions getOptions,
+                             final TableIteratorOptions iterateOptions,
+                             final Set<Integer> partitions) {
+
+       final TargetTables targetTables =
+           TableAPIImpl.makeTargetTables(key.getTable(), getOptions);
+
+       final StoreIteratorConfig config = new StoreIteratorConfig();
+       if (iterateOptions != null) {
+           config.setMaxConcurrentRequests(
+                           iterateOptions.getMaxConcurrentRequests());
+       }
+
+       final StoreIteratorParams params =
+           new StoreIteratorParams(TableAPIImpl.getDirection(iterateOptions,
+                                                             key),
+                                   TableAPIImpl.getBatchSize(iterateOptions),
+                                   key.getKeyBytes(),
+                                   TableAPIImpl.makeKeyRange(key, getOptions),
+                                   Depth.PARENT_AND_DESCENDANTS,
+                                   TableAPIImpl.getConsistency(iterateOptions),
+                                   TableAPIImpl.getTimeout(iterateOptions),
+                                   TableAPIImpl.getTimeoutUnit(iterateOptions),
+                                   partitions);
+
+       /*
+        * If the major key is complete do single-partition iteration.
+        */
+       if (key.getMajorKeyComplete()) {
+           throw new IllegalArgumentException("The major path cannot be " +
+               "complete for the key.");
+       }
+
+       return new ParallelScanIteratorImpl<KeyValueVersion>(apiImpl.getStore(),
+                                                            config, params) {
+           @Override
+           protected TableIterate generateGetterOp(byte[] resumeKey) {
+               return new TableIterate(params,
+                                       targetTables,
+                                       key.getMajorKeyComplete(),
+                                       resumeKey);
+           }
+
+           @Override
+           protected void convertResult(Result result,
+                                        List<KeyValueVersion> elementList) {
+
+               final List<ResultKeyValueVersion> byteKeyResults =
+                       result.getKeyValueVersionList();
+
+                   int cnt = byteKeyResults.size();
+                   if (cnt == 0) {
+                       assert (!result.hasMoreElements());
+                       return;
+                   }
+                   for (int i = 0; i < cnt; i += 1) {
+                       final ResultKeyValueVersion entry =
+                           byteKeyResults.get(i);
+                       KeySerializer keySerializer =
+                           storeImpl.getKeySerializer();
+                       elementList.add(KVStoreImpl.createKeyValueVersion(
+                           keySerializer.fromByteArray(entry.getKeyBytes()),
+                           entry.getValue(),
+                           entry.getVersion(),
+                           entry.getExpirationTime()));
+                   }
+           }
+
+           @Override
+           protected int compare(KeyValueVersion one, KeyValueVersion two) {
+               return one.getKey().compareTo(two.getKey());
+           }
+       };
+   }
 
     /**
      * Common routine to convert a list of ResultKeyValueVersion objects into
@@ -290,36 +357,35 @@ class TableScan {
             if (targetTables.hasAncestorTables()) {
                 table = table.getTopLevelTable();
             }
+
             final RowImpl fullKey =
                 table.createRowFromKeyBytes(entry.getKeyBytes());
+
             if (fullKey != null) {
+                final Version version = entry.getVersion();
+                assert version != null;
                 final ValueVersion vv =
-                    new ValueVersion(entry.getValue(),
-                                     entry.getVersion());
-                final Row row =
-                    apiImpl.getRowFromValueVersion(vv, fullKey, false);
-                if (row != null) {
-                    rowResults[actualCount++] = row;
-                }
+                    new ValueVersion(entry.getValue(), version);
+                final RowImpl row =
+                    apiImpl.getRowFromValueVersion(vv,
+                                                   fullKey,
+                                                   entry.getExpirationTime(),
+                                                   false);
+                rowResults[actualCount++] = row;
+            } else {
+                rowResults[actualCount++] = null;
             }
         }
 
-        /*
-         * If any results were skipped, copy the valid results to
-         * a new array.  This should not be common at all.
-         */
-        if (actualCount < cnt) {
-            return Arrays.copyOf(rowResults, actualCount);
-        }
         return rowResults;
     }
 
     /**
-     * Common routine to convert a list of byte[] representing table keys into
-     * an array of PrimaryKey, suitable for iteration.
+     * Common routine to convert a list of ResultKey representing table keys
+     * into an array of PrimaryKey, suitable for iteration.
      */
     private static PrimaryKey[]
-        convertTableKeyResults(final List<byte[]> byteKeyResults,
+        convertTableKeyResults(final List<ResultKey> byteKeyResults,
                                TableImpl table,
                                TargetTables targetTables) {
 
@@ -334,7 +400,7 @@ class TableScan {
         final PrimaryKey[] keyResults = new PrimaryKey[cnt];
 
         int actualCount = 0;
-        for (byte[] entry : byteKeyResults) {
+        for (ResultKey entry : byteKeyResults) {
 
             /*
              * If there are ancestor tables, start looking at the top
@@ -343,63 +409,13 @@ class TableScan {
             if (targetTables.hasAncestorTables()) {
                 table = table.getTopLevelTable();
             }
-            final PrimaryKey pKey =
-                table.createPrimaryKeyFromKeyBytes(entry);
-            if (pKey != null) {
-                keyResults[actualCount++] = pKey;
-            }
+            final PrimaryKeyImpl pKey =
+                table.createPrimaryKeyFromResultKey(entry);
+
+            keyResults[actualCount++] = pKey;
         }
 
-        /*
-         * If any results were skipped, copy the valid results to
-         * a new array.  This should not be common at all.
-         */
-        if (actualCount < cnt) {
-            return Arrays.copyOf(keyResults, actualCount);
-        }
         return keyResults;
-    }
-
-    /**
-     * Wrapper class for ParallelScanIterator.
-     */
-    static class TableIteratorWrapper<K> implements TableIterator<K> {
-
-        private final ParallelScanIterator<K> psi;
-
-        TableIteratorWrapper(ParallelScanIterator<K> psi) {
-            this.psi = psi;
-        }
-
-        @Override
-        public void close() {
-             psi.close();
-        }
-
-        @Override
-        public List<DetailedMetrics> getPartitionMetrics() {
-            return psi.getPartitionMetrics();
-        }
-
-        @Override
-        public List<DetailedMetrics> getShardMetrics() {
-            return psi.getShardMetrics();
-        }
-
-        @Override
-        public K next() {
-            return psi.next();
-        }
-
-        @Override
-        public boolean hasNext() {
-            return psi.hasNext();
-        }
-
-        @Override
-        public void remove() {
-            psi.remove();
-        }
     }
 
     /**
@@ -519,13 +535,13 @@ class TableScan {
                      params.getTimeoutUnit());
                 final Result result = store.executeRequest(req);
                 moreElements = result.hasMoreElements();
-                final List<byte[]> byteKeyResults = result.getKeyList();
+                final List<ResultKey> byteKeyResults = result.getKeyList();
                 if (byteKeyResults.isEmpty()) {
                     assert !moreElements;
                     return null;
                 }
-                resumeKey =
-                    byteKeyResults.get(byteKeyResults.size() - 1);
+                resumeKey = byteKeyResults.
+                    get(byteKeyResults.size() - 1).getKeyBytes();
                 return  convertTableKeyResults(byteKeyResults,
                                                table,
                                                targetTables);
@@ -559,10 +575,13 @@ class TableScan {
             if (elements != null && nextElement < elements.length) {
                 return true;
             }
+
             elements = getMoreElements();
+
             if (elements == null) {
                 return false;
             }
+
             assert (elements.length > 0);
             nextElement = 0;
             return true;
@@ -604,7 +623,7 @@ class TableScan {
      * A table iterator which has no elements.
      */
     private static class EmptyTableIterator<E>
-                                        extends MultiGetIteratorWrapper<E> {
+        extends MultiGetIteratorWrapper<E> {
         @Override
         E[] getMoreElements() {
             return null;

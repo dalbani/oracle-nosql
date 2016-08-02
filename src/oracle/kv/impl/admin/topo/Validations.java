@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -56,6 +56,7 @@ import oracle.kv.impl.admin.TopologyCheck.UpdateRNParamsRemedy;
 import oracle.kv.impl.admin.VerifyConfiguration.Problem;
 import oracle.kv.impl.topo.AdminId;
 import oracle.kv.impl.topo.AdminType;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.DatacenterType;
@@ -697,7 +698,7 @@ public class Validations {
                            int requiredRF,
                            int numMissing) {
             checkNull("dcId", dcId);
-            if (requiredRF < 1) {
+            if (requiredRF <= 0) {
                 throw new IllegalArgumentException(
                         "The value of requiredRF must be > 0");
             }
@@ -885,6 +886,411 @@ public class Validations {
                     return false;
                 }
             } else if (!rgId.equals(other.rgId)) {
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * This shard has an arbiter when there should not be one.
+     */
+    public static class ExcessANs extends Warning {
+        private static final long serialVersionUID = 1L;
+        private final RepGroupId rgId;
+        private final ArbNodeId anId;
+
+        ExcessANs(RepGroupId rgId,
+                  ArbNodeId arbNodeId) {
+            this.rgId = rgId;
+            this.anId = arbNodeId;
+        }
+
+        @Override
+        public ResourceId getResourceId() {
+            return rgId;
+        }
+
+        @Override
+        public String toString() {
+            return "Shard " + rgId + " has an Arbiter when it should not.";
+        }
+
+        public ArbNodeId getANId() {
+            return anId;
+        }
+
+        public RepGroupId getRGId() {
+            return rgId;
+        }
+
+        @Override
+        public int hashCode() {
+            final int prime = 31;
+            int result = 1;
+            result = prime * result + ((rgId == null) ? 0 : rgId.hashCode());
+            result = prime * result + ((anId == null) ? 0 :
+                anId.hashCode());
+            return result;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) {
+                return true;
+            }
+            if (!(obj instanceof ExcessANs)) {
+                return false;
+            }
+             ExcessANs other = (ExcessANs) obj;
+            if (rgId == null) {
+                if (other.rgId != null) {
+                    return false;
+                }
+            } else if (!rgId.equals(other.rgId)) {
+                return false;
+            }
+            if (anId == null) {
+                if (other.anId != null) {
+                    return false;
+                }
+            } else if (!anId.equals(other.anId)) {
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * This shard does not have an AN when it should.
+     */
+    public static class InsufficientANs extends Violation {
+        private static final long serialVersionUID = 1L;
+        private final RepGroupId rgId;
+        private final DatacenterId dcId;
+
+        InsufficientANs(RepGroupId rgId, DatacenterId dcId) {
+            this.dcId = dcId;
+            this.rgId = rgId;
+        }
+
+        @Override
+        public ResourceId getResourceId() {
+            return rgId;
+        }
+
+        @Override
+        public String toString() {
+            return "The shard "+ rgId + " does not have an Arbiter.";
+        }
+
+        public RepGroupId getRGId() {
+            return rgId;
+        }
+
+        public DatacenterId getDCId() {
+            return dcId;
+        }
+
+        @Override
+        public int hashCode() {
+            final int prime = 31;
+            int result = 1;
+            result = prime * result + ((rgId == null) ? 0 : rgId.hashCode());
+            result = prime * result + ((dcId == null) ? 0 : dcId.hashCode());
+            return result;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) {
+                return true;
+            }
+            if (!(obj instanceof InsufficientANs)) {
+                return false;
+            }
+            InsufficientANs other = (InsufficientANs) obj;
+            if (rgId == null) {
+                if (other.rgId != null) {
+                    return false;
+                }
+            } else if (!rgId.equals(other.rgId)) {
+                return false;
+            }
+            if (dcId == null) {
+                if (other.dcId != null) {
+                    return false;
+                }
+            } else if (!dcId.equals(other.dcId)) {
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /*
+     * The arbiter is hosted on SN that doesn't allow arbiters.
+     */
+    public static class ANNotAllowedOnSN extends Violation {
+        private static final long serialVersionUID = 1L;
+        /* AN identifier */
+        private final ArbNodeId anId;
+        /* SN currently hosting AN */
+        private final StorageNodeId snId;
+        /* DC to find new SN to host AN */
+        private final DatacenterId dcId;
+
+        ANNotAllowedOnSN(ArbNodeId arbNodeId, StorageNodeId snId, DatacenterId dcId) {
+            this.anId = arbNodeId;
+            this.snId = snId;
+            this.dcId = dcId;
+        }
+
+        @Override
+        public ResourceId getResourceId() {
+            return anId;
+        }
+
+        @Override
+        public String toString() {
+            return snId + " doesn't allow arbiters but hosts " + anId;
+        }
+
+        public ArbNodeId getANId() {
+            return anId;
+        }
+
+        public StorageNodeId getStorageNodeId() {
+            return snId;
+        }
+
+        public DatacenterId getDCId() {
+            return dcId;
+        }
+
+        @Override
+        public int hashCode() {
+            final int prime = 31;
+            int result = 1;
+            result = prime * result + ((anId == null) ?
+                0 : anId.hashCode());
+            result = prime * result + ((snId == null) ? 0 : snId.hashCode());
+            result = prime * result + ((dcId == null) ? 0 : dcId.hashCode());
+            return result;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) {
+                return true;
+            }
+            if (!(obj instanceof ANNotAllowedOnSN)) {
+                return false;
+            }
+            ANNotAllowedOnSN other = (ANNotAllowedOnSN) obj;
+            if (anId == null) {
+                if (other.anId != null) {
+                    return false;
+                }
+            } else if (!anId.equals(other.anId)) {
+                return false;
+            }
+            if (snId == null) {
+                if (other.snId != null) {
+                    return false;
+                }
+            } else if (!snId.equals(other.snId)) {
+                return false;
+            }
+            if (dcId == null) {
+                if (other.dcId != null) {
+                    return false;
+                }
+            } else if (!dcId.equals(other.dcId)) {
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /*
+     * Arbiter hosted in DC that does not support hosting ANs
+     * or there is a Arbiter only zone available.
+     */
+    public static class ANWrongDC extends Violation {
+        private static final long serialVersionUID = 1L;
+        private final DatacenterId sourceDcId;
+        private final DatacenterId targetDcId;
+        private final ArbNodeId anId;
+
+        ANWrongDC(DatacenterId sourceDcId,
+                 DatacenterId targetDcId,
+                 ArbNodeId arbNodeId) {
+            this.sourceDcId = sourceDcId;
+            this.targetDcId = targetDcId;
+            this.anId = arbNodeId;
+        }
+
+        @Override
+        public ResourceId getResourceId() {
+            return anId;
+        }
+
+        @Override
+        public String toString() {
+            return anId + " hosted in datacenter " + sourceDcId +
+                   " better datacenter host is " +
+                   targetDcId;
+        }
+
+        public DatacenterId getSourceDCId() {
+            return sourceDcId;
+        }
+
+        public DatacenterId getTargetDCId() {
+            return targetDcId;
+        }
+
+        public ArbNodeId getANId() {
+            return anId;
+        }
+
+        @Override
+        public int hashCode() {
+            final int prime = 31;
+            int result = 1;
+            result = prime * result + ((sourceDcId == null)
+                ? 0 : sourceDcId.hashCode());
+            result = prime * result + ((targetDcId == null)
+                ? 0 : targetDcId.hashCode());
+            result = prime * result + ((anId == null)
+                ? 0 : anId.hashCode());
+            return result;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) {
+                return true;
+            }
+            if (!(obj instanceof ANWrongDC)) {
+                return false;
+            }
+            ANWrongDC other = (ANWrongDC) obj;
+            if (sourceDcId == null) {
+                if (other.sourceDcId != null) {
+                    return false;
+                }
+            } else if (!sourceDcId.equals(other.sourceDcId)) {
+                return false;
+            }
+            if (targetDcId == null) {
+                if (other.targetDcId != null) {
+                    return false;
+                }
+            } else if (!targetDcId.equals(other.targetDcId)) {
+                return false;
+            }
+            if (anId == null) {
+                if (other.anId != null) {
+                    return false;
+                }
+            } else if (!anId.equals(other.anId)) {
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * This SN hosts AN and RNs that should not be on the same storage node.
+     */
+    public static class ANProximity extends Violation {
+        private static final long serialVersionUID = 1L;
+        private final StorageNodeId snId;
+        private final RepGroupId rgId;
+        private final List<RepNodeId> rnIds;
+        private final ArbNodeId anId;
+
+        ANProximity(StorageNodeId snId,
+                    RepGroupId rgId,
+                    List<RepNodeId> rnIds,
+                    ArbNodeId anId) {
+            this.snId = snId;
+            this.rgId = rgId;
+            this.rnIds = rnIds;
+            this.anId = anId;
+        }
+
+        @Override
+        public ResourceId getResourceId() {
+            return snId;
+        }
+
+        @Override
+        public String toString() {
+            return snId + " has ANs and RNs from the same shard(" + rgId +
+                "): " + rnIds + " anId " + anId;
+        }
+
+        public StorageNodeId getSNId() {
+            return snId;
+        }
+
+        public List<RepNodeId> getRNList() {
+            return rnIds;
+        }
+
+        public ArbNodeId getANId() {
+            return anId;
+        }
+
+        @Override
+        public int hashCode() {
+            final int prime = 31;
+            int result = 1;
+            result = prime * result + ((rgId == null) ? 0 : rgId.hashCode());
+            result = prime * result + ((rnIds == null) ? 0 : rnIds.hashCode());
+            result = prime * result + ((anId == null) ? 0 : anId.hashCode());
+            result = prime * result + ((snId == null) ? 0 : snId.hashCode());
+            return result;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) {
+                return true;
+            }
+            if (!(obj instanceof ANProximity)) {
+                return false;
+            }
+            ANProximity other = (ANProximity) obj;
+            if (rgId == null) {
+                if (other.rgId != null) {
+                    return false;
+                }
+            } else if (!rgId.equals(other.rgId)) {
+                return false;
+            }
+            if (rnIds == null) {
+                if (other.rnIds != null) {
+                    return false;
+                }
+            } else if (!rnIds.equals(other.rnIds)) {
+                return false;
+            }
+            if (anId == null) {
+                if (other.anId != null) {
+                    return false;
+                }
+            } else if (!anId.equals(other.anId)) {
+                return false;
+            }
+            if (snId == null) {
+                if (other.snId != null) {
+                    return false;
+                }
+            } else if (!snId.equals(other.snId)) {
                 return false;
             }
             return true;

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,9 +43,9 @@
 
 package oracle.kv;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 import java.util.Arrays;
 
 import oracle.kv.impl.util.FastExternalizable;
@@ -106,7 +106,10 @@ public class Value implements FastExternalizable {
          * The byte array format is Avro binary data along with an internal,
          * embedded schema ID.  Values of format {@code AVRO} are created and
          * decomposed using an {@link oracle.kv.avro.AvroBinding}.
+         *
+         * @deprecated as of 4.0, use the table API instead.
          */
+        @Deprecated
         AVRO,
 
         /**
@@ -167,7 +170,7 @@ public class Value implements FastExternalizable {
      * FastExternalizable constructor.
      * Used by the client when deserializing a response.
      */
-    public Value(ObjectInput in,
+    public Value(DataInput in,
                  @SuppressWarnings("unused") short serialVersion)
         throws IOException {
 
@@ -206,7 +209,7 @@ public class Value implements FastExternalizable {
      * Used by the service when deserializing a request.
      */
     public static byte[]
-        readFastExternal(ObjectInput in,
+        readFastExternal(DataInput in,
                          @SuppressWarnings("unused") short serialVersion)
         throws IOException {
 
@@ -229,7 +232,7 @@ public class Value implements FastExternalizable {
      * Used by the client when serializing a request.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         if (format == Format.NONE || format == Format.TABLE) {
@@ -250,7 +253,7 @@ public class Value implements FastExternalizable {
      * Serialize from byte array.
      * Used by the service when serializing a response.
      */
-    public static void writeFastExternal(ObjectOutput out,
+    public static void writeFastExternal(DataOutput out,
                                          @SuppressWarnings("unused")
                                          short serialVersion,
                                          byte[] bytes)
@@ -339,6 +342,7 @@ public class Value implements FastExternalizable {
      * may not be used to create Avro values; for that, use an {@link
      * oracle.kv.avro.AvroBinding} instead.
      */
+    @SuppressWarnings("javadoc")
     public static Value createValue(byte[] val) {
         assert val != null;
 

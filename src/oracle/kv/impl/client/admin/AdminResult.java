@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,7 +43,15 @@
 
 package oracle.kv.impl.client.admin;
 
+import java.util.Collections;
+import java.util.List;
+import java.util.NoSuchElementException;
+
 import oracle.kv.StatementResult;
+import oracle.kv.stats.DetailedMetrics;
+import oracle.kv.table.RecordDef;
+import oracle.kv.table.RecordValue;
+import oracle.kv.table.TableIterator;
 
 /**
  * AdminResult packages information about a ddl statement that is either
@@ -58,8 +66,15 @@ import oracle.kv.StatementResult;
  *     kvclient <-- ExecutionInfo -- kvstore
  *
  *     application <-- AdminResult/StatementResult -- kvclient
+ *
+ * NOTE: until query work is fully supported StatementResult does not
+ * extend Iterable<RecordValue> so it must be added here so that explicit
+ * casts in test code can work correctly. Query DML.
  */
 class AdminResult implements StatementResult {
+
+    private static TableIterator<RecordValue> EMPTY_ITERATOR = new
+        EmptyIterator();
 
     private final boolean success;
     private final int planId;
@@ -85,7 +100,7 @@ class AdminResult implements StatementResult {
                  * done.
                  */
                 this.success = true;
-                this.info = 
+                this.info =
                     "The statement did not require any additional execution";
             } else {
                 /*
@@ -156,5 +171,54 @@ class AdminResult implements StatementResult {
     @Override
     public String getResult() {
         return result;
+    }
+
+    @Override
+    public Kind getKind() {
+        return Kind.DDL;
+    }
+
+    @Override
+    public void close() {
+
+    }
+
+    @Override
+    public RecordDef getResultDef() {
+        return null;
+    }
+
+    @Override
+    public TableIterator<RecordValue> iterator() {
+        return EMPTY_ITERATOR;
+    }
+
+    public static class EmptyIterator implements TableIterator<RecordValue> {
+
+        @Override
+        public void close() {}
+
+        @Override
+        public List<DetailedMetrics> getPartitionMetrics() {
+            return Collections.emptyList();
+        }
+
+        @Override
+        public List<DetailedMetrics> getShardMetrics() {
+            return Collections.emptyList();
+        }
+
+        @Override
+        public boolean hasNext() {
+            return false;
+        }
+
+        @Override
+        public RecordValue next() {
+            throw new NoSuchElementException();
+        }
+
+        @Override
+        public void remove() {}
     }
 }

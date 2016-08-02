@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -276,4 +276,16 @@ public interface KVSecurityConstants {
      */
     public static final String JAAS_LOGIN_CONF_NAME =
         "oracle.kv.jaas.login.conf.entryName";
+
+    /**
+     * The name of property to specify whether to automatically prompt password
+     * for command line utilities. If it is set to false or is not set, command
+     * line utilities will prompt for password automatically if given user name
+     * and password are not specified or unable to authenticate successfully.
+     * If the property is set to true, command line utilities will not prompt
+     * for passwords, and the login will fail if either the user or password
+     * is missing, or if the password is incorrect.
+     */
+    public static final String CMD_PASSWORD_NOPROMPT_PROPERTY =
+        "oracle.kv.password.noPrompt";
 }

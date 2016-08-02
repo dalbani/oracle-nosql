@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,6 +43,10 @@
 
 package oracle.kv;
 
+import oracle.kv.table.RecordDef;
+import oracle.kv.table.RecordValue;
+import oracle.kv.table.TableIterator;
+
 /**
  * A StatementResult provides information about the execution and outcome of a
  * table statement. If obtained via {@link ExecutionFuture#updateStatus}, it can
@@ -52,29 +56,49 @@ package oracle.kv;
  *
  * @since 3.2
  */
-public interface StatementResult {
+public interface StatementResult extends Iterable<RecordValue> {
+
+    /**
+     * Shows the kind of StatementResult.
+     * @see #getKind()
+     * @since 4.0
+     */
+    enum Kind {
+        /**
+         * Results of data definition language statements: create or remove
+         * table, a create or remove index or an alter index, or other
+         * statements that don't return data records. In this case the
+         * iterator().hasNext() will always return false.
+         */
+        DDL,
+        /**
+         * Query statements that return records, for example SELECT FROM ....
+         */
+        QUERY
+    }
 
     /**
      * Returns the administrative plan id for this operation if the statement
-     * was a create or remove table, a create or remove index, or an alter
-     * index. When using the Admin CLI (runadmin) utility, administrative
-     * operations are identified by plan id. The plan id can be used to
-     * correlate data definition and administrative statements issued
+     * was a DDL statement: create or remove table, a create or remove index,
+     * or an alter index. When using the Admin CLI (runadmin) utility,
+     * administrative operations are identified by plan id. The plan id can be
+     * used to correlate data definition and administrative statements issued
      * programmatically using the API against operations viewed via the
      * interactive Admin CLI or other monitoring tool.
      * <p>
      * The plan id will be 0 if this statement was not an administrative
      * operation, or did not require execution.
      */
-    public int getPlanId();
+    int getPlanId();
 
     /**
      * Returns information about the execution of the statement, in human
      * readable form. If the statement was a data definition command, the
      * information will show the start and end time of the operation and
-     * details about server side processing.
+     * details about server side processing. For data manipulation commands
+     * it will return null.
      */
-    public String getInfo();
+    String getInfo();
 
     /**
      * Returns the same information as {@link #getInfo}, in JSON format.
@@ -127,14 +151,16 @@ public interface StatementResult {
      *   }
      * }
      * </pre>
+     *
+     * For data manipulation commands it will return null.
      */
-    public String getInfoAsJson();
+    String getInfoAsJson();
 
     /**
      * If {@link #isSuccessful} is false, return a description of the
      * problem. Will be null if {@link #isSuccessful} is true.
      */
-    public String getErrorMessage();
+    String getErrorMessage();
 
     /**
      * Returns true if this statement has finished and was successful.
@@ -199,8 +225,64 @@ public interface StatementResult {
      * <pre>
      * {"tables" : ["users"]}
      * </pre>
+     * <pre>Returns null in the case of a DML statement.</pre>
      * @since 3.3
      */
     String getResult();
 
+    /**
+     * Returns the Kind of StatementResult.
+     *
+     * @since 4.0
+     */
+    Kind getKind();
+
+
+    /**
+     * <p>Returns a TableIterator over the records in this result. If the
+     * statement is DDL, an iterator with an empty result will be
+     * returned.</p>
+     *
+     * <p>{@link StatementResult#close()} will close this iterator, any
+     * subsequent calls to hasNext() will return false and any calls to next()
+     * will throw a java.util.IllegalStateException.</p>
+     *
+     * <p>Note: Multiple calls to this method will return the same iterator
+     * object.</p>
+     *
+     * @throws IllegalStateException if the result is closed.
+     *
+     * @since 4.0
+     */
+    @Override
+    TableIterator<RecordValue> iterator() throws IllegalStateException;
+
+    /**
+     * Closes the result including the iterator and releases all the resources
+     * related to this result. This method is idempotent.
+     *
+     * For query statements any subsequent calls to {@link #getResultDef()}
+     * will trigger an IllegalStateException.
+     *
+     * Applications should discard all references to this object after it has
+     * been closed.
+     *
+     * When a <code>StatementResult</code> is closed, any metadata
+     * instances that were created by calling the  {@link #getResultDef()}
+     * method remain accessible.
+     *
+     * @since 4.0
+     */
+    void close();
+
+    /**
+     * Returns the definition of the result of this statement if the
+     * statement is a query, otherwise null.
+     *
+     * @throws IllegalStateException if the result is closed.
+     * @throws FaultException if the operation cannot be completed for any
+     * reason
+     * @since 4.0
+     */
+    RecordDef getResultDef() throws IllegalStateException, FaultException;
 }

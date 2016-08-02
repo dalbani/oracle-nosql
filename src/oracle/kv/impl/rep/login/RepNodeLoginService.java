@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -54,11 +54,11 @@ import oracle.kv.impl.admin.param.GlobalParams;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.fault.ProcessExitCode;
+import oracle.kv.impl.fault.ServiceFaultHandler;
 import oracle.kv.impl.param.ParameterMap;
 import oracle.kv.impl.param.ParameterState;
 import oracle.kv.impl.rep.RepNodeSecurity;
 import oracle.kv.impl.rep.RepNodeService;
-import oracle.kv.impl.rep.RepNodeServiceFaultHandler;
 import oracle.kv.impl.security.ConfigurationException;
 import oracle.kv.impl.security.SecureProxy;
 import oracle.kv.impl.security.UserVerifier;
@@ -92,7 +92,7 @@ public class RepNodeLoginService implements GlobalParamsUpdater,
     /**
      * The fault handler associated with the service.
      */
-    private final RepNodeServiceFaultHandler faultHandler;
+    private final ServiceFaultHandler faultHandler;
 
     /**
      * The login module for the RepNode
@@ -122,9 +122,9 @@ public class RepNodeLoginService implements GlobalParamsUpdater,
 
         if (repNodeService.getParams().getSecurityParams().isSecure()) {
             faultHandler =
-                new RepNodeServiceFaultHandler(repNodeService,
-                                               logger,
-                                               ProcessExitCode.RESTART);
+                new ServiceFaultHandler(repNodeService,
+                                        logger,
+                                        ProcessExitCode.RESTART);
             loginHandler =
                 makeLoginHandler(repNodeService.getRepNodeSecurity().
                                  getKVSessionManager());

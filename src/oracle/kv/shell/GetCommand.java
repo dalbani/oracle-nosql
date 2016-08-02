@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -57,8 +57,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import org.apache.avro.Schema;
+import org.codehaus.jackson.map.ObjectWriter;
+
 import oracle.kv.Direction;
-import oracle.kv.impl.admin.client.CommandShell;
 import oracle.kv.FaultException;
 import oracle.kv.KVStore;
 import oracle.kv.Key;
@@ -69,10 +71,8 @@ import oracle.kv.StoreIteratorConfig;
 import oracle.kv.StoreIteratorException;
 import oracle.kv.Value;
 import oracle.kv.ValueVersion;
-import oracle.kv.avro.AvroCatalog;
-import oracle.kv.avro.JsonAvroBinding;
-import oracle.kv.avro.JsonRecord;
-import oracle.kv.avro.SchemaNotAllowedException;
+import oracle.kv.impl.admin.client.CommandShell;
+import oracle.kv.impl.api.table.IndexImpl;
 import oracle.kv.impl.util.FileUtils;
 import oracle.kv.impl.util.JsonUtils;
 import oracle.kv.shell.CommandUtils.RunTableAPIOperation;
@@ -90,9 +90,6 @@ import oracle.kv.table.TableUtils;
 import oracle.kv.util.shell.CommandWithSubs;
 import oracle.kv.util.shell.Shell;
 import oracle.kv.util.shell.ShellException;
-
-import org.apache.avro.Schema;
-import org.codehaus.jackson.map.ObjectWriter;
 
 public class GetCommand extends CommandWithSubs {
     final static String FILE_FLAG = "-file";
@@ -166,6 +163,7 @@ public class GetCommand extends CommandWithSubs {
              */
         }
 
+        @SuppressWarnings("deprecation")
         @Override
         public String execute(String[] args, Shell shell)
             throws ShellException {
@@ -358,6 +356,7 @@ public class GetCommand extends CommandWithSubs {
             }
         }
 
+        @SuppressWarnings("deprecation")
         private String iterateValues(KVStore store, Key key, KeyRange kr,
                                      boolean valueOnly, ResultOutput output)
             throws ShellException {
@@ -455,19 +454,20 @@ public class GetCommand extends CommandWithSubs {
             }
         }
 
+        @SuppressWarnings("deprecation")
         private String jsonRecord(KVStore store, Value value)
             throws ShellException {
 
-            AvroCatalog catalog = store.getAvroCatalog();
+            oracle.kv.avro.AvroCatalog catalog = store.getAvroCatalog();
             catalog.refreshSchemaCache(null);
             Map<String, Schema> schemaMap = catalog.getCurrentSchemas();
-            JsonAvroBinding binding =
+            oracle.kv.avro.JsonAvroBinding binding =
                 catalog.getJsonMultiBinding(schemaMap);
             try {
                 ObjectWriter writer = JsonUtils.createWriter(true);
-                JsonRecord jsonRec = binding.toObject(value);
+                oracle.kv.avro.JsonRecord jsonRec = binding.toObject(value);
                 return writer.writeValueAsString(jsonRec.getJsonNode());
-            } catch (SchemaNotAllowedException sna) {
+            } catch (oracle.kv.avro.SchemaNotAllowedException sna) {
                 throw new ShellException(
                     "The schema associated with this record is not of the " +
                     "correct type", sna);
@@ -936,15 +936,19 @@ public class GetCommand extends CommandWithSubs {
                     try {
                         while (iterator.hasNext()) {
 
-                                Object obj = iterator.next();
-                                if (stInfo != null) {
-                                    tallySize(obj, stInfo);
-                                } else {
-                                    if (!output.writeRecord(getJsonString(obj))) {
-                                        break;
-                                    }
-                                    nRec++;
+                            Object obj = iterator.next();
+                            if (stInfo != null) {
+                                tallySize(obj, stInfo);
+                            } else {
+                                String jsonString = getJsonString(obj);
+                                if (!output.writeRecord(jsonString)) {
+                                    break;
                                 }
+                                if (pretty) {
+                                    output.newLine();
+                                }
+                                nRec++;
+                            }
                         }
                     } catch (StoreIteratorException sie) {
                         Throwable t = sie.getCause();
@@ -1024,10 +1028,25 @@ public class GetCommand extends CommandWithSubs {
                     }
                     final Row row = (Row)obj;
                     final Index index = row.getTable().getIndex(indexName);
-                    if (index == null) {
+                    if (index == null ||
+                        /* skip text index since it lives outside the table */
+                        index.getType().equals(Index.IndexType.TEXT)) {
                         return 0;
                     }
-                    return TableUtils.getKeySize(index.createIndexKey(row));
+                    return getIndexKeySize(index, row);
+                }
+
+                int getIndexKeySize(Index index, Row row) {
+                    final IndexImpl indexImpl = (IndexImpl)index;
+                    final IndexKey[] indexKeys =
+                        indexImpl.createMultiIndexKeys(row);
+                    int sum = 0;
+                    if (indexKeys != null) {
+                        for (IndexKey indexKey : indexKeys) {
+                            sum += TableUtils.getKeySize(indexKey);
+                        }
+                    }
+                    return sum;
                 }
 
                 private String getSizeTitle(SizeInfo.Type type) {
@@ -1148,6 +1167,13 @@ public class GetCommand extends CommandWithSubs {
                 return true;
             }
             return writeToTerm(record);
+        }
+
+        public void newLine() {
+            output.append(eol);
+            if (!IsOutputFile() && isPagingEnabled()) {
+                pageLines++;
+            }
         }
 
         private boolean isPagingEnabled() {

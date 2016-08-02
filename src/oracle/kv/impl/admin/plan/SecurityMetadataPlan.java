@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -400,7 +400,7 @@ public class SecurityMetadataPlan extends MetadataPlan<SecurityMetadata> {
     /**
      * Gets a plan for revoking privileges from a user.
      */
-    public static SecurityMetadataPlan 
+    public static SecurityMetadataPlan
         createRevokePlan(AtomicInteger idGen,
                          String planName,
                          Planner planner,
@@ -516,12 +516,8 @@ public class SecurityMetadataPlan extends MetadataPlan<SecurityMetadata> {
         final SecurityMetadataPlan plan =
             new SecurityMetadataPlan(idGen, "Broadcast Security MD", planner);
 
-        plan.addTask(new UpdateMetadata<SecurityMetadata>(plan));
+        plan.addTask(new UpdateMetadata<>(plan));
         return plan;
-    }
-
-    @Override
-    void stripForDisplay() {
     }
 
     @Override
@@ -567,7 +563,7 @@ public class SecurityMetadataPlan extends MetadataPlan<SecurityMetadata> {
                         Set<String> roles) {
             super(idGen, planName, planner);
 
-            /* 
+            /*
              * Introduce session real-time update, RolePlan cannot be created
              * until all nodes version reach R3.2.
              */

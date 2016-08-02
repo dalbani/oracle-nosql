@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -63,6 +63,7 @@ import oracle.kv.impl.admin.param.AdminParams;
 import oracle.kv.impl.admin.param.GlobalParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.api.ClientId;
+import oracle.kv.impl.arb.ArbNodeService;
 import oracle.kv.impl.monitor.AdminDirectHandler;
 import oracle.kv.impl.monitor.AgentRepository;
 import oracle.kv.impl.monitor.LogToMonitorHandler;
@@ -70,6 +71,7 @@ import oracle.kv.impl.monitor.MonitorAgentHandler;
 import oracle.kv.impl.monitor.MonitorKeeper;
 import oracle.kv.impl.rep.RepNodeService;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
 import oracle.kv.impl.topo.StorageNodeId;
@@ -290,6 +292,22 @@ public class LoggerUtils {
                                      globalParams,
                                      storageNodeParams);
     }
+
+    /**
+     * Obtain a logger which sends output to the console, its local logging
+     * file, and its local MonitorAgent.
+     */
+    public static Logger getLogger(Class<?> cl,
+                                   ArbNodeService.Params params) {
+
+        ArbNodeId arbNodeId = params.getArbNodeParams().getArbNodeId();
+        return LoggerUtils.getLogger(cl,
+                                     arbNodeId.toString(),
+                                     arbNodeId,
+                                     params.getGlobalParams(),
+                                     params.getStorageNodeParams());
+    }
+
 
     /**
      * Get a logger which will only log to the  resource's logging file. It's

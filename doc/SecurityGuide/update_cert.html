@@ -14,7 +14,7 @@
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
@@ -37,7 +37,8 @@
         </div>
       </div>
       <p> 
-            Follow these steps to update the SSL key/certificate:
+            Follow these steps to update the SSL key/certificate. The store can remain
+            online during the update process:
         </p>
       <div class="orderedlist">
         <ol type="1">
@@ -45,7 +46,10 @@
             <p> 
                     On the configuration host, run securityconfig to create a
                     new configuration in a directory in parallel to the standard
-                    configuration directory.
+                    configuration directory. The new configuration needs to specify
+                    the same keystore password as your standard configuration.
+                    If no password is specified with the <code class="literal">-kspwd</code> option, 
+                    then the utility will prompt you to set a password.	
                 </p>
             <pre class="programlisting"></pre>
           </li>
@@ -57,56 +61,57 @@
             <pre class="programlisting">java -jar KVHOME/lib/kvstore.jar securityconfig \
 config merge-trust -root &lt;standard config dir&gt; \
 -source-root &lt;new config dir&gt;</pre>
+            <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+              <h3 class="title">Note</h3>
+              <p>
+		   In a multiple Storage Node deployment, you need to copy the new configuration 
+		   to each host's new configuration directory and run merge-trust
+		   on each host like in the example above.
+		</p>
+            </div>
           </li>
           <li>
-            <p>
-                    In the security directory on the configuration host run
-                    the <code class="literal">keytool</code> command. The keytool prompts
-                    for the current password and then for a new password to set.
-                </p>
-            <pre class="programlisting">keytool -storepasswd -keystore store.keys</pre>
-            <p>
-                    Securityconfig will prompt for the new password. The new
-                    password should match the new one provided earlier to the
-                    keytool command. 
-                </p>
-          </li>
-          <li>
-            <p>
-                    If using a Password File store, skip ahead to the next
-                    step. To update the keystore password for wallets, use the
-                    following command:
-                </p>
-            <pre class="programlisting">java -jar KVHOME/lib/kvstore.jar securityconfig \
-wallet secret -directory store.wallet -set -alias keystore</pre>
-            <p>
-                    Securityconfig will prompt for the new password. The new
-                    password should match the new one provided earlier to the
-                    keytool command. 
-                </p>
-          </li>
-          <li>
-            <p>
-                    If using Password File stores instead of wallets, use the
-                    following command to update the keystore password:
-                </p>
-            <pre class="programlisting">java -jar KVHOME/lib/kvstore.jar securityconfig \
-pwdfile secret -file store.pwd -set -alias keystore</pre>
             <p> 
-                    Securityconfig will prompt for the new password. The new
-                    password should match the new one provided earlier to the
-                    keytool command.
+                   Copy the updated client.trust file to the security directory on each host
+                   so that clients can use it to access the store.
                 </p>
           </li>
           <li>
+            <p> 
+                   Check that all Replication Nodes are online and then
+                   restart each Storage Node one by one using the following
+                   commands:
+                </p>
+            <pre class="programlisting">java -jar KVHOME/lib/kvstore.jar stop -root KVROOT </pre>
+            <pre class="programlisting">java -jar KVHOME/lib/kvstore.jar start -root KVROOT&amp;</pre>
+          </li>
+          <li>
             <p>
-                    Copy the updated store.keys file and either store.pwd or
-                    the contents of store.wallet to the security directory on
-                    each host and restart the Storage Node using the following
+                    Copy the updated store.keys file to the security directory on
+                    each host. Then, check that all Replication Nodes are online and
+                    restart each Storage Node one by one using the following
                     commands: 
                 </p>
             <pre class="programlisting">java -jar KVHOME/lib/kvstore.jar stop -root KVROOT </pre>
             <pre class="programlisting">java -jar KVHOME/lib/kvstore.jar start -root KVROOT&amp;</pre>
+          </li>
+          <li>
+            <p>
+                    For all Storage Nodes, remove the obsolete certificate "mykey" in 
+                    store.trust. Also, rename the new certificate "mykey_2" to "mykey" 
+                    using the following command:
+                </p>
+            <pre class="programlisting">keytool -delete -keystore KVROOT/security/store.trust \
+-alias mykey </pre>
+            <pre class="programlisting">keytool -changealias -keystore \
+KVROOT/security/store.trust -alias mykey_2 -destalias mykey </pre>
+          </li>
+          <li>
+            <p>
+                    Verify that the new certificate is the only one used using
+                    the following command:
+                </p>
+            <pre class="programlisting">keytool -list -keystore KVROOT/security/store.trust </pre>
           </li>
         </ol>
       </div>

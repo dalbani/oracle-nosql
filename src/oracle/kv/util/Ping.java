@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -62,9 +62,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.Set;
 import java.util.TreeMap;
 
+import oracle.kv.KVSecurityException;
 import oracle.kv.LoginCredentials;
 import oracle.kv.KVStoreException;
 import oracle.kv.impl.admin.AdminStatus;
@@ -74,12 +78,15 @@ import oracle.kv.impl.admin.CommandServiceAPI;
 import oracle.kv.impl.admin.param.AdminParams;
 import oracle.kv.impl.admin.param.GlobalParams;
 import oracle.kv.impl.admin.param.Parameters;
+import oracle.kv.impl.arb.ArbNodeStatus;
 import oracle.kv.impl.monitor.views.ServiceChange;
 import oracle.kv.impl.rep.RepNodeStatus;
 import oracle.kv.impl.security.login.LoginManager;
 import oracle.kv.impl.security.util.KVStoreLogin;
 import oracle.kv.impl.sna.StorageNodeStatus;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.RepGroup;
 import oracle.kv.impl.topo.RepGroupId;
@@ -141,10 +148,10 @@ import org.codehaus.jackson.node.ObjectNode;
  *
  *   // Overview of status of all shards in the store
  *   "shardStatus" : {
- *     "healthy" : 2,           // Shards with all RNs active
- *     "writable-degraded" : 0, // Some inactive RNs but with quorum
- *     "read-only" : 0,         // Lost quorum but with some active RNs
- *     "offline" : 0            // No active RNs
+ *     "healthy" : 2,           // Shards with all RNs/ANs active
+ *     "writable-degraded" : 0, // Some inactive RNs/ANs but with quorum
+ *     "read-only" : 0,         // Lost quorum but with some active RNs/ANs
+ *     "offline" : 0            // No active RNs/ANs
  *   },
  *
  *   // Overview of the status of the admin, one of "healthy",
@@ -176,7 +183,11 @@ import org.codehaus.jackson.node.ObjectNode;
  *       // values, then the maximum is the negative value nearest to zero,
  *       // which represents the replica that is falling behind most quickly.
  *       "maxCatchupTimeSecs" : 0
- *     }
+ *     },
+ *     "anSummaryStatus" : {
+ *     "online" : 2,
+ *     "offline" : 0
+ *   }
  *   } ],
  *
  *   // Status of each storage node
@@ -256,7 +267,25 @@ import org.codehaus.jackson.node.ObjectNode;
  *     // ...
  *   },
  *   //...
+ *       } ],
+ *     "anStatus" : [ {
+ *     "resourceId" : "rg1-an1",
+ *     "status" : "RUNNING",
+ *     "state" : "REPLICA",
+ *     "sequenceNumber" : 0,
+ *     "haPort" : "5021"
+ *   }
  *   ]
+ *
+ *
+ *   // Status of each arbiter node
+ *    {
+ *    "resourceId" : "rg3-an1",
+ *    "status" : "RUNNING",
+ *    "state" : "REPLICA",
+ *   "sequenceNumber" : 0,
+ *   "haPort" : "5042"
+ * }
  *
  *   // Exit code and result code for command is displayed in the json
  *   // report as well as being used as the process exit code. See a
@@ -315,6 +344,7 @@ import org.codehaus.jackson.node.ObjectNode;
  */
 public class Ping {
 
+    private static final int MAX_N_THREADS = 10;
     /* External commands, for "java -jar" usage. */
     public static final String COMMAND_NAME = "ping";
     public static final String COMMAND_DESC =
@@ -327,7 +357,7 @@ public class Ping {
         CommandParser.getUserUsage() + "\n\t" +
         CommandParser.getSecurityUsage() + "\n\t" +
         CommandParser.optional(CommandParser.JSON_FLAG);
-   static final String EXIT_CODE_FIELD = "exit_code";
+    static final String EXIT_CODE_FIELD = "exit_code";
 
     /*
      * The possible return codes for the Ping utility, obeying the Unix
@@ -392,13 +422,18 @@ public class Ping {
         RepNodeStatus get(RepNode rn);
     }
 
+    /** Returns the status for an AN, or null if not known. */
+    public interface ArbNodeStatusFunction {
+        ArbNodeStatus get(ArbNode an);
+    }
+
     /* Ping will find a topology and params to direct its searches */
     private Topology topo;
     private final Parameters params;
-    private final boolean verbose;
+    private final boolean showHidden;
     private final boolean getJson;
     private final PrintStream ps;
-    private final LoginManager adminLoginManager;
+    private final LoginManager rnLoginManager;
 
     /*
      * The problem report stores information that can be used for follow-on
@@ -406,7 +441,8 @@ public class Ping {
      * the problem report lists enough information so the caller can run a
      * network connectivity check against that hostport.
      */
-    private ArrayList<Problem> problemReport = new ArrayList<Problem>();
+    private final List<Problem> problemReport =
+        Collections.synchronizedList(new ArrayList<Problem>());
 
     /*
      * exitCode holds the Unix system exitcode that will be returned by
@@ -440,6 +476,7 @@ public class Ping {
             private final String DONT_EXIT_FLAG = "-no-exit";
             private String helperHosts = null;
             private boolean dontExit = false;
+            private boolean showHidden = false;
 
             PingParser(String[] args1) {
                 super(args1);
@@ -475,6 +512,11 @@ public class Ping {
 
                 if (arg.equals(DONT_EXIT_FLAG)) {
                     dontExit = true;
+                    return true;
+                }
+
+                if (arg.equals(HIDDEN_FLAG)) {
+                    showHidden = true;
                     return true;
                 }
                 return false;
@@ -593,6 +635,13 @@ public class Ping {
                      pp.getJson(),
                      System.err);
                 return;
+            } catch (IllegalArgumentException iae) {
+                exit(pp.getDontExit(),
+                     iae.getMessage(),
+                     ExitCode.EXIT_USAGE,
+                     pp.getJson(),
+                     System.err);
+                return;
             }
         }
 
@@ -600,7 +649,7 @@ public class Ping {
         List<String> hostports = pp.createHostPortList();
         try {
             ping = new Ping(hostports,
-                            pp.getVerbose(),
+                            pp.showHidden,
                             pp.getJson(),
                             System.err,
                             loginCreds);
@@ -624,6 +673,14 @@ public class Ping {
                  pp.getJson(),
                  System.err);
             return;
+        } catch (KVSecurityException e) {
+            /* Couldn't authenticate to a secure store. */
+            exit(pp.getDontExit(),
+                 "Access issue: " + e.getMessage(),
+                 ExitCode.EXIT_USAGE,
+                 pp.getJson(),
+                 System.err);
+            return;
         }
 
         /*
@@ -644,29 +701,29 @@ public class Ping {
      */
     private Ping(Topology topo,
                  Parameters params,
-                 boolean verbose,
+                 boolean showHidden,
                  boolean getJson,
                  PrintStream ps,
-                 LoginManager adminLoginManager) {
+                 LoginManager rnLoginManager) {
         this.topo = topo;
         this.params = params;
-        this.verbose = verbose;
+        this.showHidden = showHidden;
         this.getJson = getJson;
         this.ps = ps;
-        this.adminLoginManager = adminLoginManager;
+        this.rnLoginManager = rnLoginManager;
     }
 
     /**
      * For use cases where the utility must find a topology.
-     * @throws KVStoreException 
+     * @throws KVStoreException
      */
     private Ping(List<String> hostPorts,
-                 boolean verbose,
+                 boolean showHidden,
                  boolean getJson,
                  PrintStream ps,
                  LoginCredentials loginCreds)
         throws KVStoreException {
-        this.verbose = verbose;
+        this.showHidden = showHidden;
         this.getJson = getJson;
         this.ps = ps;
 
@@ -674,20 +731,21 @@ public class Ping {
         String[] hostPortsArray = new String[hostPorts.size()];
         hostPortsArray = hostPorts.toArray(hostPortsArray);
         if (loginCreds == null) {
-            adminLoginManager = null;
+            rnLoginManager = null;
         } else {
-            adminLoginManager = KVStoreLogin.getAdminLoginMgr(hostPortsArray,
-                                                             loginCreds);
+            rnLoginManager = KVStoreLogin.getRepNodeLoginMgr(hostPortsArray,
+                                                             loginCreds,
+                                                             null);
         }
 
         try {
-            topo = TopologyLocator.get(hostPortsArray, 0, 
-                                       adminLoginManager, null);
+            topo = TopologyLocator.get(hostPortsArray, 0,
+                                       rnLoginManager, null);
         } catch (KVStoreException topoLocEx) {
             /* had a problem getting a topology - try using the Admins */
             if (topo == null) {
                 topo = searchAdminsForTopo(hostPortsArray, loginCreds);
-            } 
+            }
 
             /* Still can't find a topology */
             if (topo == null) {
@@ -702,12 +760,12 @@ public class Ping {
      * searches both RNs and Admin Services in search of a topology.
      * @throws KVStoreException if a topology can't be found.
      */
-    public static Topology findTopology(String hostname, int port) 
+    public static Topology findTopology(String hostname, int port)
         throws KVStoreException {
         List<String> helpers = new ArrayList<String>();
         helpers.add(new HostPort(hostname, port).toString());
         Ping ping = new Ping(helpers,
-                             false, // verbose
+                             false, // showHidden
                              false, // useJSON
                              System.err,
                              null);
@@ -728,12 +786,12 @@ public class Ping {
      */
     public static void pingTopology(Topology topo,
                                     Parameters params,
-                                    boolean verbose,
+                                    boolean showHidden,
                                     boolean getJson,
                                     PrintStream ps,
-                                    LoginManager adminLoginManager) {
-        Ping p = new Ping(topo, params, verbose, getJson, ps,
-                          adminLoginManager);
+                                    LoginManager rnLoginManager) {
+        Ping p = new Ping(topo, params, showHidden, getJson, ps,
+                          rnLoginManager);
         p.pingTopology();
     }
 
@@ -751,7 +809,7 @@ public class Ping {
 
         /* Request status from each service in the store. */
         PingCollector collector =
-            new PingCollector(topo, params, adminLoginManager);
+            new PingCollector(topo, params, rnLoginManager);
 
         /*
          * Analyze the service status and generate an exist code. The exit code
@@ -784,11 +842,11 @@ public class Ping {
             /*
              * Add information about any problems found. This feature is
              * currently undocumented, only available via json, and is
-             * currently governed by verbose.
+             * currently governed by hidden.
              */
-            if (verbose) {
-               problemReport.addAll(collector.getProblems());
-               addProblemReport(jsonTop);
+            if (showHidden) {
+                problemReport.addAll(collector.getProblems());
+                addProblemReport(jsonTop);
             }
 
             final ObjectWriter writer = createWriter(true /* pretty */);
@@ -817,6 +875,9 @@ public class Ping {
                 }
                 for (JsonNode jsonRN : getArray(jsonSN, "rnStatus")) {
                     ps.println(PingDisplay.displayRepNode(jsonRN));
+                }
+                for (JsonNode jsonAN : getArray(jsonSN, "anStatus")) {
+                    ps.println(PingDisplay.displayArbNode(jsonAN));
                 }
             }
         }
@@ -884,13 +945,23 @@ public class Ping {
             }
         };
 
+        final Map<ArbNode, ArbNodeStatus> anMap = collector.getANMap();
+        final ArbNodeStatusFunction anfunc = new ArbNodeStatusFunction() {
+            @Override
+            public ArbNodeStatus get(ArbNode an) {
+                return anMap.get(an);
+            }
+        };
+
+
         /* Add a shard overview */
-        PingDisplay.shardOverviewToJson(topo, rnfunc, jsonTop);
+        PingDisplay.shardOverviewToJson(topo, rnfunc, anfunc, jsonTop);
 
         /* Add zone overviews. */
         final ArrayNode jsonZones = jsonTop.putArray("zoneStatus");
         for (final Datacenter dc : topo.getSortedDatacenters()) {
-            jsonZones.add(PingDisplay.zoneOverviewToJson(topo, dc, rnfunc));
+            jsonZones.add(
+                PingDisplay.zoneOverviewToJson(topo, dc, rnfunc, anfunc));
         }
 
         /* Add SN, Admin, andRN status in SN order. */
@@ -898,7 +969,7 @@ public class Ping {
         for (StorageNode sn : sns) {
             StorageNodeStatus status = snMap.get(sn);
             final ObjectNode jsonSN = PingDisplay.storageNodeToJson(topo, sn,
-                                                                  status);
+                                                                    status);
             jsonSNs.add(jsonSN);
             for (Entry<AdminId, AdminInfo> aentry : adminMap.entrySet()) {
                 final AdminInfo info = aentry.getValue();
@@ -906,7 +977,7 @@ public class Ping {
                     sn.getStorageNodeId().equals(info.snId)) {
                     jsonSN.put("adminStatus",
                                PingDisplay.adminToJson(aentry.getKey(),
-                                                     info.adminStatus));
+                                                       info.adminStatus));
                     break;
                 }
             }
@@ -921,6 +992,17 @@ public class Ping {
                                  null /* expectedStatus */));
                 }
             }
+            final ArrayNode jsonANs = jsonSN.putArray("anStatus");
+            for (Entry<ArbNode, ArbNodeStatus> rentry : anMap.entrySet()) {
+                final ArbNode an = rentry.getKey();
+                if (sn.getStorageNodeId().equals(an.getStorageNodeId())) {
+                    jsonANs.add(PingDisplay.arbNodeToJson
+                                (an,
+                                 rentry.getValue(),
+                                 null /* expectedStatus */));
+                }
+            }
+
         }
         return jsonTop;
     }
@@ -928,82 +1010,127 @@ public class Ping {
     /**
      * Using the topology to find SNs, find an AdminService to get some Params
      */
-    private Parameters findParams(LoginCredentials loginCreds) {
+    private Parameters findParams(final LoginCredentials loginCreds) {
 
         if (topo == null) {
             return null;
         }
 
         /* Look for admins to get parameters */
-        for (StorageNode sn : topo.getStorageNodeMap().getAll()) {
-            try {
-                final CommandServiceAPI admin =
-                    getAdmin(sn.getHostname(), sn.getRegistryPort(),
-                             loginCreds);
-                return admin.getParameters();
-            } catch (NotBoundException ignore) {
-                /* Ignore, there's no Admin on this SN */
-            } catch (RemoteException e) {
-                /*
-                 * Note the problem - an Admin is registered on this SN, but
-                 * it couldn't be accessed.
-                 */
-                problemReport.add
-                    (new Problem(sn.getResourceId(),
-                                 sn.getHostname(),
-                                 sn.getRegistryPort(),
-                                 "Admin Service exists on this SN but " +
-                                  "ping couldn't contact it: ", e));
-            }
+        ExecutorService executor = Executors.newFixedThreadPool(MAX_N_THREADS);
+        Collection<Callable<Parameters>> tasks =
+            new ArrayList<Callable<Parameters>>();
+        for (final StorageNode sn : topo.getStorageNodeMap().getAll()) {
+            tasks.add(new Callable<Parameters>() {
+                @Override
+                public Parameters call() throws Exception {
+                    try {
+                        final CommandServiceAPI admin =
+                            getAdmin(sn.getHostname(), sn.getRegistryPort(),
+                                     loginCreds);
+                        return admin.getParameters();
+                    } catch (RemoteException e) {
+                        /*
+                         * Note the problem - an Admin is registered on this SN,
+                         * but it couldn't be accessed.
+                         */
+                        problemReport.add
+                            (new Problem(sn.getResourceId(),
+                                         sn.getHostname(),
+                                         sn.getRegistryPort(),
+                                         "Admin Service exists on this SN " +
+                                         "but ping couldn't contact it: ", e));
+                        /*
+                         * Throw out all Exceptions to tell this task failed to
+                         * get admin parameters.
+                         */
+                        throw e;
+                    }
+                }
+            });
         }
 
-        /* Can't find any Admins, there should be some in the list. */
-        problemReport.add(new Problem("Can't contact any Admin services " +
-                                      "in the store"));
-        return null;
+        try {
+            /*
+             * Returns the admin parameter result got by the first completed
+             * task.
+             */
+            return executor.invokeAny(tasks);
+        } catch (Exception e) {
+            /*
+             * If it throws Exception, that means all task failed.
+             * Can't find any Admins, there should be some in the list.
+             */
+            problemReport.add(new Problem("Can't contact any Admin services " +
+                                          "in the store"));
+            return null;
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     /**
      * Given a set of SNs, find an AdminService to find a topology
      */
     private Topology searchAdminsForTopo(String[] hostPortStrings,
-                                         LoginCredentials loginCreds) {
+                                         final LoginCredentials loginCreds) {
 
         final HostPort[] targetHPs = HostPort.parse(hostPortStrings);
 
         /* Look for admins to get parameters */
-        for (HostPort hp : targetHPs) {
-            try {
-                final CommandServiceAPI admin =
-                    getAdmin(hp.hostname(), hp.port(), loginCreds);
-                return admin.getTopology();
-            } catch (NotBoundException ignore) {
-                /* Ignore, there's no Admin on this SN */
-            } catch (RemoteException e) {
-                /*
-                 * Note the problem - an Admin is registered on this SN, but
-                 * it couldn't be accessed.
-                 */
-                problemReport.add
-                    (new Problem(hp.hostname(),
-                                 hp.port(),
-                                 "Admin Service exists on this SN but " +
-                                  "ping couldn't contact it: ", e));
-            } catch (Exception e) {
-                /* Ignore, Admin failed to get topology when Admin is not
-                 * configured or ready */
-            }
+        ExecutorService executor = Executors.newFixedThreadPool(MAX_N_THREADS);
+        Collection<Callable<Topology>> tasks =
+            new ArrayList<Callable<Topology>>();
+        for (final HostPort hp : targetHPs) {
+            tasks.add(new Callable<Topology>() {
+                @Override
+                public Topology call() throws Exception {
+                    try {
+                        final CommandServiceAPI admin =
+                            getAdmin(hp.hostname(), hp.port(), loginCreds);
+                        return admin.getTopology();
+                    } catch (RemoteException e) {
+                        /*
+                         * Note the problem - an Admin is registered on this SN,
+                         * but it couldn't be accessed.
+                         */
+                        problemReport.add
+                            (new Problem(hp.hostname(),
+                                         hp.port(),
+                                         "Admin Service exists on this SN " +
+                                         "but ping couldn't contact it: ", e));
+                        /*
+                         * Throw out all Exceptions to tell this task failed to
+                         * get topology.
+                         */
+                        throw e;
+                    }
+                }
+            });
         }
 
-        /* Can't find any Admins, there should be some in the list. */
-        problemReport.add(new Problem("Searching for topology, can't contact "+
-                                      "any Admin services in the store"));
-        return null;
+        try {
+            /*
+             * Returns the topology result got by the first completed task.
+             */
+            return executor.invokeAny(tasks);
+        } catch (Exception e) {
+            /*
+             * If it throws Exception, that means all task failed.
+             * Can't find any Admins, there should be some in the list.
+             */
+            problemReport.add(new Problem("Searching for topology, can't "+
+                                          "contact any Admin services in the "+
+                                          "store"));
+            return null;
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
-    private LoginManager getAdminLoginManager(
-        String snHostname, int snRegistryPort,
-        LoginCredentials loginCreds) {
+    private LoginManager getAdminLoginManager(String snHostname, 
+                                              int snRegistryPort,
+                                              LoginCredentials loginCreds) {
 
         return (loginCreds != null) ?
             KVStoreLogin.getAdminLoginMgr(
@@ -1043,6 +1170,7 @@ public class Ping {
      * If a replication group (RN or admin) does not have quorum the global
      * noRNQuorum counter is incremented, indicating a situation that requires
      * immediate attention because the cluster may be partially inaccessible.
+     * The quorum computation includes arbiters.
      */
     private ExitCode analyzeStatus(PingCollector collector) {
         if (topo == null) {
@@ -1076,7 +1204,7 @@ public class Ping {
         /* Does each shard have quorum? */
         final Map<RepNode, RepNodeStatus> rnMap = collector.getRNMap();
         final Map<ResourceId, ServiceChange> monitoredChanges =
-                collector.getMonitoredChanges();
+            collector.getMonitoredChanges();
         int noRNQuorum = 0;
         for (RepGroup rg: topo.getRepGroupMap().getAll()) {
 
@@ -1118,9 +1246,52 @@ public class Ping {
                     numBadInShard++;
                 }
             }
+
+            int numFailAN = 0;
+            final Map<ArbNode, ArbNodeStatus> anMap = collector.getANMap();
+            Collection<ArbNode> ans = rg.getArbNodes();
+            for (ArbNode an : ans) {
+                ArbNodeStatus anStatus = anMap.get(an);
+                ServiceStatus status = (anStatus == null ?
+                                        ServiceStatus.UNREACHABLE :
+                                        anStatus.getServiceStatus());
+                if (!status.equals(ServiceStatus.RUNNING)) {
+                    ArbNodeId aid = an.getResourceId();
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("AN is not running: ").append(status);
+
+                    if (anStatus == null) {
+                        ServiceChange change = monitoredChanges.get(aid);
+                        sb.append(", last known status is ");
+                        if (change == null) {
+                            sb.append("UNKNOWN");
+                        } else {
+                            String reportTime =
+                                FormatUtils.formatDateAndTime
+                                (change.getChangeTime());
+                            sb.append(change.getStatus())
+                                .append(", reported at ").append(reportTime);
+                        }
+                    }
+                    StorageNode sn = topo.get(an.getStorageNodeId());
+                    problemReport.add(new Problem(aid,
+                                                  sn.getHostname(),
+                                                  sn.getRegistryPort(),
+                                                  sb.toString()));
+                    numFailAN++;
+                    numBadInShard++;
+                }
+            }
+
             if (numBadInShard > 0) {
                 failedShards.put(rg.getResourceId(), numBadInShard);
-                if (numBadInShard >= numNeeded) {
+                /* check if using arbiters */
+                if (rf == 2 && !ans.isEmpty()) {
+                    /* Using arbiters. */
+                    if (numBadInShard + numFailAN > 1) {
+                        noRNQuorum++;
+                    }
+                } else if (numBadInShard >= numNeeded) {
                     noRNQuorum++;
                 }
             }
@@ -1149,7 +1320,7 @@ public class Ping {
                     problemReport.add(new Problem(aid,
                                                   sn.getHostname(),
                                                   sn.getRegistryPort(),
-                                                 "Admin is not running: " +
+                                                  "Admin is not running: " +
                                                   status));
                     failedAdmins.add(aid);
                     numFail++;
@@ -1194,7 +1365,7 @@ public class Ping {
         return;
     }
 
-    private static void displayExitJson(PrintStream ps, 
+    private static void displayExitJson(PrintStream ps,
                                         ExitCode exitCode,
                                         String errorMsg) {
         /* Package up the exit results in a json node */
@@ -1274,7 +1445,7 @@ public class Ping {
         public String getDescription() {
             if (errorMsg == null) {
                 return exitCode.getDescription();
-            } 
+            }
             return exitCode.getDescription() + " - " + errorMsg;
         }
 
@@ -1301,7 +1472,7 @@ public class Ping {
         Registry snRegistry;
         try {
             snRegistry = RegistryUtils.getRegistry(hp.hostname(), hp.port(),
-                                      null /* storeName */);
+                                                   null /* storeName */);
 
             final List<String> serviceNames = new ArrayList<String>();
             Collections.addAll(serviceNames, snRegistry.list());
@@ -1388,7 +1559,7 @@ public class Ping {
         }
 
 
-        public Problem(String hostname, int port, String description, 
+        public Problem(String hostname, int port, String description,
                        RemoteException e) {
             this.componentName = null;
             this.description = description + " " + e.getMessage();

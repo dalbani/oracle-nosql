@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,6 +43,7 @@
 
 package oracle.kv.impl.admin.criticalevent;
 
+import java.io.Serializable;
 import java.rmi.NoSuchObjectException;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
@@ -82,7 +83,7 @@ public class EventRecorder {
     private boolean workerThreadGo;
     private boolean isShutdown;
     private LatestEventTimestamps timestamps;
-    private final List<SyncWaiter> syncWaiters = new ArrayList<SyncWaiter>();
+    private final List<SyncWaiter> syncWaiters = new ArrayList<>();
 
     public EventRecorder(final Admin admin) {
 
@@ -241,7 +242,7 @@ public class EventRecorder {
                  * There may be no recordable events at all.
                  */
                 statusEvents = statusEventsContainer.getRecordableEvents();
-                if (statusEvents.size() != 0) {
+                if (!statusEvents.isEmpty()) {
                     storeStatusEvents(statusEvents);
                 }
             }
@@ -255,7 +256,7 @@ public class EventRecorder {
                 timestamps.setPerfTimestamp(perfSince);
                 perfListener.setInterestingTime(perfSince);
                 perfEvents = perfEventsContainer.getRecordableEvents();
-                if (perfEvents.size() != 0) {
+                if (!perfEvents.isEmpty()) {
                     storePerfEvents(perfEvents);
                 }
             }
@@ -266,7 +267,7 @@ public class EventRecorder {
                 timestamps.setLogTimestamp(logSince);
                 logListener.setInterestingTime(logSince);
                 logEvents = logEventsContainer.getRecordableEvents();
-                if (logEvents.size() != 0) {
+                if (!logEvents.isEmpty()) {
                     storeLogEvents(logEvents);
                 }
             }
@@ -276,8 +277,7 @@ public class EventRecorder {
     private void storeStatusEvents
         (List<Tracker.EventHolder<ServiceChange>> statusEvents) {
 
-        List<CriticalEvent> pevents =
-            new ArrayList<CriticalEvent>();
+        final List<CriticalEvent> pevents = new ArrayList<>();
 
         for (EventHolder<ServiceChange> eh : statusEvents) {
             pevents.add(new CriticalEvent(eh.getSyntheticTimestamp(),
@@ -289,8 +289,7 @@ public class EventRecorder {
     private void storePerfEvents
         (List<Tracker.EventHolder<PerfEvent>> perfEvents) {
 
-        List<CriticalEvent> pevents =
-            new ArrayList<CriticalEvent>();
+        final List<CriticalEvent> pevents = new ArrayList<>();
 
         for (EventHolder<PerfEvent> eh : perfEvents) {
             pevents.add(new CriticalEvent(eh.getSyntheticTimestamp(),
@@ -302,8 +301,7 @@ public class EventRecorder {
     private void storeLogEvents
         (List<Tracker.EventHolder<LogRecord>> logEvents) {
 
-        List<CriticalEvent> pevents =
-            new ArrayList<CriticalEvent>();
+        final List<CriticalEvent> pevents = new ArrayList<>();
 
         for (EventHolder<LogRecord> eh : logEvents) {
             pevents.add(new CriticalEvent(eh.getSyntheticTimestamp(),
@@ -417,7 +415,9 @@ public class EventRecorder {
      * restart the eventrecorder with the last saved timestamps.
      */
     @Persistent
-    public static class LatestEventTimestamps {
+    public static class LatestEventTimestamps implements Serializable {
+        private static final long serialVersionUID = 1L;
+
         long latestStatusEventTimestamp;
         long latestPerfEventTimestamp;
         long latestLogEventTimestamp;

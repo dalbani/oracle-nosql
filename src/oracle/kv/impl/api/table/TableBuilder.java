@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,12 +44,14 @@
 package oracle.kv.impl.api.table;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
-import oracle.kv.impl.security.ResourceOwner;
-import oracle.kv.table.Table;
-
 import org.apache.avro.Schema;
+
+import oracle.kv.impl.security.ResourceOwner;
+import oracle.kv.table.FieldDef;
+import oracle.kv.table.Table;
 
 /**
  * TableBuilder is a class used to construct Tables and complex data type
@@ -59,7 +61,7 @@ import org.apache.avro.Schema;
  * 2.  add state in terms of data types
  * 3.  build the desired object
  *
- * When constructing a child table the parent tables Table object is required.
+ * When constructing a child table the parent table's Table object is required.
  * This requirement makes it easy to add the necessary parent information to
  * the child table.  It is also less error prone than requiring the caller to
  * add the parent's key fields by hand.
@@ -70,106 +72,98 @@ import org.apache.avro.Schema;
  * this if it is even publicly supported.
  */
 public class TableBuilder extends TableBuilderBase {
+
     private final String name;
+
     private String description;
 
     /* These apply only to tables */
+
     private final TableImpl parent;
+
     private List<String> primaryKey;
+
     private List<String> shardKey;
+
+    private HashMap<String,Integer> primaryKeySizes;
+
     private boolean r2compat;
+
     private boolean schemaAdded;
+
     private int schemaId;
+
     private ResourceOwner owner;
 
-    private TableBuilder(String name, String description,
-                         Table parent, boolean copyParentInfo) {
+    private boolean sysTable;
+
+    private TableBuilder(
+        String name,
+        String description,
+        Table parent,
+        boolean copyParentInfo,
+        boolean isSysTable) {
+
         this.name = name;
         this.description = description;
         schemaAdded = false;
         r2compat = false;
         this.parent = (parent != null ? (TableImpl) parent : null);
+        this.sysTable = isSysTable;
         primaryKey = new ArrayList<String>();
         shardKey = new ArrayList<String>();
+
+        /* Add the key columns of the parent table to this TableBuilder. */
         if (parent != null && copyParentInfo) {
             addParentInfo();
         }
-        TableImpl.validateComponent(name, true);
+
+        if (sysTable) {
+            TableImpl.validateSystemTableName(name);
+        } else {
+            TableImpl.validateComponent(name, true);
+        }
+    }
+
+    private TableBuilder(
+        String name,
+        String description,
+        Table parent,
+        boolean copyParentInfo) {
+
+        this(name, description, parent, copyParentInfo, false);
     }
 
     /**
-     * Create a table builder
+     * There is no need to go more than one level because the primary key of
+     * each table includes the fields of its ancestors.
      */
-    public static TableBuilder createTableBuilder(String name,
-                                                  String description,
-                                                  Table parent,
-                                                  boolean copyParentInfo) {
-        return new TableBuilder(name, description, parent,
-                                copyParentInfo);
-    }
+    private void addParentInfo() {
+        for (String fieldName : parent.getPrimaryKey()) {
+            fields.put(fieldName, parent.getFieldMapEntry(fieldName, true));
+            primaryKey.add(fieldName);
+        }
 
-    public static TableBuilder createTableBuilder(String name,
-                                                  String description,
-                                                  Table parent) {
-        return new TableBuilder(name, description, parent, true);
-    }
-
-    public static TableBuilder createTableBuilder(String name) {
-        return new TableBuilder(name, null, null, true);
-    }
-
-    /**
-     * Creates an ArrayBuilder.
-     *
-     * @param description optional description.
-     */
-    public static ArrayBuilder createArrayBuilder(String description) {
-        return new ArrayBuilder(description);
-    }
-
-    public static ArrayBuilder createArrayBuilder() {
-        return new ArrayBuilder();
+        /*
+         * Copy the primary key sizes of the parent to this object's map
+         * of key sizes. There's a translation from array of int to the
+         * map.
+         */
+        if (parent.getPrimaryKeySizes() != null) {
+            primaryKeySizes =
+                new HashMap<String, Integer>();
+            final List<String> parentKeys = parent.getPrimaryKey();
+            for (int i = 0; i < parent.getPrimaryKeySizes().size(); i++) {
+                int index = parent.getPrimaryKeySizes().get(i);
+                if (index != 0) {
+                    primaryKeySizes.put(parentKeys.get(i), index);
+                }
+            }
+        }
     }
 
     /**
-     * Creates an MapBuilder.
-     *
-     * @param description optional description.
-     */
-    public static MapBuilder createMapBuilder(String description) {
-        return new MapBuilder(description);
-    }
-
-    public static MapBuilder createMapBuilder() {
-        return new MapBuilder();
-    }
-
-    /**
-     * Creates an RecordBuilder.
-     *
-     * @param name the name of the record
-     *
-     * @param description optional description.
-     */
-    public static RecordBuilder createRecordBuilder(String name,
-                                                    String description) {
-        return new RecordBuilder(name, description);
-    }
-
-    public static RecordBuilder createRecordBuilder(String name) {
-        return new RecordBuilder(name);
-    }
-
-    /**
-     * Build a Table from its JSON format.
-     */
-    public static TableImpl fromJsonString(String jsonString,
-                                           Table parent) {
-        return TableJsonUtils.fromJsonString(jsonString, (TableImpl) parent);
-    }
-
-    /**
-     * Accessors
+     * Getters/Setters
      */
     public String getName() {
         return name;
@@ -177,6 +171,12 @@ public class TableBuilder extends TableBuilderBase {
 
     public String getDescription() {
         return description;
+    }
+
+    @Override
+    public TableBuilderBase setDescription(String description) {
+        this.description = description;
+        return this;
     }
 
     public TableImpl getParent() {
@@ -195,17 +195,41 @@ public class TableBuilder extends TableBuilderBase {
         return r2compat;
     }
 
+    @Override
+    public TableBuilderBase setR2compat(boolean value) {
+        this.r2compat = value;
+        return this;
+    }
+
     public int getSchemaId() {
         return schemaId;
+    }
+
+    /**
+     * This implicitly sets r2compat to true as well.
+     */
+    @Override
+    public TableBuilderBase setSchemaId(int id) {
+        schemaId = id;
+        r2compat = true;
+        return this;
     }
 
     public ResourceOwner getOwner() {
         return owner;
     }
 
-    @Override
-    public TableBuilderBase setDescription(String description) {
-        this.description = description;
+    public TableBuilderBase setOwner(ResourceOwner newOwner) {
+        this.owner = newOwner;
+        return this;
+    }
+
+    public boolean isSysTable() {
+        return sysTable;
+    }
+
+    public TableBuilderBase setSysTable(boolean value) {
+        this.sysTable = value;
         return this;
     }
 
@@ -257,46 +281,48 @@ public class TableBuilder extends TableBuilderBase {
     }
 
     @Override
-    public TableBuilderBase setR2compat(boolean value) {
-        this.r2compat = value;
-        return this;
-    }
-
-    /**
-     * This implicitly sets r2compat to true as well.
-     */
-    @Override
-    public TableBuilderBase setSchemaId(int id) {
-        schemaId = id;
-        r2compat = true;
-        return this;
-    }
-
-    @Override
-    public TableBuilderBase addSchema(String avroSchema) {
-        if (schemaAdded) {
+    public TableBuilderBase primaryKeySize(String keyField, int size) {
+        if (primaryKey == null) {
             throw new IllegalArgumentException
-                ("Only one schema may be added to a table");
+                ("primaryKeySize() cannot be called before primaryKey()");
         }
-        Schema schema = new Schema.Parser().parse(avroSchema);
-        List<Schema.Field> schemaFields = schema.getFields();
-        for (Schema.Field field : schemaFields) {
-            generateAvroSchemaFields(field.schema(),
-                                     field.name(),
-                                     field.defaultValue(),
-                                     field.doc());
-        }
-        schemaAdded = true;
-        return this;
-    }
 
-    public TableBuilderBase setOwner(ResourceOwner newOwner) {
-        this.owner = newOwner;
+        int index = primaryKey.indexOf(keyField);
+        if (index < 0) {
+            throw new IllegalArgumentException
+                ("Field is not part of primary key: " + keyField);
+        }
+
+        /*
+         * If the field is present (it may not be), make sure it's an integer.
+         * If not present, the type validation will happen on table creation.
+         */
+        FieldDef field = getField(keyField);
+        if (field != null && !field.isInteger()) {
+            throw new IllegalArgumentException
+                ("primaryKeySize() requires an INTEGER field type: " +
+                 keyField);
+        }
+
+        if (size <= 0 || size > 5) {
+            throw new IllegalArgumentException("Invalid primary key size: " +
+                                               size + ". Size must be 1-5.");
+        }
+        /*
+         * Ignore a size of 5, which is the largest size possible
+         * for an integer of any value.
+         */
+        if (size < 5) {
+            if (primaryKeySizes == null) {
+                primaryKeySizes = new HashMap<String, Integer>();
+            }
+            primaryKeySizes.put(keyField, size);
+        }
         return this;
     }
 
     /**
-     * Methods to perform the actual build
+     * Build the actual TableImpl
      */
     @Override
     public TableImpl buildTable() {
@@ -316,13 +342,16 @@ public class TableBuilder extends TableBuilderBase {
         return TableImpl.createTable(getName(),
                                      parent,
                                      getPrimaryKey(),
+                                     getPrimaryKeySizes(),
                                      getShardKey(),
                                      fields,
                                      r2compat,
                                      schemaId,
                                      getDescription(),
                                      true,
-                                     owner);
+                                     owner,
+                                     ttl,
+                                     sysTable);
     }
 
     @Override
@@ -355,6 +384,31 @@ public class TableBuilder extends TableBuilderBase {
     }
 
     /*
+     * Create a table schema out of the given AVRO schema.
+     */
+    @Override
+    public TableBuilderBase addSchema(String avroSchema) {
+
+        if (schemaAdded) {
+            throw new IllegalArgumentException
+                ("Only one schema may be added to a table");
+        }
+
+        Schema schema = new Schema.Parser().parse(avroSchema);
+
+        List<Schema.Field> schemaFields = schema.getFields();
+
+        for (Schema.Field field : schemaFields) {
+            generateAvroSchemaFields(field.schema(),
+                                     field.name(),
+                                     field.defaultValue(),
+                                     field.doc());
+        }
+        schemaAdded = true;
+        return this;
+    }
+
+    /*
      * Show the current state of the table.  The simplest way is to create a
      * not-validated table and display it.
      */
@@ -362,24 +416,101 @@ public class TableBuilder extends TableBuilderBase {
         TableImpl t = TableImpl.createTable(getName(),
                                             parent,
                                             getPrimaryKey(),
+                                            getPrimaryKeySizes(),
                                             getShardKey(),
                                             fields,
                                             r2compat,
                                             schemaId,
                                             getDescription(),
                                             false,
-                                            owner);
+                                            owner,
+                                            ttl,
+                                            sysTable);
         return t.toJsonString(pretty);
     }
 
-    /**
-     * There is no need to go more than one level because the primary key of
-     * each table includes the fields of its ancestors.
-     */
-    private void addParentInfo() {
-        for (String fieldName : parent.getPrimaryKey()) {
-            fields.put(fieldName, parent.getFieldMapEntry(fieldName, true));
-            primaryKey.add(fieldName);
+    public List<Integer> getPrimaryKeySizes() {
+        if (primaryKeySizes == null) {
+            return null;
         }
+        ArrayList<Integer> list = new ArrayList<Integer>(primaryKey.size());
+        for (String key : primaryKey) {
+            Integer size = primaryKeySizes.get(key);
+            if (size == null) {
+                size = 0;
+            }
+            list.add(size);
+        }
+        return list;
+    }
+
+    /**
+     * Build a Table from its JSON format.
+     */
+    public static TableImpl fromJsonString(
+        String jsonString,
+        Table parent) {
+        return TableJsonUtils.fromJsonString(jsonString, (TableImpl) parent);
+    }
+
+    /**
+     * Create a table builder
+     */
+    public static TableBuilder createTableBuilder(
+        String name,
+        String description,
+        Table parent,
+        boolean copyParentInfo) {
+        return new TableBuilder(name, description, parent, copyParentInfo);
+    }
+
+    public static TableBuilder createTableBuilder(
+        String name,
+        String description,
+        Table parent) {
+        return new TableBuilder(name, description, parent, true);
+    }
+
+    public static TableBuilder createTableBuilder(String name) {
+        return new TableBuilder(name, null, null, true);
+    }
+
+    public static TableBuilder createSystemTableBuilder(String name) {
+        return new TableBuilder(name, null, null, true, true);
+    }
+
+    /**
+     * Creates an ArrayBuilder.
+     */
+    public static ArrayBuilder createArrayBuilder(String description) {
+        return new ArrayBuilder(description);
+    }
+
+    public static ArrayBuilder createArrayBuilder() {
+        return new ArrayBuilder();
+    }
+
+    /**
+     * Creates an MapBuilder.
+     */
+    public static MapBuilder createMapBuilder(String description) {
+        return new MapBuilder(description);
+    }
+
+    public static MapBuilder createMapBuilder() {
+        return new MapBuilder();
+    }
+
+    /**
+     * Creates a RecordBuilder.
+     */
+    public static RecordBuilder createRecordBuilder(
+        String name,
+        String description) {
+        return new RecordBuilder(name, description);
+    }
+
+    public static RecordBuilder createRecordBuilder(String name) {
+        return new RecordBuilder(name);
     }
 }

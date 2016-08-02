@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2014 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -46,6 +46,8 @@ package oracle.kv.impl.rep.stats;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import oracle.kv.impl.api.table.TableBuilder;
+import oracle.kv.impl.api.table.TableImpl;
 import oracle.kv.impl.api.table.TableMetadata;
 import oracle.kv.impl.rep.RepNode;
 import oracle.kv.impl.rep.stats.IndexLeaseManager.IndexLeaseInfo;
@@ -63,6 +65,7 @@ import com.sleepycat.je.DatabaseException;
 import com.sleepycat.je.DbInternal;
 import com.sleepycat.je.Environment;
 import com.sleepycat.je.LockMode;
+import com.sleepycat.je.OperationResult;
 import com.sleepycat.je.OperationStatus;
 import com.sleepycat.je.SecondaryConfig;
 import com.sleepycat.je.SecondaryCursor;
@@ -80,7 +83,8 @@ import com.sleepycat.je.rep.ReplicatedEnvironment;
  */
 public class TableIndexScan extends StatsScan<IndexLeaseInfo> {
     /* Table name */
-    public static final String TABLE_NAME = "TableStatsIndex";
+    public static final String TABLE_NAME =
+        TableImpl.SYSTEM_TABLE_PREFIX + "TableStatsIndex";
 
     /* All fields within this table */
     protected static final String COL_NAME_TABLE_NAME = "tableName";
@@ -262,6 +266,7 @@ public class TableIndexScan extends StatsScan<IndexLeaseInfo> {
             final DatabaseEntry dataEntry = new DatabaseEntry();
             dataEntry.setPartial(0, 0, true);
             OperationStatus status;
+            OperationResult result;
 
             if (resumeSecondaryKey == null) {
                 status = cursor.getFirst(keyEntry, pKeyEntry, dataEntry,
@@ -273,9 +278,12 @@ public class TableIndexScan extends StatsScan<IndexLeaseInfo> {
                 /* Search is set as Search.GT and the scanning is ascend */
                 final Search search = Search.GT;
                 /* First search within dups for the given sec key. */
-                status = DbInternal.searchBoth(cursor, keyEntry, pKeyEntry,
-                                               dataEntry, search,
-                                               LockMode.READ_UNCOMMITTED);
+                result = DbInternal.searchBoth(
+                    cursor, keyEntry, pKeyEntry,
+                    dataEntry, search,
+                    LockMode.READ_UNCOMMITTED.toReadOptions());
+                status = result != null ? OperationStatus.SUCCESS :
+                    OperationStatus.NOTFOUND;
 
                 /*
                  * If NOTFOUND then we're done because the search is limited to
@@ -286,9 +294,13 @@ public class TableIndexScan extends StatsScan<IndexLeaseInfo> {
                      * There are no more records with the given sec key.  Move
                      * to the next sec key, and to the first dup for that key.
                      */
-                    status = DbInternal.search(cursor, keyEntry, pKeyEntry,
-                                               dataEntry, search,
-                                               LockMode.READ_UNCOMMITTED);
+                    result = DbInternal.search(
+                        cursor, keyEntry, pKeyEntry,
+                        dataEntry, search,
+                        LockMode.READ_UNCOMMITTED.toReadOptions());
+                    status = result != null ? OperationStatus.SUCCESS :
+                        OperationStatus.NOTFOUND;
+
                 }
             }
 
@@ -325,5 +337,28 @@ public class TableIndexScan extends StatsScan<IndexLeaseInfo> {
         }
 
         return false;
+    }
+
+    /**
+     * Get table builder of TableStatsIndex
+     */
+    public static TableBuilder getTableBuilder() {
+        final TableBuilder builder =
+            TableBuilder.createSystemTableBuilder(TABLE_NAME);
+
+        /* Types of all fields within this table */
+        builder.addString(COL_NAME_TABLE_NAME);
+        builder.addString(COL_NAME_INDEX_NAME);
+        builder.addInteger(COL_NAME_SHARD_ID);
+        builder.addLong(COL_NAME_COUNT);
+        builder.addInteger(COL_NAME_AVG_KEY_SIZE);
+        builder.primaryKey(COL_NAME_TABLE_NAME,
+                           COL_NAME_INDEX_NAME,
+                           COL_NAME_SHARD_ID);
+        builder.shardKey(COL_NAME_TABLE_NAME,
+                         COL_NAME_INDEX_NAME,
+                         COL_NAME_SHARD_ID);
+
+        return builder;
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,11 +48,12 @@ import static oracle.kv.impl.api.table.TableJsonUtils.NULLABLE;
 
 import java.util.List;
 
-import oracle.kv.table.FieldDef;
-
 import org.apache.avro.Schema;
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.ObjectNode;
+
+import oracle.kv.table.FieldDef;
+import oracle.kv.table.TimeToLive;
 
 /**
  * TableBuilderBase is a base class for TableBuilder and TableEvolver that
@@ -61,7 +62,9 @@ import org.codehaus.jackson.node.ObjectNode;
  * return values (TableBuilderBase) on usage.
  */
 public class TableBuilderBase {
+
     protected FieldMap fields;
+    protected TimeToLive ttl;
 
     /**
      * A constructor for a new empty object.
@@ -72,25 +75,6 @@ public class TableBuilderBase {
 
     TableBuilderBase(FieldMap map) {
         fields = map;
-    }
-
-    public FieldMap getFieldMap() {
-        return fields;
-    }
-
-    public List<String> getFieldOrder() {
-        return fields.getFieldOrder();
-    }
-
-    /**
-     * This method accepts paths in dot notation to address nested fields.
-     */
-    public FieldDef getField(String name) {
-        return TableImpl.findTableField(new TableImpl.TableField(fields, name));
-    }
-
-    public FieldDef getField(TableImpl.TableField tableField) {
-        return TableImpl.findTableField(tableField);
     }
 
     /**
@@ -110,13 +94,27 @@ public class TableBuilderBase {
         return false;
     }
 
+    public int size() {
+        return fields.size();
+    }
+
+    public FieldMap getFieldMap() {
+        return fields;
+    }
+
+    public List<String> getFieldOrder() {
+        return fields.getFieldOrder();
+    }
+
     /**
-     * Validate the object by building it.  This may be overridden if
-     * necessary.
+     * This method accepts paths in dot notation to address nested fields.
      */
-    public TableBuilderBase validate() {
-        build();
-        return this;
+    public FieldDef getField(String name) {
+        return TableImpl.findTableField(new TablePath(fields, name));
+    }
+
+    public FieldDef getField(TablePath tableField) {
+        return TableImpl.findTableField(tableField);
     }
 
     /**
@@ -140,6 +138,11 @@ public class TableBuilderBase {
     @SuppressWarnings("unused")
     public TableBuilderBase shardKey(List<String> key) {
         throw new IllegalArgumentException("shardKey not supported");
+    }
+
+    @SuppressWarnings("unused")
+    public TableBuilderBase primaryKeySize(String keyField, int size) {
+        throw new IllegalArgumentException("primaryKeySize not supported");
     }
 
     @SuppressWarnings("unused")
@@ -170,24 +173,38 @@ public class TableBuilderBase {
         throw new IllegalArgumentException("build must be overridden");
     }
 
+    /**
+     * Validate the object by building it.  This may be overridden if
+     * necessary.
+     */
+    public TableBuilderBase validate() {
+        build();
+        return this;
+    }
+
     /*
      * Integer
      */
     public TableBuilderBase addInteger(String name) {
-        return addInteger(name, null, null, null, null, null);
+        return addInteger(name, null, null, null);
     }
 
-    public TableBuilderBase addInteger(String name, String description,
-                                       Boolean nullable,
-                                       Integer defaultValue,
-                                       Integer min, Integer max) {
-        IntegerDefImpl def = new IntegerDefImpl(description, min, max);
+    public TableBuilderBase addInteger(
+        String name,
+        String description,
+        Boolean nullable,
+        Integer defaultValue) {
+
+        IntegerDefImpl def = new IntegerDefImpl(description);
+
         if (isCollectionBuilder()) {
             checkDefaultNotAllowed(defaultValue);
             return addField(def);
         }
+
         IntegerValueImpl value = (defaultValue != null ?
                                   def.createInteger(defaultValue) : null);
+
         return addField(name, makeFieldMapEntry(def, nullable, value));
     }
 
@@ -195,26 +212,19 @@ public class TableBuilderBase {
      * Adds to collection (map, array), no name, not nullable, no default.
      */
     public TableBuilderBase addInteger() {
-        return addInteger(null, null, null, null, null, null);
-    }
-
-    public TableBuilderBase addInteger(String description,
-                                       Integer min, Integer max) {
-        return addInteger(null, description, null, null, min, max);
+        return addInteger(null, null, null, null);
     }
 
     /*
      * Long
      */
     public TableBuilderBase addLong(String name) {
-        return addLong(name, null, null, null, null, null);
+        return addLong(name, null, null, null);
     }
 
     public TableBuilderBase addLong(String name, String description,
-                                    Boolean nullable,
-                                    Long defaultValue,
-                                    Long min, Long max) {
-        LongDefImpl def = new LongDefImpl(description, min, max);
+                                    Boolean nullable, Long defaultValue) {
+        LongDefImpl def = new LongDefImpl(description);
         if (isCollectionBuilder()) {
             checkDefaultNotAllowed(defaultValue);
             return addField(def);
@@ -228,26 +238,20 @@ public class TableBuilderBase {
      * Adds to collection (map, array), no name, not nullable, no default.
      */
     public TableBuilderBase addLong() {
-        return addLong(null, null, null, null, null, null);
-    }
-
-    public TableBuilderBase addLong(String description,
-                                    Long min, Long max) {
-        return addLong(null, description, null, null, min, max);
+        return addLong(null, null, null, null);
     }
 
     /*
      * Double
      */
     public TableBuilderBase addDouble(String name) {
-        return addDouble(name, null, null, null, null, null);
+        return addDouble(name, null, null, null);
     }
 
     public TableBuilderBase addDouble(String name, String description,
                                       Boolean nullable,
-                                      Double defaultValue,
-                                      Double min, Double max) {
-        DoubleDefImpl def = new DoubleDefImpl(description, min, max);
+                                      Double defaultValue) {
+        DoubleDefImpl def = new DoubleDefImpl(description);
         if (isCollectionBuilder()) {
             checkDefaultNotAllowed(defaultValue);
             return addField(def);
@@ -261,26 +265,20 @@ public class TableBuilderBase {
      * Adds to collection (map, array), no name, not nullable, no default.
      */
     public TableBuilderBase addDouble() {
-        return addDouble(null, null, null, null, null, null);
-    }
-
-    public TableBuilderBase addDouble(String description,
-                                      Double min, Double max) {
-        return addDouble(null, description, null, null, min, max);
+        return addDouble(null, null, null, null);
     }
 
     /*
      * Float
      */
     public TableBuilderBase addFloat(String name) {
-        return addFloat(name, null, null, null, null, null);
+        return addFloat(name, null, null, null);
     }
 
     public TableBuilderBase addFloat(String name, String description,
-                                      Boolean nullable,
-                                      Float defaultValue,
-                                      Float min, Float max) {
-        FloatDefImpl def = new FloatDefImpl(description, min, max);
+                                     Boolean nullable,
+                                     Float defaultValue) {
+        FloatDefImpl def = new FloatDefImpl(description);
         if (isCollectionBuilder()) {
             checkDefaultNotAllowed(defaultValue);
             return addField(def);
@@ -294,18 +292,12 @@ public class TableBuilderBase {
      * Adds to collection (map, array), no name, not nullable, no default.
      */
     public TableBuilderBase addFloat() {
-        return addFloat(null, null, null, null, null, null);
-    }
-
-    public TableBuilderBase addFloat(String description,
-                                     Float min, Float max) {
-        return addFloat(null, description, null, null, min, max);
+        return addFloat(null, null, null, null);
     }
 
     /*
      * Boolean
      */
-
     public TableBuilderBase addBoolean(String name) {
         return addBoolean(name, null, null, null);
     }
@@ -338,17 +330,13 @@ public class TableBuilderBase {
      * String
      */
     public TableBuilderBase addString(String name) {
-        return addString(name, null, null, null, null, null, null, null);
+        return addString(name, null, null, null);
     }
 
     public TableBuilderBase addString(String name, String description,
                                       Boolean nullable,
-                                      String defaultValue,
-                                      String min, String max,
-                                      Boolean minInclusive,
-                                      Boolean maxInclusive) {
-        StringDefImpl def = new StringDefImpl(description, min, max,
-                                              minInclusive, maxInclusive);
+                                      String defaultValue) {
+        StringDefImpl def = new StringDefImpl(description);
         if (isCollectionBuilder()) {
             checkDefaultNotAllowed(defaultValue);
             return addField(def);
@@ -362,15 +350,7 @@ public class TableBuilderBase {
      * Adds to collection (map, array), no name, not nullable, no default.
      */
     public TableBuilderBase addString() {
-        return addString(null, null, null, null, null);
-    }
-
-    public TableBuilderBase addString(String description,
-                                      String min, String max,
-                                      Boolean minInclusive,
-                                      Boolean maxInclusive) {
-        return addString(null, description, null, null,
-                         min, max, minInclusive, maxInclusive);
+        return addString(null, null, null, null);
     }
 
     /*
@@ -466,14 +446,79 @@ public class TableBuilderBase {
         return addField(name, makeFieldMapEntry(def, nullable, null));
     }
 
+    /**
+     * Add field to map or array. These fields do not have names.
+     */
+    @SuppressWarnings("unused")
+    public TableBuilderBase addField(FieldDef field) {
+
+        throw new IllegalArgumentException(
+            "addField(FieldDef) can only be used for maps and arrays");
+    }
+
+    public TableBuilderBase addField(
+        String name,
+        FieldDefImpl field,
+        boolean nullable,
+        FieldValueImpl defaultValue) {
+
+        assert(!isCollectionBuilder());
+
+        return addField(name, makeFieldMapEntry(field, nullable, defaultValue));
+    }
+
+    /**
+     * Adds to a record using default values.
+     */
+    public TableBuilderBase addField(String name, FieldDef field) {
+
+        if (isCollectionBuilder()) {
+            return addField(field);
+        }
+
+        return addField(name, makeFieldMapEntry(field, null, null));
+    }
+
+    public TableBuilderBase addField(String name, FieldMapEntry field) {
+
+        validateFieldAddition(name, field);
+
+        assert name != null;
+        if (getField(name) != null) {
+            throw new IllegalArgumentException
+                ("Named field already exists: " + name);
+        }
+
+        TablePath tableField = new TablePath(fields, name);
+
+        FieldMap map = TableImpl.findContainingMap(fields, tableField,
+                                                   true/*mustExist*/);
+
+        map.put(tableField.getLastStep(), field);
+        return this;
+    }
+
+    /**
+     * Validate the addition of a field to the map.  At this time it ensures
+     * that the field name uses allowed characters.  Sub-classes involved with
+     * schema evolution will override it.
+     */
+    @SuppressWarnings("unused")
+    void validateFieldAddition(
+        final String name,
+        final FieldMapEntry field) {
+
+        if (name != null) {
+            TableImpl.validateComponent(name, false, true);
+        }
+    }
 
     /**
      * Remove a field.  This must accept dot notation names to handle
      * nested fields.
      */
     public void removeField(String fieldName) {
-        TableImpl.TableField tableField =
-            new TableImpl.TableField(fields, fieldName);
+        TablePath tableField = new TablePath(fields, fieldName);
         FieldDef toBeRemoved = getField(tableField);
         if (toBeRemoved == null) {
             throw new IllegalArgumentException
@@ -486,7 +531,7 @@ public class TableBuilderBase {
          */
         FieldMap containingField =
             TableImpl.findContainingMap(fields, tableField, true);
-        containingField.remove(tableField.getLastComponent());
+        containingField.remove(tableField.getLastStep());
     }
 
     /**
@@ -494,75 +539,33 @@ public class TableBuilderBase {
      * overridden by classes that need to perform actual validation.
      */
     @SuppressWarnings("unused")
-    void validateFieldRemoval(String fieldName) {}
-
-    /**
-     * Returns the number of fields defined
-     */
-    public int size() {
-        return fields.size();
+    void validateFieldRemoval(String fieldName) {
     }
 
     /**
-     * Add field to map or array.  These fields do not have names.
+     * Utility method used by the query translator.
      */
-    @SuppressWarnings("unused")
-    public TableBuilderBase addField(FieldDef field) {
-        throw new IllegalArgumentException
-            ("addField(FieldDef) can only be used for maps and arrays");
+    public void reverseFieldOrder() {
+        assert(!isCollectionBuilder());
+        fields.reverseFieldOrder();
     }
 
-    /**
-     * Adds to a record using default values.
-     */
-    public TableBuilderBase addField(String name, FieldDef field) {
-        if (isCollectionBuilder()) {
-            return addField(field);
-        }
-        return addField
-            (name, makeFieldMapEntry((FieldDefImpl)field, null, null));
-    }
-
-    public TableBuilderBase addField(String name, FieldMapEntry field) {
-        validateFieldAddition(name, field);
-        assert name != null;
-        if (getField(name) != null) {
-            throw new IllegalArgumentException
-                ("Named field already exists: " + name);
-        }
-        TableImpl.TableField tableField =
-            new TableImpl.TableField(fields, name);
-        FieldMap map = TableImpl.findContainingMap(fields, tableField, true);
-        map.put(tableField.getLastComponent(), field);
-        return this;
-    }
-
-    /**
-     * Validate the addition of a field to the map.  At this time it ensures
-     * that the field name uses allowed characters.  Sub-classes involved with
-     * schema evolution will override it.
-     */
-    @SuppressWarnings("unused")
-    void validateFieldAddition(final String name,
-                               final FieldMapEntry field) {
-        if (name != null) {
-            TableImpl.validateComponent(name, false, true);
-        }
-    }
-
-    TableBuilderBase generateAvroSchemaFields(Schema schema,
-                                              String name,
-                                              JsonNode defaultValue,
-                                              String desc) {
+    TableBuilderBase generateAvroSchemaFields(
+        Schema schema,
+        String name,
+        JsonNode defaultValue,
+        String desc) {
         return generateAvroSchemaFields(schema, name, defaultValue,
                                         desc, false);
     }
 
-    private TableBuilderBase generateAvroSchemaFields(Schema schema,
-                                                      String name,
-                                                      JsonNode defaultValue,
-                                                      String desc,
-                                                      boolean isUnion) {
+    private TableBuilderBase generateAvroSchemaFields(
+        Schema schema,
+        String name,
+        JsonNode defaultValue,
+        String desc,
+        boolean isUnion) {
+
         Schema.Type ftype = schema.getType();
 
         switch (ftype) {
@@ -580,16 +583,14 @@ public class TableBuilderBase {
             if (isCollectionBuilder()) {
                 addBinary();
             } else {
-                addBinary(name, desc,
-                          isUnion);
+                addBinary(name, desc, isUnion);
             }
             break;
         case FIXED:
             if (isCollectionBuilder()) {
                 addFixedBinary(name, schema.getFixedSize(), desc);
             } else {
-                addFixedBinary(name, schema.getFixedSize(), desc,
-                               isUnion);
+                addFixedBinary(name, schema.getFixedSize(), desc, isUnion);
             }
             break;
         case DOUBLE:
@@ -600,8 +601,7 @@ public class TableBuilderBase {
                           isUnion, /* nullable */
                           (defaultValue != null && !defaultValue.isNull() ?
                            defaultValue.asDouble() :
-                           null),
-                          null, null);
+                           null));
             }
             break;
         case FLOAT:
@@ -612,8 +612,7 @@ public class TableBuilderBase {
                          isUnion, /* nullable */
                          (defaultValue != null && !defaultValue.isNull() ?
                           (float) defaultValue.asDouble() :
-                          null),
-                         null, null);
+                          null));
             }
             break;
         case ENUM:
@@ -638,8 +637,7 @@ public class TableBuilderBase {
                 addInteger(name, desc,
                            isUnion, /* nullable */
                            (defaultValue != null && !defaultValue.isNull() ?
-                            defaultValue.getIntValue() : null),
-                           null, null);
+                            defaultValue.getIntValue() : null));
             }
             break;
         case LONG:
@@ -649,8 +647,7 @@ public class TableBuilderBase {
                 addLong(name, desc,
                         isUnion, /* nullable */
                         (defaultValue != null && !defaultValue.isNull() ?
-                         defaultValue.getLongValue() : null),
-                        null, null);
+                         defaultValue.getLongValue() : null));
             }
             break;
         case ARRAY:
@@ -705,8 +702,7 @@ public class TableBuilderBase {
                 addString(name, desc,
                           isUnion, /* nullable */
                           (defaultValue != null && !defaultValue.isNull() ?
-                           defaultValue.getTextValue() : null),
-                          null, null, null, null);
+                           defaultValue.getTextValue() : null));
             }
             break;
         case UNION:
@@ -733,10 +729,12 @@ public class TableBuilderBase {
      * Avro is a bit finicky about unions and default values.  The default value
      * must be the first member of the union (see comments in FieldDefImpl).
      */
-    private void handleUnion(Schema schema,
-                             String name,
-                             JsonNode defaultValue,
-                             String desc) {
+    private void handleUnion(
+        Schema schema,
+        String name,
+        JsonNode defaultValue,
+        String desc) {
+
         List<Schema> unionSchemas = schema.getTypes();
         if (unionSchemas.size() != 2) {
             throw new IllegalArgumentException
@@ -769,13 +767,6 @@ public class TableBuilderBase {
         }
     }
 
-    private FieldMapEntry makeFieldMapEntry(FieldDefImpl def,
-                                            Boolean nullable,
-                                            FieldValueImpl defaultValue) {
-        return new FieldMapEntry(def, (nullable != null ? nullable : true),
-                                 defaultValue);
-    }
-
     void fromJson(String fieldName, ObjectNode node) {
         JsonNode defaultNode = node.get(DEFAULT);
         Boolean nullable = TableJsonUtils.getBoolean(node, NULLABLE);
@@ -790,6 +781,16 @@ public class TableBuilderBase {
         addField(fieldName, makeFieldMapEntry(def, nullable, value));
     }
 
+    private FieldMapEntry makeFieldMapEntry(
+        FieldDef def,
+        Boolean nullable,
+        FieldValueImpl defaultValue) {
+
+        return new FieldMapEntry((FieldDefImpl)def,
+                                 (nullable != null ? nullable : true),
+                                 defaultValue);
+    }
+
     /**
      * When defining fields inside maps and arrays default values are not
      * allowed.
@@ -802,4 +803,27 @@ public class TableBuilderBase {
                  "in maps and arrays");
         }
     }
+
+    /**
+     * Gets default Time-to-Live which is may apply to records without a
+     * TTL specification.
+     * @return can be null.
+     */
+    public TimeToLive getDefaultTTL() {
+        return ttl;
+    }
+
+    /**
+     * Sets default Time-To-Live.
+     *
+     * No validation is required at this time as TimeToLive cannot be constructed
+     * with a unit other than hours or days.
+     *
+     * @param ttl can be null.
+     */
+    public void setDefaultTTL(TimeToLive ttl) {
+        this.ttl = ttl;
+    }
+
+
 }

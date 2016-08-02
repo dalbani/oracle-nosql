@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -60,6 +60,7 @@ import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.admin.param.StorageNodePool;
+import oracle.kv.impl.admin.topo.Validations.ANProximity;
 import oracle.kv.impl.admin.topo.Validations.BadAdmin;
 import oracle.kv.impl.admin.topo.Validations.ExcessAdmins;
 import oracle.kv.impl.admin.topo.Validations.InsufficientAdmins;
@@ -69,6 +70,8 @@ import oracle.kv.impl.admin.topo.Validations.UnderCapacity;
 import oracle.kv.impl.admin.topo.Validations.WrongAdminType;
 import oracle.kv.impl.admin.topo.Validations.WrongNodeType;
 import oracle.kv.impl.topo.AdminType;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.DatacenterType;
@@ -121,12 +124,24 @@ import com.sleepycat.je.rep.NodeType;
  *
  *  1. Each datacenter must have the same set of shards.
  *  2. Each shard must have repFactor number of RNs
- *  3. Each RN of an S must reside on a different SN.
+ *  3. Each RN and arbiter of an S must reside on a different SN.
  *  3a. If, and only if, the DC RF is 2, an ARB must be deployed for each S (on
  *      an SN different from the SNs hosting the shard's RNs).
  *  4. The #RNSN <= CSN
  *  5. Each shard must have an RN in an SN in a primary datacenter
  *  6. There should be no empty zones.
+ *  7. Arbiters will be hosted only when the Primary RF = 2 and when there is
+ *     a primary datacenter that allow arbiters.
+ *  8. Arbiters are hosted in a single primary datacenter that allows arbiters.
+ *  9. Arbiters are hosted in a primary datacenter that is configured to host
+ *     arbiter and the RF is zero if this type of datacenter exists.
+ *  10. Arbiters will be hosted only in SNs that are configured to allow
+ *      hosting Arbiters.
+ *  11. Each shard must have one arbiter when the Primary RF = 2 and there is
+ *      a primary datacenter that allows arbiters.
+ *  12. The arbiter hosting primary datacenter must have at least RF + 1 number
+ *      of SNs (excluding capacity = 0 SNs that dont allow arbiters) and at
+ *      least one SN that can host arbiters.
  *
  * Warnings:
  *
@@ -181,6 +196,13 @@ public class Rules {
             new HashMap<DatacenterId, Map<RepGroupId, Integer>>();
 
         for (Datacenter dc: topo.getSortedDatacenters()) {
+            /*
+             * RF=0 datacenters hosts only arbiters and no repnodes. Skip this
+             * datacenter. Arbiter rules will be checked separately later.
+             */
+            if (dc.getRepFactor() == 0) {
+                continue;
+            }
             shardsByDC.put(dc.getResourceId(),
                            new HashMap<RepGroupId,Integer>());
         }
@@ -377,7 +399,149 @@ public class Rules {
         }
         /* Check for empty zone.*/
         checkEmptyZone(topo, results);
+
+        /* Check all the arbiter rules */
+        checkArbiterRules(topo, results, params);
         return results;
+    }
+
+    private static void checkArbiterRules(Topology topo, Results results,
+                                          Parameters params) {
+
+        if (!ArbiterTopoUtils.useArbiters(topo)) {
+            /*
+             * Not using Arbiters so check if there are any.
+             */
+            findArbitersToBeDeleted(topo, results);
+            return;
+        }
+
+        /*
+         * Find the best primary DC that allows arbiters in the store
+         */
+        DatacenterId bestArbDcId =
+            ArbiterTopoUtils.getBestArbiterDC(topo, params);
+
+        /*
+         * Within the primary arbiter hosting datacenter, the arbiters will be
+         * hosted in those SNs that allows arbiters.
+         */
+        for (ArbNodeId arbNodeId : topo.getArbNodeIds()) {
+            ArbNode arbNode = topo.get(arbNodeId);
+            StorageNodeId snId = arbNode.getStorageNodeId();
+            /*
+             * Check if the arbiter is hosted in the SN that does not allow
+             * arbiters.
+             */
+            if (!params.get(snId).getAllowArbiters()) {
+                results.add(new Validations.ANNotAllowedOnSN(arbNodeId, snId,
+                                                     bestArbDcId));
+            }
+        }
+
+        /*
+         * Arbiters will be hosted in a single primary DC that allows
+         * ANs. Add violations for ANs hosted outside of the choosen
+         * Arbiter DC.
+         */
+        for (ArbNodeId arbNodeId : topo.getArbNodeIds()) {
+            ArbNode arbNode = topo.get(arbNodeId);
+            StorageNodeId snId = arbNode.getStorageNodeId();
+            DatacenterId dcId = topo.get(snId).getDatacenterId();
+
+            if (dcId.equals(bestArbDcId)) {
+                continue;
+            }
+            /*
+             * Report all the arbiters that needs to be transfered
+             */
+            results.add(new Validations.ANWrongDC(dcId, bestArbDcId,
+                                                 arbNodeId));
+        }
+
+        /*
+         * Check and add violation if shard does not
+         * have an AN.
+         */
+        Set<RepGroupId> shardsWithNoArbs = topo.getRepGroupIds();
+
+        for (ArbNodeId arbNodeId : topo.getArbNodeIds()) {
+            shardsWithNoArbs.remove(topo.get(arbNodeId).getRepGroupId());
+        }
+
+        for (RepGroupId rgId : shardsWithNoArbs) {
+            /*
+             * Report the repgroups with no arbiters.
+             */
+            results.add(new Validations.InsufficientANs(rgId, bestArbDcId));
+        }
+
+        /* All RNs and AN of a single shard must be on different SNs */
+        for (RepGroupId rgId : topo.getRepGroupIds()) {
+
+            /* Organize RNIds by SNId */
+            Map<StorageNodeId, Set<RepNodeId>> rnIdBySNId = new
+                HashMap<StorageNodeId, Set<RepNodeId>>();
+
+            for (RepNode rn : topo.get(rgId).getRepNodes()) {
+                StorageNodeId snId = rn.getStorageNodeId();
+                Set<RepNodeId> rnIds = rnIdBySNId.get(snId);
+                if (rnIds == null) {
+                    rnIds = new HashSet<RepNodeId>();
+                    rnIdBySNId.put(rn.getStorageNodeId(), rnIds);
+                }
+                rnIds.add(rn.getResourceId());
+            }
+
+            for (ArbNodeId anId : topo.getArbNodeIds()) {
+                ArbNode an = topo.get(anId);
+                Set<RepNodeId> rns = rnIdBySNId.get(an.getStorageNodeId());
+                if (rns != null) {
+                    ArrayList<RepNodeId> rnsInGrp = null;
+                    for (RepNodeId rnId : rns) {
+                        RepNode rn = topo.get(rnId);
+                        if (rn.getRepGroupId().equals(an.getRepGroupId())) {
+                            if (rnsInGrp == null) {
+                                rnsInGrp = new ArrayList<RepNodeId>();
+                            }
+                            rnsInGrp.add(rnId);
+                        }
+                    }
+                    if (rnsInGrp != null) {
+                        results.add(new ANProximity(an.getStorageNodeId(),
+                                    rgId,
+                                    rnsInGrp,
+                                    anId));
+                    }
+                }
+            }
+        }
+
+        /* Check for more than one AN in a RepGroup. */
+        for (final RepGroup rg : topo.getRepGroupMap().getAll()) {
+            boolean found = false;
+            for (final ArbNode an : rg.getArbNodes()) {
+                if (!found) {
+                    found = true;
+                } else {
+                    results.add(
+                        new Validations.ExcessANs(rg.getResourceId(),
+                                                  an.getResourceId()));
+                }
+            }
+        }
+    }
+
+    /**
+     * Check for all the repgroups if they contain an arbiter when RF>2.
+     */
+    private static void findArbitersToBeDeleted(Topology topo,
+                                                Results results) {
+        for (ArbNodeId arbNodeId : topo.getArbNodeIds()) {
+            ArbNode arbNode = topo.get(arbNodeId);
+            RepGroupId rgId = arbNode.getRepGroupId();
+            results.add(new Validations.ExcessANs(rgId, arbNodeId));
+        }
     }
 
     private static void checkEmptyZone(Topology topo, Results results) {
@@ -702,10 +866,22 @@ public class Rules {
      * Ensure that the replication factor is in the valid range.
      */
     public static void validateReplicationFactor(final int repFactor) {
-        if (repFactor <= 0 || repFactor > MAX_REPLICATION_FACTOR) {
+        if (repFactor < 0 || repFactor > MAX_REPLICATION_FACTOR) {
             throw new IllegalArgumentException
                 ("Illegal replication factor: " + repFactor +
-                 ", valid range is 1 to " + MAX_REPLICATION_FACTOR);
+                 ", valid range is 0 to " + MAX_REPLICATION_FACTOR);
+        }
+    }
+
+    /**
+     * Ensure that Arbiters can only be specified for primary
+     * datacenters.
+     */
+    public static void validateArbiter(final boolean allowArbiters,
+                                       final DatacenterType dt) {
+        if (allowArbiters && !dt.equals(DatacenterType.PRIMARY)) {
+            throw new IllegalArgumentException("Allow Arbiters only allowed "+
+                "on primary zones.");
         }
     }
 

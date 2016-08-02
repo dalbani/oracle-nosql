@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,13 +48,6 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
-import oracle.kv.Value;
-import oracle.kv.avro.GenericAvroBinding;
-import oracle.kv.avro.RawAvroBinding;
-import oracle.kv.avro.RawRecord;
-import oracle.kv.avro.SchemaNotAllowedException;
-import oracle.kv.avro.UndefinedSchemaException;
-
 import org.apache.avro.AvroRuntimeException;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericDatumReader;
@@ -66,10 +59,18 @@ import org.apache.avro.io.DecoderFactory;
 import org.apache.avro.io.Encoder;
 import org.apache.avro.io.EncoderFactory;
 
+import oracle.kv.Value;
+import oracle.kv.avro.GenericAvroBinding;
+import oracle.kv.avro.RawAvroBinding;
+import oracle.kv.avro.RawRecord;
+import oracle.kv.avro.SchemaNotAllowedException;
+import oracle.kv.avro.UndefinedSchemaException;
+
 /**
  * Provides a straightforward mapping from the built-in Avro generic classes to
  * our generic binding API.
  */
+@SuppressWarnings("deprecation")
 class GenericBinding implements GenericAvroBinding {
 
     /**

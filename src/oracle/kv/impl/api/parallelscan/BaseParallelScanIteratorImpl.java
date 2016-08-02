@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -56,7 +56,6 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import oracle.kv.Direction;
-import oracle.kv.KVStore;
 import oracle.kv.ParallelScanIterator;
 import oracle.kv.RequestTimeoutException;
 import oracle.kv.StoreIteratorException;
@@ -138,11 +137,13 @@ import oracle.kv.impl.api.parallelscan.ParallelScanHook.HookType;
  */
 public abstract class BaseParallelScanIteratorImpl<K>
     implements ParallelScanIterator<K> {
+
     /*
      * Use to convert, instead of TimeUnit.toMills(), when you don't want
      * a negative result.
      */
     private static final long NANOS_TO_MILLIS = 1000000L;
+
     /* Time to wait for data to be returned form the store */
     private static final long WAIT_TIME_MS = 100L;
 
@@ -154,10 +155,15 @@ public abstract class BaseParallelScanIteratorImpl<K>
     private static final int QUEUE_SIZE = 3;
 
     protected KVStoreImpl storeImpl;
+
     protected Logger logger;
+
     protected long requestTimeoutMs;
+
     protected Direction itrDirection;
+
     protected TaskExecutor taskExecutor;
+
     /*
      * The sorted set of streams. Only streams that have elements or are
      * waiting on reads are in the set. Streams that have exhausted the
@@ -257,8 +263,10 @@ public abstract class BaseParallelScanIteratorImpl<K>
      * @return the next value in sorted order or null
      */
     private K getNext() {
+
         final long limitNs = System.nanoTime() +
                              MILLISECONDS.toNanos(requestTimeoutMs);
+
         while (!isClosed()) {
 
             /*
@@ -272,6 +280,7 @@ public abstract class BaseParallelScanIteratorImpl<K>
                 close();
                 return null;
             }
+
             final K entry = stream.removeNext();
 
             /*
@@ -298,12 +307,14 @@ public abstract class BaseParallelScanIteratorImpl<K>
             long waitMs =
                    Math.min((limitNs - System.nanoTime()) / NANOS_TO_MILLIS,
                             WAIT_TIME_MS);
+
             if (waitMs <= 0) {
                 throw new RequestTimeoutException
                     ((int)requestTimeoutMs,
                      ("Operation timed out on shard: " + stream),
                      null, false);
             }
+
             stream.waitForNext(waitMs);
         }
         return null;    /* Closed */
@@ -328,15 +339,26 @@ public abstract class BaseParallelScanIteratorImpl<K>
     protected abstract int compare(K one, K two);
 
     /**
-     * Convert the specified result into list of elements.
-     * If a RuntimeException is thrown, the iterator will be
-     * closed and the exception return to the application.
+     * Convert the given Result obj (storing results received from the server)
+     * into list of elements (the client version of the same results).
+     *
+     * If a RuntimeException is thrown, the iterator will be closed and the
+     * exception return to the application.
+     *
+     * NOTE: If a server result (in Result) fails to convert to a client result,
+     * this method MUST put a null in the elementList. This is important because
+     * Stream.currentBlock and Stream.currentResultSet MUST have the same number
+     * of results. A server result may fail to convert to a client result
+     * because the server may return records that do not actually belong to the
+     * table being scanned.
      *
      * @param result result object
      * @param resultList list to place the converted elements
      */
-    protected abstract void convertResult(Result result,
-                                          List<K> elementList);
+    protected abstract void convertResult(
+        Result result,
+        List<K> elementList);
+
 
     /**
      * Object that encapsulates the activity around reading records of a single
@@ -344,14 +366,68 @@ public abstract class BaseParallelScanIteratorImpl<K>
      *
      * Note: this class has a natural ordering that is inconsistent with
      * equals.
+     *
+     * blocks :
+     * The queue of unconverted server results (queue of Result objs) waiting to
+     * be consumed). NOTE: blocks is always accessed in synchronized code
+     * (except in assertions).
+     *
+     * currentResultSet :
+     * The latest block of server results that have been converted to client
+     * results (which are stored in this.currentBlock). currentResultSet is
+     * not in this.blocks. NOTE: currentResultSet is accessed only by the
+     * consumer/iterator thread.
+     *
+     * currentBlock :
+     * The block of elements (converted server results) currently being consumed.
+     * NOTE: currentBlock is accessed only by the consumer/iterator thread.
+     *
+     * currentResultPos :
+     * Serves as an index into currentResultSet, pointing to the server version
+     * of the client result pointed by nextElem.
+     *
+     * nextElem :
+     * The next element to be given by this stream to the consuming iterator.
+     * NOTE: nextElem is accessed only by the consumer/iterator thread.
+     *
+     * NOTE: nextElem or currentResultPos are used to sort the streams in the
+     * "streams" TreeSet of the containing parallel iterator obj. As a result,
+     * nextElem and currentResultPos must (and are indeed) updated only when
+     * "this" is not a memeber of the "streams" TreeSet.
+     *
+     * doneReading :
+     * True if there are no more results to be fetched from the server by this
+     * stream. The stream may still have locally cached results, so this.done
+     * may be false while this.doneReading is true.
+     * NOTE: doneReading is always accessed in synchronized code (except in
+     * assertions)
+     *
+     * done :
+     * True if this stream has no more results to return.
+     * NOTE: done is always set in synchronized code. However, it is read in
+     * non-synchronized code (via the isDone() method. This should be ok
+     * because once set to true, done will never go back to false, and because
+     * the BaseParallelScanIteratorImpl.getNext() is tolerant to isDone()
+     * returning false when the stream has actually move to the "done" state.
+     *
+     * active :
+     * True if this stream has been submitted to fetch more results from the
+     * server.
      */
     public abstract class Stream implements Comparable<Stream>, Runnable {
-        /* The queue of blocks. */
-        private final BlockingQueue<List<K>> blocks =
-            new LinkedBlockingQueue<List<K>>(getMaxResultsBatches());
+
+        /* The block of values being drained */
+        private final BlockingQueue<Result> blocks =
+            new LinkedBlockingQueue<Result>(getMaxResultsBatches());
+
+        /* The block of server results being drained */
+        protected Result currentResultSet;
 
         /* The block of values being drained */
         private List<K> currentBlock;
+
+        /* Position of the "current" server result inside currentResultSet */
+        protected int currentResultPos = -1;
 
         /* The last element removed, used for sorting */
         private K nextElem = null;
@@ -364,26 +440,50 @@ public abstract class BaseParallelScanIteratorImpl<K>
 
         /* True if this stream is  */
         private boolean active = false;
+
         /**
          * Remove the next element from this stream and return it. If no
          * elements are available null is returned.
          *
+         * Method run by the consumer thread only.
+         *
          * @return the next element from this stream or null
          */
-        K removeNext() {
+        private K removeNext() {
+
             assert !done;
 
             final K ret = nextElem;
-            nextElem = ((currentBlock == null) ||
-                    currentBlock.isEmpty()) ? null : currentBlock.remove(0);
+
+            if (currentBlock != null && !currentBlock.isEmpty()) {
+                do {
+                    nextElem = currentBlock.remove(0);
+                    ++currentResultPos;
+                    /*
+                     * nextElem may be null here because a server result failed
+                     * to convert to a client result (see comment on
+                     * BaseParallelScanIteratorImpl.convertResult method above).
+                     */
+                } while (nextElem == null && !currentBlock.isEmpty());
+            } else {
+                nextElem = null;
+            }
 
             /*
              * If there are no more results in the current block, attempt
              * to get a new block.
              */
-            if (nextElem == null) {
+            while (nextElem == null) {
+
                 synchronized (this) {
-                    currentBlock = blocks.poll();
+
+                    /*
+                     * Retrieve and remove the Result at the head of the queue,
+                     * returning null if the queue is empty.
+                     */
+                    currentResultSet = blocks.poll();
+                    currentBlock = null;
+                    currentResultPos = -1;
 
                     /*
                      * We may have pulled a block off the queue, submit this
@@ -392,26 +492,53 @@ public abstract class BaseParallelScanIteratorImpl<K>
                     submit();
 
                     /*
-                     * If there are no more blocks and we are done reading
-                     * then we are finished.
+                     * If there are no more cached blocks break out of this loop
+                     * and return null. The iterator will then put this stream
+                     * back to the tree set and wait for more server results to
+                     * arrive in this stream. However, if there are no more
+                     * results to be fetched from the server (ie, doneReading is
+                     * false), set done to false to signal that this stream is
+                     * finished.
                      */
-                    if (currentBlock == null) {
+                    if (currentResultSet == null) {
                         done = doneReading;
-                    } else {
-                        /* TODO - can this be empty? */
-                        nextElem = currentBlock.remove(0);
+                        break;
                     }
                 }
+
+                int nRecords = currentResultSet.getNumRecords();
+
+                /*
+                 * Convert the Result into a list of elements ready to be
+                 * returned from the iterator. If a server fails to convert,
+                 * null is placed in the element list.
+                 */
+                if (nRecords > 0) {
+                    currentBlock = new ArrayList<K>(nRecords);
+                    convertResult(currentResultSet, currentBlock);
+                    assert(nRecords == currentBlock.size());
+
+                    do {
+                        nextElem = currentBlock.remove(0);
+                        ++currentResultPos;
+                    } while (nextElem == null && !currentBlock.isEmpty());
+                }
             }
+
             return ret;
         }
 
         /**
          * Waits up to waitMs for the next element to be available.
          *
+         * Method run by the consumer thread only, when it needs to get a
+         * result from this stream in order to proceed, and this stream has
+         * run out of cached results.
+         *
          * @param waitMs the max time in ms to wait
          */
         private void waitForNext(long waitMs) {
+
             /*
              * If the stream was previously empty, but it now has a value,
              * skip the sleep and immediately try again. This can happen
@@ -422,6 +549,7 @@ public abstract class BaseParallelScanIteratorImpl<K>
             if (nextElem != null) {
                 return;
             }
+
             try {
                 synchronized (this) {
                     /* Wait if there is no data left and still reading */
@@ -439,22 +567,36 @@ public abstract class BaseParallelScanIteratorImpl<K>
         /**
          * Returns true if all of the elements have been removed from this
          * stream.
+         *
+         * Method run by the consumer thread only
          */
         boolean isDone() {
             return done;
         }
 
         /**
-         * Submit this stream to to request data if there it isn't already
-         * submitted, there is more data to read, and there is room for it.
+         * Submit this stream to request data if (a) it isn't already submitted
+         * (active), and (b) there is more server data to read, and (c) there
+         * is room for it.
+         *
+         * This method is called from both the consumer/iterator thread and
+         * the producer thread:
+         *
+         *  - The producer thread resubmits the stream after fetching a block
+         *    of results
+         *  - The iterator thread does the initial submit on each stream, and
+         *    then it submits a stream after its currentBlock becomes empty.
          */
         public synchronized void submit() {
+
             if (active ||
                 doneReading ||
                 (blocks.remainingCapacity() == 0)) {
                 return;
             }
+
             active = true;
+
             try{
                 taskExecutor.submit(this);
             } catch (RejectedExecutionException ree) {
@@ -463,19 +605,23 @@ public abstract class BaseParallelScanIteratorImpl<K>
             }
         }
 
+        /**
+         *  Method run by the producer thread only
+         */
         @Override
         public void run() {
+
             try {
                 assert active;
                 assert !doneReading;
                 assert blocks.remainingCapacity() > 0;
 
                 final long start = System.nanoTime();
+
                 final int count = readBlock();
 
                 final long end = System.nanoTime();
                 final long thisTimeMs = (end - start) / NANOS_TO_MILLIS;
-
                 updateDetailedMetrics(thisTimeMs, count);
             } catch (RuntimeException re) {
                 active = false;
@@ -483,16 +629,16 @@ public abstract class BaseParallelScanIteratorImpl<K>
             }
         }
 
-        protected boolean hasMoreElements(Result result) {
-            return result.hasMoreElements();
-        }
-
         /**
          * Read a block of records from the store. Returns the number of
          * records read.
+         *
+         * Method run by the producer thread only
          */
         private int readBlock() {
+
             final Request req = makeReadRequest();
+
             if (req == null) {
                 synchronized (this) {
                     /* About to exit, active may be reset in submit() */
@@ -509,27 +655,16 @@ public abstract class BaseParallelScanIteratorImpl<K>
                 storeImpl.getParallelScanHook().
                 callback(Thread.currentThread(),
                          HookType.BEFORE_EXECUTE_REQUEST, null);
+
             final Result result = storeImpl.executeRequest(req);
+
             final boolean hasMore = hasMoreElements(result);
             int nRecords = result.getNumRecords();
 
-            /*
-             * Convert the results into a list of elements ready to be
-             * returned from the iterator.
-             */
-            List<K> elementList = null;
             if (nRecords > 0) {
-                elementList = new ArrayList<K>(nRecords);
-                convertResult(result, elementList);
-
-                /*
-                 * convertResult can filter so get the exact number of
-                 * converted results.
-                 */
-                nRecords = elementList.size();
-
-                setResumeKey(result, elementList);
+                setResumeKey(result);
             }
+
             synchronized (this) {
                 /* About to exit, active may be reset in submit() */
                 active = false;
@@ -544,14 +679,38 @@ public abstract class BaseParallelScanIteratorImpl<K>
                     notify();
                     return 0;
                 }
-                assert elementList != null;
-                blocks.add(elementList);
+
+                blocks.add(result);
 
                 /* Wake up the iterator if it is waiting */
                 notify();
             }
+
             submit();
             return nRecords;
+        }
+
+        /**
+         * Update resume key for next read request.
+         * @param result result object
+         * @param elementList the list of elements converted by convert
+         */
+        protected abstract void setResumeKey(Result result);
+
+        /**
+         * Create a request using resume key to get next block of records.
+         * The read request may return null for bulk get operations when the
+         * keys supplied by the application run out and no further requests to
+         * the store are required.
+         *
+         * see KVStore.storeIterator(Iterator, int, KeyRange, Depth,
+         *                           Consistency, long, TimeUnit,
+         *                           StoreIteratorConfig)
+         */
+        protected abstract Request makeReadRequest();
+
+        protected boolean hasMoreElements(Result result) {
+            return result.hasMoreElements();
         }
 
         /**
@@ -596,7 +755,7 @@ public abstract class BaseParallelScanIteratorImpl<K>
              * Finally, compare the elements, inverting the result
              * if necessary.
              */
-            final int comp = compare(nextElem, otherNext);
+            final int comp = compareInternal(other);
 
             /*
              * If the different stream elements are equal then there is
@@ -607,7 +766,16 @@ public abstract class BaseParallelScanIteratorImpl<K>
                 close(new IllegalStateException("Detected an unexpected " +
                                                 "duplicate record"));
             }
-            return itrDirection == Direction.FORWARD ? comp : (comp * -1);
+
+            return comp;
+        }
+
+        /**
+         * Subclasses may override this
+         */
+        protected int compareInternal(Stream other) {
+            int cmp = compare(nextElem, other.nextElem);
+            return itrDirection == Direction.FORWARD ? cmp : (cmp * -1);
         }
 
         /**
@@ -624,25 +792,8 @@ public abstract class BaseParallelScanIteratorImpl<K>
          * @param timeInMs the time spent reading
          * @param recordCount the number of records read
          */
-        protected abstract void updateDetailedMetrics(final long timeInMs,
-                                                      final long recordCount);
-
-        /**
-         * Update resume key for next read request.
-         * @param result result object
-         * @param elementList the list of elements converted by convert
-         */
-        protected abstract void setResumeKey(Result result,
-                                             List<K> elementList);
-
-        /**
-         * Create a request using resume key to get next block of records.
-         * The read request may return null for bulk get operations when the
-         * keys supplied by the application run out and no further requests to
-         * the store are required.
-         *
-         * @see KVStore#storeIterator(java.util.Iterator, int, oracle.kv.KeyRange, oracle.kv.Depth, oracle.kv.Consistency, long, java.util.concurrent.TimeUnit, oracle.kv.StoreIteratorConfig)
-         */
-        protected abstract Request makeReadRequest();
+        protected abstract void updateDetailedMetrics(
+            final long timeInMs,
+            final long recordCount);
     }
 }

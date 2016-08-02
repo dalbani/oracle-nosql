@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -56,6 +56,15 @@ import java.util.List;
  *
  * All the arguments of a shell can be configured in the rc file in "key=value"
  * format, below lists arguments for sql shell:
+ *
+ * [kvsqlcli]
+ * helper-hosts=<host:port[,host:port]*>
+ * store=<storeName>
+ * timeout=<timeout ms>
+ * consistency=<NONE_REQUIRED(default) | ABSOLUTE | NONE_REQUIRED_NO_MASTER>
+ * durability=<COMMIT_SYNC(default) | COMMIT_NO_SYNC | COMMIT_WRITE_NO_SYNC>
+ * username=<user>
+ * security=<security-file-path>
  *
  * [kvcli]
  * host=<hostname>

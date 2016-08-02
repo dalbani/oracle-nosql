@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,34 +48,32 @@ import java.io.PrintStream;
 import java.text.DateFormat;
 import java.util.Date;
 import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
-
-import oracle.kv.impl.admin.Admin;
-import oracle.kv.impl.admin.Admin.Memo;
-import oracle.kv.impl.admin.criticalevent.CriticalEvent;
-import oracle.kv.impl.admin.criticalevent.CriticalEvent.EventKey;
-import oracle.kv.impl.admin.param.Parameters;
-import oracle.kv.impl.admin.param.ParametersHolder;
-import oracle.kv.impl.admin.plan.AbstractPlan;
-import oracle.kv.impl.admin.topo.RealizedTopology;
-import oracle.kv.impl.admin.topo.TopologyCandidate;
-import oracle.kv.impl.admin.topo.TopologyStore;
-import oracle.kv.impl.metadata.MetadataHolder;
-import oracle.kv.impl.util.FormatUtils;
+import java.util.ListIterator;
+import java.util.logging.Logger;
 
 import com.sleepycat.je.Environment;
 import com.sleepycat.je.EnvironmentConfig;
-import com.sleepycat.persist.EntityCursor;
-import com.sleepycat.persist.EntityStore;
-import com.sleepycat.persist.IndexNotAvailableException;
-import com.sleepycat.persist.PrimaryIndex;
-import com.sleepycat.persist.StoreConfig;
+import oracle.kv.impl.admin.AdminDatabase.DB_TYPE;
+
+import oracle.kv.impl.admin.EventStore;
+import oracle.kv.impl.admin.EventStore.EventCursor;
+import oracle.kv.impl.admin.GeneralStore;
+import oracle.kv.impl.admin.PlanStore;
+import oracle.kv.impl.admin.PlanStore.PlanCursor;
+import oracle.kv.impl.admin.TopologyStore;
+import oracle.kv.impl.admin.criticalevent.CriticalEvent;
+import oracle.kv.impl.admin.param.Parameters;
+import oracle.kv.impl.admin.plan.Plan;
+import oracle.kv.impl.util.FormatUtils;
 
 /**
  * AdminDump is an unadvertised, in-progress utility which can read and display
  * the contents of the Admin database for debugging and diagnostic purposes.It
  * must be invoked on the node where the Admin environment is hosted.
+ *
+ * Note that due to changes in the Admin's persistent store, this utility
+ * is not compatible with releases prior to R4.0.
+ *
  * <pre>
  *   AdminDump -h &lt;directory where Admin database is located&gt;
  *             ... flags ... (see usage)
@@ -84,14 +82,13 @@ import com.sleepycat.persist.StoreConfig;
  * kvroot/store/snX/adminX/env. The je.jar must be in the classpath, as well as
  * the usual kvstore classes.
  *
- * Currently, the utility can 
+ * Currently, the utility can
  * - display RN params
- * - the most recent numTopos deployed topologies are displayed. 
+ * - the most recent numTopos deployed topologies are displayed.
  * - count all the records in the AdminDB
  * - dump, using a cursor, the stored events.
  * It would be a good idea to expand this to display params for SNs and Admins,
- * as well as other future metadata. Also, there should be a refactoring so 
- * that the internal AdminDBCatalog class becomes part of the Admin service. 
+ * as well as other future metadata.
  */
 public class AdminDump {
     private static int DEFAULT_TOPO_VERSIONS = 0;
@@ -120,16 +117,16 @@ public class AdminDump {
 
     public void run() {
         out.println("For internal use only.");
-        /* 
+        /*
          * Be sure to display which Admin this is, and what time the dump
-         * is taken, in case the information is gathered by a user and 
+         * is taken, in case the information is gathered by a user and
          * sent to us.
          */
         out.println("Information from admin database in " + envHome);
         DateFormat fm = FormatUtils.getDateTimeAndTimeZoneFormatter();
         out.println("Current time: " +
                      fm.format(new Date(System.currentTimeMillis())));
-        
+
         displayAdminInfo();
     }
 
@@ -137,33 +134,41 @@ public class AdminDump {
      * Display selected pieces of the admin database
      */
     private void displayAdminInfo() {
+        final Logger logger = Logger.getLogger(AdminDump.class.getName());
 
         /*
          * Initialize an environment configuration, and create an environment.
          */
-        EnvironmentConfig envConfig = new EnvironmentConfig();
+        final EnvironmentConfig envConfig = new EnvironmentConfig();
         envConfig.setReadOnly(true);
         envConfig.setAllowCreate(false);
-        Environment env = new Environment(envHome, envConfig);
-
-        AdminDBCatalog catalog = new AdminDBCatalog(env, out);
-        catalog.openReadOnlyStore();
-
-        EntityStore estore = catalog.getEntityStore();
+        final Environment env = new Environment(envHome, envConfig);
 
         /* Show the types of classes in the adminDB */
         if (showModel) {
-            listModel(estore, env);
+            out.println("-----------------Stores in Admin DB");
+            for (DB_TYPE dbType : DB_TYPE.values()) {
+                out.println(dbType.getDBName());
+            }
         }
 
         /* Count the records in the DB */
         if (showCounts) {
-           catalog.countRecords();
+           countRecords(logger, env);
         }
 
         /* Show the events */
         if (showEvents) {
-            catalog.displayEvents();
+            try (final EventStore es =
+                                    EventStore.getReadOnlyInstance(logger, env);
+                 final EventCursor cursor = es.getEventCursor()) {
+                int i = 0;
+                CriticalEvent ev = cursor.first();
+                while (ev != null) {
+                    out.println(i++ + " " + ev);
+                    ev = cursor.next();
+                }
+            }
         }
 
         /*
@@ -172,33 +177,30 @@ public class AdminDump {
          *  - show admin or sn params
          */
         if (showParams) {
-           Parameters params = Parameters.fetch(estore, null);
-           out.println(params.printRepNodeParams());
+            final Parameters params;
+            try (final GeneralStore gs =
+                                GeneralStore.getReadOnlyInstance(logger, env)) {
+                params = gs.getParameters(null);
+            }
+            out.println(params.printRepNodeParams());
         }
 
         /* Show topologies */
         if (showTopos > 0) {
-            List<RealizedTopology> topos =
-                TopologyStore.readLastTopos(estore, showTopos);
-            for (RealizedTopology t : topos) {
-            out.println("--------- deployed topology --------");
-            out.println(t.display(false));
+            try (final TopologyStore ts =
+                               TopologyStore.getReadOnlyInstance(logger, env)) {
+                final List<String> history = ts.displayHistory(false);
+                final ListIterator<String> itr =
+                            history.listIterator(history.size());
+                int count = 0;
+                while (itr.hasPrevious()) {
+                    if (count >= showTopos) {
+                        break;
+                    }
+                    out.println("--------- deployed topology --------");
+                    out.println(itr.previous());
+                }
             }
-        }
-    }
-
-
-    /** 
-     * List all class types in the admin db 
-     */
-    private void listModel(EntityStore estore, Environment env) {
-        out.println("-----------------Class types in Admin DB");
-        for (String className : estore.getModel().getKnownClasses()) {
-            out.println(className);
-        }
-        out.println("-----------------Stores in Admin DB");
-        for (String storeName : EntityStore.getStoreNames(env)){
-            out.println(storeName);
         }
     }
 
@@ -267,125 +269,51 @@ public class AdminDump {
     }
 
     /**
-     * TODO: move this into its own file, and use this to centralize
-     * management of the AdminDB. See AdminEntityDatabase.java as the beginning
-     * of that centralization.
+     * Get a count of all records in the AdminDB, by type. Actually this only
+     * counts the record types which can have multiple instances. Currently
+     * this is events, plans, and topologies.
      */
-    private static class AdminDBCatalog {
+    private void countRecords(Logger logger, Environment env) {
+        out.println("---------------- Counting records");
+        long totalCount = 0;
 
-        private final Environment env;
-        private EntityStore estore;
-        private PrintStream out;
-        
-        /* Types of records held in the admin db */
-        EntityType[] recordTypes = new EntityType[] {
-            new EntityType("events", EventKey.class, CriticalEvent.class),
-            new EntityType("metadata", String.class, MetadataHolder.class),
-            new EntityType("plans", Integer.class, AbstractPlan.class),
-            new EntityType("params", String.class, ParametersHolder.class),
-            new EntityType("memo", String.class, Memo.class),
-            new EntityType("topoHistory", Long.class, RealizedTopology.class),
-            new EntityType("topoCandidates", String.class, 
-                           TopologyCandidate.class)
-        };
-        
-        /* Currently, this class can only open the AdminDB in read only mode.*/
-        AdminDBCatalog(Environment env, PrintStream out) {
-            this.env = env;
-            this.out = out;
-
-            /* TODO: supply way to open in r/w mode */
-            openReadOnlyStore();
-        }
-
-        EntityStore getEntityStore() {
-            return estore;
-        }
-
-        private void openReadOnlyStore() {
-            /* For now, read only access */
-            final StoreConfig stConfig = new StoreConfig();
-            stConfig.setAllowCreate(false);
-            stConfig.setReadOnly(true);
-            stConfig.setTransactional(false);
-
-            estore = new EntityStore(env, Admin.ADMIN_STORE_NAME, stConfig);
-        }
-
-        /**
-         * Open all the primary indices in the store, and return them
-         * in a sorted map, where the record type name is the key.
-         */
-        Map<String, PrimaryIndex<?,?>> getPrimaryIndices() {
-            
-            Map<String, PrimaryIndex<?,?>> pIdxList =
-                new TreeMap<String, PrimaryIndex<?,?>>();
-
-            for (EntityType t : recordTypes) {
-                try {
-                    pIdxList.put(t.name, estore.getPrimaryIndex(t.primaryKey,
-                                                                t.entity));
-                } catch (IndexNotAvailableException ignore) {
-                    /* Index hasn't been created yet, skip it. */
-                }
+        /* Events */
+        try (final EventStore es =
+                 EventStore.getReadOnlyInstance(logger, env);
+             final EventCursor cursor = es.getEventCursor()) {
+            int count = 0;
+            CriticalEvent ev = cursor.first();
+            while (ev != null) {
+                count++;
+                ev = cursor.next();
             }
-            
-            return pIdxList;
+            out.println("Events = " + count);
+            totalCount += count;
         }
 
-        /**
-         * Get a count of all records in the AdminDB, by type.
-         */
-        private void countRecords() {
-        
-            long totalCount = 0;
-            long count = 0;
-            Map<String, PrimaryIndex<?,?>> indexMap = getPrimaryIndices();
-            
-            out.println("---------------- Counting records");
-            for (Map.Entry<String, PrimaryIndex<?,?>> idx:
-                     indexMap.entrySet()) {
-                String typeName = idx.getKey();
-                PrimaryIndex<?,?> pIdx = idx.getValue();
-                count = pIdx.count();
-                totalCount += count;
-                out.println(typeName + " = " + count);
+        /* Plans */
+        try (final PlanStore ps = PlanStore.getReadOnlyInstance(logger,env);
+             final PlanCursor cursor = ps.getPlanCursor(null, 0)) {
+            int count = 0;
+            Plan p = cursor.first();
+            while (p != null) {
+                count++;
+                p = cursor.next();
             }
-            out.println("total records = " + totalCount);
+            out.println("Plans = " + count);
+            totalCount += count;
         }
 
-        /*
-         * Differs from CriticalEvents.fetch() because the latter buffers
-         * all records into a list.
-         */
-        private void displayEvents() {
-            final PrimaryIndex<EventKey, CriticalEvent> pi =
-                estore.getPrimaryIndex(EventKey.class, CriticalEvent.class);
-
-            EntityCursor<CriticalEvent> eventCursor = pi.entities();
-            try {
-                int i = 0;
-                for (CriticalEvent ev : eventCursor) {
-                    out.println(i++ + " " + ev);
-                }
-            } finally {
-                eventCursor.close();
-            }
+        /* Topologies */
+        try (final TopologyStore ts =
+                 TopologyStore.getReadOnlyInstance(logger, env)) {
+            final int historyCount = ts.displayHistory(true).size();
+            out.println("Topology history = " + historyCount);
+            totalCount += historyCount;
+            final int candidateCount = ts.getCandidateNames(null).size();
+            out.println("Topology candidates = " + candidateCount);
+            totalCount += candidateCount;
         }
-        
-        /* a struct */
-        private class EntityType {
-            final String name;
-            final Class<?> primaryKey;
-            final Class<?> entity;
-            
-            public EntityType(String name, 
-                              Class<?> primaryKey, 
-                              Class<?> entity) {
-                this.name = name;
-                this.primaryKey = primaryKey;
-                this.entity = entity;
-            }
-        }
+        out.println("total records = " + totalCount);
     }
 }

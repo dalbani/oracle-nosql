@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -52,10 +52,12 @@ import oracle.kv.impl.admin.param.AdminParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.plan.task.ParallelBundle;
 import oracle.kv.impl.admin.plan.task.StopAdmin;
-import oracle.kv.impl.admin.plan.task.StopRepNode;
+import oracle.kv.impl.admin.plan.task.StopNode;
 import oracle.kv.impl.security.KVStorePrivilege;
 import oracle.kv.impl.security.SystemPrivilege;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNode;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
@@ -78,7 +80,7 @@ public class StopServicesPlan extends AbstractPlan {
 
         final Parameters dbParams = getAdmin().getCurrentParameters();
 
-        final ParallelBundle stopRNTasks = new ParallelBundle();
+        final ParallelBundle stopRNANTasks = new ParallelBundle();
         final ParallelBundle stopAdminTasks = new ParallelBundle();
 
         for (ResourceId id : serviceIds) {
@@ -92,8 +94,8 @@ public class StopServicesPlan extends AbstractPlan {
                         ("There is no RepNode with id " + rnId +
                          ". Please provide the id of an existing RepNode.");
                 }
-                stopRNTasks.addTask(new StopRepNode(this, rn.getStorageNodeId(),
-                                                    rnId, true));
+                stopRNANTasks.addTask(new StopNode(this, rn.getStorageNodeId(),
+                                                   rnId, true));
             } else if (id instanceof AdminId) {
                 final AdminId adminId = (AdminId)id;
                 final AdminParams adminDbParams = dbParams.get(adminId);
@@ -110,6 +112,17 @@ public class StopServicesPlan extends AbstractPlan {
                 }
                 stopAdminTasks.addTask(new StopAdmin(this, snId,
                                                      adminId, true));
+            }  else if (id instanceof ArbNodeId) {
+                final ArbNodeId anId = (ArbNodeId)id;
+                final ArbNode an = topology.get(anId);
+
+                if (an == null) {
+                    throw new IllegalCommandException
+                        ("There is no ArbNode with id " + anId +
+                         ". Please provide the id of an existing ArbNode.");
+                }
+                stopRNANTasks.addTask(new StopNode(this, an.getStorageNodeId(),
+                                                    anId, true));
             } else {
                 throw new IllegalCommandException
                         ("Command not supported for " + id);
@@ -120,7 +133,7 @@ public class StopServicesPlan extends AbstractPlan {
          * Stop the RNs first, just in case stopping Admins
          * cause loss of quorum, stopping the plan.
          */
-        addTask(stopRNTasks);
+        addTask(stopRNANTasks);
         addTask(stopAdminTasks);
     }
 
@@ -137,10 +150,6 @@ public class StopServicesPlan extends AbstractPlan {
     @Override
     public String getDefaultName() {
         return "Stop Services";
-    }
-
-    @Override
-    void stripForDisplay() {
     }
 
     @Override

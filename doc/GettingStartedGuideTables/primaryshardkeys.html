@@ -3,25 +3,25 @@
 <html xmlns="http://www.w3.org/1999/xhtml">
   <head>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-    <title>Chapter 4. Primary and Shard Key Design</title>
+    <title>Chapter 5. Primary and Shard Key Design</title>
     <link rel="stylesheet" href="gettingStarted.css" type="text/css" />
     <meta name="generator" content="DocBook XSL Stylesheets V1.73.2" />
     <link rel="start" href="index.html" title="Getting Started with Oracle NoSQL Database Tables" />
     <link rel="up" href="index.html" title="Getting Started with Oracle NoSQL Database Tables" />
-    <link rel="prev" href="createindex.html" title="Creating Indexes" />
+    <link rel="prev" href="selecting_updating.html" title="Using a query to update data" />
     <link rel="next" href="rowdata.html" title="Row Data" />
   </head>
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
-          <th colspan="3" align="center">Chapter 4. Primary and Shard Key Design</th>
+          <th colspan="3" align="center">Chapter 5. Primary and Shard Key Design</th>
         </tr>
         <tr>
-          <td width="20%" align="left"><a accesskey="p" href="createindex.html">Prev</a> </td>
+          <td width="20%" align="left"><a accesskey="p" href="selecting_updating.html">Prev</a> </td>
           <th width="60%" align="center"> </th>
           <td width="20%" align="right"> <a accesskey="n" href="rowdata.html">Next</a></td>
         </tr>
@@ -32,7 +32,7 @@
       <div class="titlepage">
         <div>
           <div>
-            <h2 class="title"><a id="primaryshardkeys"></a>Chapter 4. Primary and Shard Key Design</h2>
+            <h2 class="title"><a id="primaryshardkeys"></a>Chapter 5. Primary and Shard Key Design</h2>
           </div>
         </div>
       </div>
@@ -158,10 +158,19 @@
       </p>
         <p>
           We describe how to retrieve multiple rows from your table in
-          <a class="xref" href="tableget.html" title="Chapter 6. Reading Table Rows">Reading Table Rows</a>. We show how to delete
+          <a class="xref" href="tableget.html" title="Chapter 7. Reading Table Rows">Reading Table Rows</a>. We show how to delete
           multiple rows at a time in 
           <a class="xref" href="recorddelete.html#multidelete" title="Using multiDelete()">Using multiDelete()</a>.
       </p>
+        <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+          <h3 class="title">Note</h3>
+          <p>
+                If the primary key field is an INTEGER data type, you
+                can apply a serialized size constraint to it. See
+                <a class="xref" href="tablecreationddl.html#intconstraints" title="Integer Serialized Constraints">Integer Serialized Constraints</a>
+                for details.
+            </p>
+        </div>
         <div class="sect2" lang="en" xml:lang="en">
           <div class="titlepage">
             <div>
@@ -276,7 +285,7 @@
               same values for all the shard key fields are guaranteed to be
               stored on the same shard. This matters for some operations
               that promise atomicity of the results. (See 
-              <a class="xref" href="multiop.html" title="Chapter 12. Executing a Sequence of Operations">Executing a Sequence of Operations</a>
+              <a class="xref" href="multiop.html" title="Chapter 13. Executing a Sequence of Operations">Executing a Sequence of Operations</a>
               for more information.)
           </p>
           <p>
@@ -305,12 +314,12 @@
       <hr />
       <table width="100%" summary="Navigation footer">
         <tr>
-          <td width="40%" align="left"><a accesskey="p" href="createindex.html">Prev</a> </td>
+          <td width="40%" align="left"><a accesskey="p" href="selecting_updating.html">Prev</a> </td>
           <td width="20%" align="center"> </td>
           <td width="40%" align="right"> <a accesskey="n" href="rowdata.html">Next</a></td>
         </tr>
         <tr>
-          <td width="40%" align="left" valign="top">Creating Indexes </td>
+          <td width="40%" align="left" valign="top">Using a query to update data </td>
           <td width="20%" align="center">
             <a accesskey="h" href="index.html">Home</a>
           </td>

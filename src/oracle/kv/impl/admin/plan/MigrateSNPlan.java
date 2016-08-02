@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -50,6 +50,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import oracle.kv.impl.admin.IllegalCommandException;
 import oracle.kv.impl.admin.Admin;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
@@ -59,11 +60,13 @@ import oracle.kv.impl.admin.plan.task.DeployAdmin;
 import oracle.kv.impl.admin.plan.task.DeployMultipleRNs;
 import oracle.kv.impl.admin.plan.task.MigrateParamsAndTopo;
 import oracle.kv.impl.admin.plan.task.NewAdminParameters;
+import oracle.kv.impl.admin.plan.task.NewArbNodeParameters;
 import oracle.kv.impl.admin.plan.task.NewRepNodeParameters;
 import oracle.kv.impl.admin.plan.task.UpdateAdminHelperHost;
-import oracle.kv.impl.admin.plan.task.UpdateHelperHost;
+import oracle.kv.impl.admin.plan.task.UpdateHelperHostV2;
 import oracle.kv.impl.admin.plan.task.VerifyBeforeMigrate;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.RepGroup;
 import oracle.kv.impl.topo.RepNode;
@@ -208,17 +211,33 @@ public class MigrateSNPlan extends TopologyPlan {
                     break;
                 }
             }
+            for (ArbNode an : rg.getArbNodes()) {
+                if (an.getStorageNodeId().equals(oldNode)) {
+                    affectedRGs.add(rg);
+                    break;
+                }
+            }
         }
 
         for (RepGroup rg : affectedRGs) {
             for (RepNode rn : rg.getRepNodes()) {
                 if (!rn.getStorageNodeId().equals(oldNode)) {
-                    addTask(new UpdateHelperHost(this,
-                                                 rn.getResourceId(),
-                                                 rg.getResourceId()));
+                    addTask(new UpdateHelperHostV2(this,
+                                                   rn.getResourceId(),
+                                                   rg.getResourceId()));
                     addTask(new NewRepNodeParameters(this,
                                                      rn.getResourceId()));
                 }
+            }
+            for (ArbNode an : rg.getArbNodes()) {
+                if (!an.getStorageNodeId().equals(oldNode)) {
+                    addTask(new UpdateHelperHostV2(this,
+                                                   an.getResourceId(),
+                                                   rg.getResourceId()));
+                    addTask(new NewArbNodeParameters(this,
+                                                     an.getResourceId()));
+                }
+
             }
         }
 
@@ -293,6 +312,8 @@ public class MigrateSNPlan extends TopologyPlan {
         boolean newNodeAdminsExist = false;
         boolean oldNodeRNsExist = false;
         boolean newNodeRNsExist = false;
+        boolean oldNodeANsExist = false;
+        boolean newNodeANsExist = false;
 
         for (AdminParams ap: parameters.getAdminParams()) {
             if (ap.getStorageNodeId().equals(oldNode1)) {
@@ -316,6 +337,17 @@ public class MigrateSNPlan extends TopologyPlan {
             }
         }
 
+        for (ArbNodeParams anp: parameters.getArbNodeParams()) {
+            if (anp.getStorageNodeId().equals(oldNode1)) {
+                oldNodeANsExist = true;
+            }
+
+            if (anp.getStorageNodeId().equals(newNode1)) {
+                newNodeANsExist = true;
+            }
+        }
+
+
         if (oldNodeRNsExist && newNodeRNsExist) {
             throw new IllegalCommandException
                 ("Cannot migrate services from " + oldNode1 + " to " +
@@ -328,10 +360,19 @@ public class MigrateSNPlan extends TopologyPlan {
                  newNode1 + " because " + newNode1 + " is already in use");
         }
 
+
+        if (oldNodeANsExist && newNodeANsExist) {
+            throw new IllegalCommandException
+                ("Cannot migrate services from " + oldNode1 + " to " +
+                 newNode1 + " because " + newNode1 + " is already in use");
+        }
+
         if ((!oldNodeAdminsExist) &&
             (!oldNodeRNsExist) &&
+            (!oldNodeANsExist) &&
             (!newNodeAdminsExist) &&
-            (!newNodeRNsExist)) {
+            (!newNodeRNsExist) &&
+            (!newNodeANsExist)) {
             throw new IllegalCommandException
                 ("No services on " + oldNode1 + " or " + newNode1 +
                  ", nothing to migrate");

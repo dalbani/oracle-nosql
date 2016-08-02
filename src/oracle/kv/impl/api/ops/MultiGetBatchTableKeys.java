@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,20 +44,16 @@
 package oracle.kv.impl.api.ops;
 
 import java.io.IOException;
-import java.io.ObjectInput;
+import java.io.DataInput;
 import java.util.List;
-
-import com.sleepycat.je.Transaction;
 
 import oracle.kv.KeyRange;
 import oracle.kv.impl.api.table.TargetTables;
-import oracle.kv.impl.topo.PartitionId;
 
 /**
  * A multi-get-batch-keys table operation
  */
-public class MultiGetBatchTableKeys
-    extends MultiGetBatchTableOperation<byte[]> {
+public class MultiGetBatchTableKeys extends MultiGetBatchTableOperation {
 
     /**
      * Construct a multi-get-batch-keys table operation.
@@ -81,34 +77,9 @@ public class MultiGetBatchTableKeys
               targetTables, subRange, batchSize);
     }
 
-    public MultiGetBatchTableKeys(ObjectInput in, short serialVersion)
+    public MultiGetBatchTableKeys(DataInput in, short serialVersion)
         throws IOException {
 
         super(OpCode.MULTI_GET_BATCH_TABLE_KEYS, in, serialVersion);
-    }
-
-    @Override
-    public boolean iterate(Transaction txn,
-                           PartitionId partitionId,
-                           final OperationHandler operationHandler,
-                           byte[] parentKey,
-                           int subBatchSize,
-                           byte[] resumeSubKey,
-                           final List<byte[]> results) {
-
-        return iterateTable(operationHandler, txn, partitionId,
-                            parentKey, subBatchSize, resumeSubKey,
-                            new TableScanKeyVisitor(this, operationHandler,
-                                                    results));
-    }
-
-    @Override
-    public Result createIterateResult(List<byte[]> results,
-                                      boolean hasMore,
-                                      int resumeParentKeyIndex) {
-
-        return new Result.BulkGetKeysIterateResult(getOpCode(),
-                                                   results, hasMore,
-                                                   resumeParentKeyIndex);
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,14 +45,12 @@ package oracle.kv.impl.api.avro;
 
 import org.apache.avro.Schema;
 
+import com.sleepycat.util.PackedInteger;
+
 import oracle.kv.Value;
 import oracle.kv.avro.RawAvroBinding;
 import oracle.kv.avro.RawRecord;
 import oracle.kv.avro.UndefinedSchemaException;
-import oracle.kv.impl.api.avro.SchemaCache;
-import oracle.kv.impl.api.avro.SchemaInfo;
-
-import com.sleepycat.util.PackedInteger;
 
 /**
  * This class forms the basis for other binding implementations in that it is
@@ -61,10 +59,11 @@ import com.sleepycat.util.PackedInteger;
  * IllegalArgumentException when the schema ID is invalid, and that the toValue
  * method throws UndefinedSchemaException when the schema is unknown.
  */
+@SuppressWarnings("deprecation")
 class RawBinding implements RawAvroBinding {
 
     private final SchemaCache schemaCache;
-    
+
     RawBinding(SchemaCache schemaCache) {
         this.schemaCache = schemaCache;
     }
@@ -75,6 +74,18 @@ class RawBinding implements RawAvroBinding {
 
         /* Derive schema from schema ID in value byte array. */
         final Schema schema = getValueSchema(value, schemaCache);
+
+        /* Copy raw data out of value byte array. */
+        final byte[] buf = value.getValue();
+        final int dataOffset = getValueRawDataOffset(value);
+        final byte[] rawData = new byte[buf.length - dataOffset];
+        System.arraycopy(buf, dataOffset, rawData, 0, rawData.length);
+
+        return new RawRecord(rawData, schema);
+    }
+
+    public RawRecord toObjectForImport(Value value, Schema schema)
+        throws IllegalArgumentException {
 
         /* Copy raw data out of value byte array. */
         final byte[] buf = value.getValue();

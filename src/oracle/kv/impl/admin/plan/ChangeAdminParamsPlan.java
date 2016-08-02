@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,14 +48,11 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static oracle.kv.impl.admin.plan.Planner.START_STOP_SERVICES_VERSION;
-
 import oracle.kv.impl.admin.Admin;
 import oracle.kv.impl.admin.param.AdminParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.admin.plan.task.NewAdminParameters;
-import oracle.kv.impl.admin.plan.task.StartAdmin;
 import oracle.kv.impl.admin.plan.task.StartAdminV2;
 import oracle.kv.impl.admin.plan.task.StopAdmin;
 import oracle.kv.impl.admin.plan.task.WaitForAdminState;
@@ -119,11 +116,11 @@ public class ChangeAdminParamsPlan extends AbstractPlan {
         if (givenId == null) {
             allAdmins = parameters.getAdminIds(dcid, topology);
         } else {
-            allAdmins = new HashSet<AdminId>();
+            allAdmins = new HashSet<>();
             allAdmins.add(givenId);
         }
 
-        Set<AdminId> restartIds = new HashSet<AdminId>();
+        Set<AdminId> restartIds = new HashSet<>();
 
         ParameterMap filtered = newParams.readOnlyFilter();
 
@@ -167,13 +164,7 @@ public class ChangeAdminParamsPlan extends AbstractPlan {
         AdminParams current = parameters.get(aid);
         StorageNodeId snid = current.getStorageNodeId();
         addTask(new StopAdmin(this, snid, aid, false));
-
-        if (planner.getAdmin().
-                checkAdminGroupVersion(START_STOP_SERVICES_VERSION)) {
-            addTask(new StartAdminV2(this, snid, aid, false));
-        } else {
-            addTask(new StartAdmin(this, snid, aid, false));
-        }
+        addTask(new StartAdminV2(this, snid, aid, false));
         addTask(new WaitForAdminState(this, snid, aid, ServiceStatus.RUNNING));
     }
 
@@ -214,7 +205,7 @@ public class ChangeAdminParamsPlan extends AbstractPlan {
     }
 
     @Override
-    void stripForDisplay() {
+    public void stripForDisplay() {
         newParams = null;
     }
 
@@ -227,6 +218,6 @@ public class ChangeAdminParamsPlan extends AbstractPlan {
     @Override
     protected synchronized void initTransientFields() {
         super.initTransientFields();
-        needsAction = new HashSet<AdminId>();
+        needsAction = new HashSet<>();
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -130,6 +130,17 @@ public class CommandShell extends CommonShell {
      */
     public static final String RUN_BY_KVSTORE_MAIN= "-kvstore-main";
 
+    /**
+     * A temporary flag to disable arbiters by default in the Q1/2016 release,
+     * but to permit enabling them for testing.
+     */
+    public static volatile boolean enableArbiters =
+        Boolean.getBoolean("oracle.kv.enableArbiters");
+    {
+        assert KVVersion.CURRENT_VERSION.compareTo(KVVersion.R4_0) == 0
+            : "Remove enableArbiters after R4.0 (or earlier!)";
+    }
+
     /* The section name in rc file for this shell */
     private static String RC_FILE_SECTION = "kvcli";
 
@@ -174,6 +185,7 @@ public class CommandShell extends CommonShell {
                                      new ConfigureCommand(),
                                      new ConnectCommand(),
                                      new DdlCommand(),
+                                     new DebugCommand(),
                                      new DeleteCommand(),
                                      new ExecuteCommand(),
                                      new Shell.ExitCommand(),
@@ -193,6 +205,7 @@ public class CommandShell extends CommonShell {
                                      new ShowCommand(),
                                      new SnapshotCommand(),
                                      new TableCommand(),
+                                     new TableSizeCommand(),
                                      new TimeCommand(),
                                      new TopologyCommand(),
                                      new VerboseCommand(),
@@ -212,7 +225,12 @@ public class CommandShell extends CommonShell {
             try {
                 connect();
             } catch (ShellException se) {
-                displayResultReport("connect admin", se.getCommandResult(),
+                /*
+                 * The exception may be thrown while connecting a store or
+                 * admin service
+                 */
+                displayResultReport("connect store or admin service",
+                                    se.getCommandResult(),
                                     se.getMessage());
                 if (getDebug()) {
                     se.printStackTrace(output);
@@ -222,9 +240,17 @@ public class CommandShell extends CommonShell {
                  * return a single result report to client.
                  */
                 if (getJson()) {
+                    if (dontExit()) {
+                        /* For testing, save the exist code and do not exit*/
+                        this.exitCode = EXIT_UNKNOWN;
+                        return;
+                    }
                     System.exit(EXIT_UNKNOWN);
                 }
             }
+        } else {
+            output.println("Not connected to a store or admin service.  Use " +
+                           "the connect command to connect.");
         }
     }
 
@@ -354,8 +380,13 @@ public class CommandShell extends CommonShell {
     public void connect()
         throws ShellException {
 
-        connectStore();
+        /*
+         * Also update AdminLogin with security file, so that Admin login
+         * will use the security file specified to login Admin after store
+         * login failed.
+         */
         loginHelper.updateAdminLogin(adminUser, adminSecurityFile);
+        connectStore();
         connectAdmin(false /* force login */);
     }
 
@@ -670,96 +701,6 @@ public class CommandShell extends CommonShell {
         return (adminState != null) && !adminState.isMaster();
     }
 
-    static class VerboseCommand extends ShellCommand {
-
-        VerboseCommand() {
-            super("verbose", 4);
-        }
-
-        @Override
-        public String execute(String[] args, Shell shell)
-            throws ShellException {
-
-            if (args.length > 2) {
-                shell.badArgCount(this);
-            } else if (args.length > 1) {
-                String arg = args[1];
-                if ("on".equals(arg)) {
-                    shell.setVerbose(true);
-                } else if ("off".equals(arg)) {
-                    shell.setVerbose(false);
-                } else {
-                    return "Invalid argument: " + arg + eolt +
-                        getBriefHelp();
-                }
-            } else {
-                shell.toggleVerbose();
-            }
-            return "Verbose mode is now " + (shell.getVerbose()? "on" : "off");
-        }
-
-        @Override
-        protected String getCommandSyntax() {
-            return "verbose [on|off]";
-        }
-
-        @Override
-        public String getCommandDescription() {
-            return
-                "Toggles or sets the global verbosity setting.  This " +
-                "property can also" + eolt + "be set per-command using " +
-                "the -verbose flag.";
-        }
-    }
-
-    static class HiddenCommand extends ShellCommand {
-
-        HiddenCommand() {
-            super("hidden", 3);
-        }
-
-        @Override
-        protected boolean isHidden() {
-            return true;
-        }
-
-        @Override
-        public String execute(String[] args, Shell shell)
-            throws ShellException {
-
-            CommandShell cs = (CommandShell) shell;
-            if (args.length > 2) {
-                shell.badArgCount(this);
-            } if (args.length > 1) {
-                String arg = args[1];
-                if ("on".equals(arg)) {
-                    cs.setHidden(true);
-                } else if ("off".equals(arg)) {
-                    cs.setHidden(false);
-                } else {
-                    return "Invalid argument: " + arg + eolt +
-                        getBriefHelp();
-                }
-            } else {
-                cs.toggleHidden();
-            }
-            return "Hidden parameters are " +
-                (cs.showHidden()? "enabled" : "disabled");
-        }
-
-        @Override
-        protected String getCommandSyntax() {
-            return "hidden [on|off]";
-        }
-
-        @Override
-        public String getCommandDescription() {
-            return "Toggles or sets visibility and setting of parameters " +
-                   "that are normally hidden." + eolt + "Use these " +
-                   "parameters only if advised to do so by Oracle Support.";
-        }
-    }
-
     static class ConnectCommand extends CommandWithSubs {
         private static final String COMMAND = "connect";
         private static final String HOST_FLAG = "-host";
@@ -949,7 +890,13 @@ public class CommandShell extends CommonShell {
             } else if (ADMIN_SECURITY_FLAG.equals(arg)) {
                 adminSecurityFile = nextArg(arg);
                 return true;
-            } else if (RUN_BY_KVSTORE_MAIN.equals(arg)) {
+            }
+            return false;
+        }
+
+        @Override
+        public boolean checkExtraHiddenFlag(String arg) {
+            if (RUN_BY_KVSTORE_MAIN.equals(arg)) {
                 commandName = nextArg(arg);
                 return true;
             }
@@ -987,10 +934,13 @@ public class CommandShell extends CommonShell {
                 error = "Argument error: " + e.toString();
             }
             System.err.println(error);
+            if (shell.dontExit()) {
+                return;
+            }
             System.exit(1);
         }
         shell.start();
-        if (shell.getExitCode() != EXIT_OK) {
+        if ((shell.getExitCode() != EXIT_OK) && !shell.dontExit()) {
             System.exit(shell.getExitCode());
         }
     }
@@ -1109,6 +1059,9 @@ public class CommandShell extends CommonShell {
             } catch (IOException ioe) {
                 throw new ShellException("Failed to get login credentials: " +
                                          ioe.getMessage());
+            } catch (IllegalArgumentException iae) {
+                throw new ShellException("Login properties error: " +
+                                         iae.getMessage());
             }
         }
 

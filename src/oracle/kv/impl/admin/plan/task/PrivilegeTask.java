@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -137,6 +137,18 @@ public class PrivilegeTask extends UpdateMetadata<SecurityMetadata> {
             }
             final KVStorePrivilegeLabel privLabel =
                 KVStorePrivilegeLabel.valueOf(privName.toUpperCase());
+
+            /*
+             * Only READ_TABLE privilege on system table is allowed to be
+             * granted or revoked explicitly.
+             */
+            if (!privLabel.equals(KVStorePrivilegeLabel.READ_TABLE) &&
+                table.isSystemTable()) {
+                throw new ClientAccessException(
+                    new UnauthorizedException(
+                        "Granting privileges other than read privilege for" +
+                        " system tables is not permitted"));
+            }
             privileges.add(TablePrivilege.get(privLabel, table.getId(),
                                               table.getFullName()));
         }

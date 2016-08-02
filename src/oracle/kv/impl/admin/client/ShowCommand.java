@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -65,6 +65,8 @@ import java.util.TreeMap;
 import org.codehaus.jackson.node.ArrayNode;
 import org.codehaus.jackson.node.ObjectNode;
 
+import com.sleepycat.je.rep.ReplicatedEnvironment.State;
+
 import oracle.kv.KVVersion;
 import oracle.kv.impl.admin.AdminStatus;
 import oracle.kv.impl.admin.CommandResult;
@@ -74,6 +76,7 @@ import oracle.kv.impl.admin.CommandServiceAPI;
 import oracle.kv.impl.admin.Snapshot;
 import oracle.kv.impl.admin.criticalevent.CriticalEvent;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
@@ -94,6 +97,7 @@ import oracle.kv.impl.security.metadata.KVStoreUser.UserDescription;
 import oracle.kv.impl.sna.StorageNodeAgentAPI;
 import oracle.kv.impl.sna.StorageNodeStatus;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
@@ -108,19 +112,17 @@ import oracle.kv.impl.util.registry.RegistryUtils;
 import oracle.kv.table.Index;
 import oracle.kv.table.Table;
 import oracle.kv.util.ErrorMessage;
-import oracle.kv.util.shell.CommandWithSubs;
 import oracle.kv.util.shell.Shell;
 import oracle.kv.util.shell.ShellArgumentException;
 import oracle.kv.util.shell.ShellCommand;
 import oracle.kv.util.shell.ShellException;
 import oracle.kv.util.shell.ShellUsageException;
-
-import com.sleepycat.je.rep.ReplicatedEnvironment.State;
+import oracle.kv.util.shell.ShowCommandBase;
 
 /*
  * show and its subcommands
  */
-class ShowCommand extends CommandWithSubs {
+class ShowCommand extends ShowCommandBase {
     private static final List<? extends SubCommand> subs =
                                        Arrays.asList(new ShowParameters(),
                                                      new ShowAdmins(),
@@ -143,13 +145,7 @@ class ShowCommand extends CommandWithSubs {
     private static final String SHOW_COMMAND_NAME = "show";
 
     ShowCommand() {
-        super(subs, "show", 2, 2);
-    }
-
-    @Override
-    protected String getCommandOverview() {
-        return "Encapsulates commands that display the state of the store " +
-               "and its components.";
+        super(subs);
     }
 
     /*
@@ -231,6 +227,7 @@ class ShowCommand extends CommandWithSubs {
 
             RepNodeId rnid = null;
             AdminId aid = null;
+            ArbNodeId anid = null;
             StorageNodeId snid = null;
             try {
                 rnid = RepNodeId.parse(serviceName);
@@ -241,7 +238,11 @@ class ShowCommand extends CommandWithSubs {
                     try {
                         aid = AdminId.parse(serviceName);
                     } catch (IllegalArgumentException ignored2) {
-                        invalidArgument(serviceName);
+                        try {
+                            anid = ArbNodeId.parse(serviceName);
+                        } catch (IllegalArgumentException ignored3) {
+                            invalidArgument(serviceName);
+                        }
                     }
                 }
             }
@@ -283,6 +284,15 @@ class ShowCommand extends CommandWithSubs {
                         return CommandUtils.formatParams
                             (ap.getMap(), showHidden,
                              ParameterState.Info.ADMIN);
+                    }
+                } else if (anid != null) {
+                    final ArbNodeParams anp = p.get(anid);
+                    if (anp == null) {
+                        noSuchService(anid);
+                    } else {
+                        return CommandUtils.formatParams
+                            (anp.getMap(), showHidden,
+                             ParameterState.Info.ARBNODE);
                     }
                 }
             } catch (RemoteException re) {
@@ -606,6 +616,7 @@ class ShowCommand extends CommandWithSubs {
         static final String shFlag = "-shard";
         static final String statusFlag = "-status";
         static final String perfFlag = "-perf";
+        static final String anFlag = "-an";
         static final String dcFlagsDeprecation =
             "The -dc flag is deprecated and has been replaced by -zn." +
             eol + eol;
@@ -647,6 +658,8 @@ class ShowCommand extends CommandWithSubs {
                         filter.add(Filter.STATUS);
                     } else if (args[i].equals(perfFlag)) {
                         filter.add(Filter.PERF);
+                    } else if (args[i].equals(anFlag)) {
+                        filter.add(Filter.AN);
                     } else {
                         shell.unknownArgument(args[i], this);
                     }
@@ -694,7 +707,8 @@ class ShowCommand extends CommandWithSubs {
         @Override
         protected String getCommandSyntax() {
             return
-                "show topology [-zn] [-rn] [-sn] [-store] [-status] [-perf]";
+                "show topology [-zn] [-rn] [-an] [-sn] [-store] [-status]" +
+                " [-perf]";
         }
 
         @Override
@@ -1155,72 +1169,6 @@ class ShowCommand extends CommandWithSubs {
         @Override
         protected String getCommandDescription() {
             return "Lists the storage node pools";
-        }
-    }
-
-    static final class ShowFaults extends SubCommand {
-
-        private ShowFaults() {
-            super("faults", 3);
-        }
-
-        @Override
-        public String execute(String[] args, Shell shell)
-            throws ShellException {
-
-            final Shell.CommandHistory history = shell.getHistory();
-            final int from = 0;
-            final int to = history.getSize();
-
-            if (args.length > 1) {
-                final String arg = args[1];
-                if ("-last".equals(arg)) {
-                    return history.dumpLastFault();
-                } else if ("-command".equals(arg)) {
-                    final String faultString = Shell.nextArg(args, 1, this);
-                    int fault;
-                    try {
-                        fault = Integer.parseInt(faultString);
-                        /*
-                         * The index of command are shown as 1-based index in
-                         * output, so covert it to 0-based index when locating
-                         * it in CommandHistory list.
-                         */
-                        int idxFault = toZeroBasedIndex(fault);
-                        if (idxFault < 0 || idxFault >= history.getSize()) {
-                            return "Index out of range: " + fault + "" + eolt +
-                                   getBriefHelp();
-                        }
-                        if (history.commandFaulted(idxFault)) {
-                            return history.dumpCommand(idxFault, true);
-                        }
-                        return "Command " + fault + " did not fault";
-                    } catch (IllegalArgumentException e) {
-                        invalidArgument(faultString);
-                    }
-                } else {
-                    shell.unknownArgument(arg, this);
-                }
-            }
-            return history.dumpFaultingCommands(from, to);
-        }
-
-        private int toZeroBasedIndex(int index) {
-            return (index > 0) ? (index - 1) : 0;
-        }
-
-        @Override
-        protected String getCommandSyntax() {
-            return "show faults [-last] [-command <command index>]";
-        }
-
-        @Override
-        protected String getCommandDescription() {
-            return
-                "Displays faulting commands.  By default all available " +
-                "faulting commands" + eolt + "are displayed.  Individual " +
-                "fault details can be displayed using the" + eolt +
-                "-last and -command flags.";
         }
     }
 
@@ -1797,6 +1745,13 @@ class ShowCommand extends CommandWithSubs {
                 sb.append(s);
             }
             sb.append(")");
+
+            if (index.getType().equals(Index.IndexType.TEXT)) {
+                sb.append(", type: " + Index.IndexType.TEXT);
+            } else if (index.getType().equals(Index.IndexType.SECONDARY)) {
+                sb.append(", type: " + Index.IndexType.SECONDARY);
+            }
+
             if (index.getDescription() != null) {
                 sb.append(" -- ");
                 sb.append(index.getDescription());

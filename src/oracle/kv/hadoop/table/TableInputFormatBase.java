@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -49,9 +49,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import oracle.kv.Consistency;
@@ -64,6 +67,7 @@ import oracle.kv.impl.security.PasswordManager;
 import oracle.kv.impl.security.PasswordStore;
 import oracle.kv.impl.security.login.LoginManager;
 import oracle.kv.impl.security.util.KVStoreLogin;
+import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.Topology;
 import oracle.kv.impl.topo.split.SplitBuilder;
 import oracle.kv.impl.topo.split.TopoSplit;
@@ -294,6 +298,8 @@ abstract class TableInputFormatBase<K, V> extends InputFormat<K, V> {
     /* Used by getSplits to contact secure store locally. */
     private static String localLoginFile = null;
 
+    private boolean splitOnShards = false;
+
     /**
      * @hidden
      */
@@ -417,14 +423,12 @@ abstract class TableInputFormatBase<K, V> extends InputFormat<K, V> {
             }
         }
 
-        /* Create a set of splits based on shards and consistency */
+        /* Create splits for either PrimaryKey or IndexKey iteration. */
+        final List<TopoSplitWrapper> splits =
+            getSplitInfo(topology, consistency, splitOnShards);
 
-        final SplitBuilder sb = new SplitBuilder(topology);
-
-        final List<TopoSplit> splits = sb.createShardSplits(consistency);
         final List<InputSplit> ret = new ArrayList<InputSplit>(splits.size());
-
-        for (TopoSplit ts : splits) {
+        for (TopoSplitWrapper ts : splits) {
 
             final TableInputSplit split = new TableInputSplit();
 
@@ -448,6 +452,9 @@ abstract class TableInputFormatBase<K, V> extends InputFormat<K, V> {
             split.setBatchSize(batchSize);
             split.setMaxBatches(maxBatches);
             split.setPartitionSets(ts.getPartitionSets());
+
+            split.setSplitOnShards(splitOnShards);
+            split.setShardSet(ts.getShardSet());
 
             ret.add(split);
         }
@@ -1079,6 +1086,90 @@ abstract class TableInputFormatBase<K, V> extends InputFormat<K, V> {
             } finally {
                 trustFlnmFos.close();
             }
+        }
+    }
+
+    public void setSplitOnShards(final boolean newValue) {
+        splitOnShards = newValue;
+    }
+
+    /**
+     * Convenience method that encapsulates different split creation
+     * functionality; based on whether the search (iteration) will
+     * involve a <code>TableScan</code> using partition sets, or an
+     * <code>IndexScan</code> using a set of <code>RepGroupId</code>s.
+     * If <code>false</code> is input for the <code>indexIteration</code>
+     * parameter, then the <code>SplitBuilder</code> utility is used
+     * to compute the necessary partition based splits.
+     */
+    private List<TopoSplitWrapper> getSplitInfo(
+                                       final Topology topology,
+                                       final Consistency readConsistency,
+                                       final boolean indexIteration) {
+
+        final List<TopoSplitWrapper> retList =
+            new ArrayList<TopoSplitWrapper>();
+
+        if (!indexIteration) {
+            final SplitBuilder sb = new SplitBuilder(topology);
+            final List<TopoSplit> splits =
+                sb.createShardSplits(readConsistency);
+            for (TopoSplit split : splits) {
+                retList.add(new TopoSplitWrapper(split));
+            }
+            return retList;
+        }
+
+        if (topology != null) {
+
+            /* Create the shard splits. */
+            final Set<RepGroupId> shardIds = topology.getRepGroupIds();
+            for (RepGroupId shardId : shardIds) {
+                /*
+                 * Currently, only 1 shard per set per split (list element).
+                 * But in the future, may need to include multiple shards
+                 * per split; similar to the multiple partitions per set
+                 * per split for TopoSplits.
+                 */
+                final Set<RepGroupId> shardSet = new HashSet<RepGroupId>();
+                shardSet.add(shardId);
+                retList.add(new TopoSplitWrapper(shardSet));
+            }
+        }
+        return retList;
+    }
+
+    /**
+     * Convenience class that wraps either a TopoSplit or a ShardSplit.
+     */
+    private static class TopoSplitWrapper {
+        private final TopoSplit topoSplit;
+        private final Set<RepGroupId> shardSet;
+
+        TopoSplitWrapper(TopoSplit topoSplit) {
+            this.topoSplit = topoSplit;
+            this.shardSet = null;
+        }
+
+        TopoSplitWrapper(Set<RepGroupId> shardSet) {
+            this.topoSplit = null;
+            this.shardSet = shardSet;
+        }
+
+        List<Set<Integer>> getPartitionSets() {
+            if (topoSplit != null) {
+                return topoSplit.getPartitionSets();
+            }
+            /* Avoid NPE in write method during split serialization. */
+            return Collections.emptyList();
+        }
+
+        Set<RepGroupId> getShardSet() {
+            if (shardSet != null) {
+                return shardSet;
+            }
+            /* Avoid NPE in write method during split serialization. */
+            return Collections.emptySet();
         }
     }
 }

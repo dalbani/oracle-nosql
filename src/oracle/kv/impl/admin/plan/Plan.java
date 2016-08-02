@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.logging.Logger;
 
 import org.codehaus.jackson.node.ObjectNode;
+import oracle.kv.impl.admin.AdminServiceParams;
 
 import oracle.kv.impl.admin.CommandResult;
 import oracle.kv.impl.admin.IllegalCommandException;
@@ -62,8 +63,6 @@ import oracle.kv.impl.metadata.Metadata;
 import oracle.kv.impl.security.KVStorePrivilege;
 import oracle.kv.impl.security.Ownable;
 import oracle.kv.util.ErrorMessage;
-
-import com.sleepycat.je.Transaction;
 
 /**
  * Encapsulates a definition and mechanism for making a change to the KV Store.
@@ -322,13 +321,18 @@ public interface Plan extends Ownable {
     String getDefaultName();
 
     /**
-     * Store the Plan objects in a BDB database. Plan is stored in the given
-     * PlanStore using the id field as the primary key.
-     *
-     * @param PlanStore the PlanStore that holds the Plan
-     * @param txn the transaction in progress
+     * Initializes the plan object. Transient fields are set, as well
+     * as listeners. This method must be called when ever a plan is read
+     * from the store.
      */
-    void persist(PlanStore planStore, Transaction txn);
+    void initializePlan(Planner planner, AdminServiceParams aServiceParams);
+
+    /**
+     * Null out components of the plan that have a large memory footprint,
+     * and that are not needed for display. Meant to reduce the cost of
+     * display.
+     */
+    void stripForDisplay();
 
     /**
      * If this plan had a failure during execution, save a description of the
@@ -460,11 +464,11 @@ public interface Plan extends Ownable {
      * do the same actions
      */
     boolean logicalCompare(Plan currentPlan);
-    
+
     /**
      * Returns the planner handling this plan. Returns null if a planner has
      * not yet been set.
-     * 
+     *
      * @return the planner handling this plan or null
      */
     Planner getPlanner();

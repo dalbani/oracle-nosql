@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,26 +43,24 @@
 
 package oracle.kv.impl.api.ops;
 
+import static oracle.kv.impl.util.SerialVersion.TABLE_API_VERSION;
+import static oracle.kv.impl.util.SerialVersion.TTL_SERIAL_VERSION;
+
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
-import java.util.Collections;
-import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import oracle.kv.ReturnValueVersion;
 import oracle.kv.Value;
-import oracle.kv.Version;
 import oracle.kv.impl.api.lob.KVLargeObjectImpl;
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.security.SystemPrivilege;
-import oracle.kv.impl.security.TablePrivilege;
-import oracle.kv.impl.topo.PartitionId;
-import oracle.kv.impl.util.SerialVersion;
-
-import com.sleepycat.je.Transaction;
+import oracle.kv.table.TimeToLive;
 
 /**
- * A Put operation puts a value in the KV Store
+ * A Put operation puts a value in the KV Store.
+ * <br>
+ * The operation is transmitted over the wire. Options related to operation
+ * such as table identifier or TTL parameters are parts of wire format.
  */
 public class Put extends SingleKeyOperation {
 
@@ -80,6 +78,9 @@ public class Put extends SingleKeyOperation {
      * Table operations include the table id.  0 means no table.
      */
     private final long tableId;
+
+    private TimeToLive ttl;
+    private boolean updateTTL;
 
     /**
      * Constructs a put operation.
@@ -101,6 +102,17 @@ public class Put extends SingleKeyOperation {
     }
 
     /**
+     * Constructs a put operation with a table id and TTL-related arguments.
+     */
+    public Put(byte[] keyBytes,
+            Value value,
+            ReturnValueVersion.Choice prevValChoice,
+            long tableId, TimeToLive ttl, boolean updateTTL) {
+     this(OpCode.PUT, keyBytes, value, prevValChoice, tableId,
+          ttl, updateTTL);
+    }
+
+    /**
      * For subclasses, allows passing OpCode.
      */
     Put(OpCode opCode,
@@ -115,27 +127,39 @@ public class Put extends SingleKeyOperation {
         this.tableId = tableId;
     }
 
+    Put(OpCode opCode,
+        byte[] keyBytes,
+        Value value,
+        ReturnValueVersion.Choice prevValChoice,
+        long tableId,
+        TimeToLive ttl, boolean updateTTL) {
+
+        this(opCode, keyBytes, value, prevValChoice, tableId);
+        this.ttl = ttl;
+        this.updateTTL = updateTTL;
+    }
+
     /**
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    Put(ObjectInput in, short serialVersion)
+    Put(DataInput in, short serialVersion)
         throws IOException {
-
         this(OpCode.PUT, in, serialVersion);
     }
 
     /**
      * For subclasses, allows passing OpCode.
      */
-    Put(OpCode opCode, ObjectInput in, short serialVersion)
+    Put(OpCode opCode, DataInput in, short serialVersion)
         throws IOException {
 
         super(opCode, in, serialVersion);
+
         requestValue = new RequestValue(in, serialVersion);
         assert requestValue.getBytes() != null;
         prevValChoice = ReturnValueVersion.getChoice(in.readUnsignedByte());
-        if (serialVersion >= SerialVersion.V4) {
+        if (serialVersion >= TABLE_API_VERSION) {
 
             /*
              * Read table id.  If there is no table the value is 0.
@@ -144,6 +168,18 @@ public class Put extends SingleKeyOperation {
         } else {
             tableId = 0;
         }
+        if (serialVersion >= TTL_SERIAL_VERSION) {
+            int ttlVal = in.readInt();
+            TimeUnit unit = ttlVal != 0 ? TimeUnit.values()[in.readByte()] :
+                             TimeUnit.DAYS;
+            ttl = TimeToLive.createTimeToLive(ttlVal, unit);
+            updateTTL = in.readBoolean();
+        }
+    }
+
+    public void setTTLOptions(TimeToLive ttl, boolean updateTTL) {
+        this.ttl = ttl;
+        this.updateTTL = updateTTL;
     }
 
     /**
@@ -151,13 +187,13 @@ public class Put extends SingleKeyOperation {
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
         requestValue.writeFastExternal(out, serialVersion);
         out.writeByte(prevValChoice.ordinal());
-        if (serialVersion >= SerialVersion.V4) {
+        if (serialVersion >= TABLE_API_VERSION) {
 
             /*
              * Write the table id.  If this is not a table operation the
@@ -165,9 +201,26 @@ public class Put extends SingleKeyOperation {
              */
             out.writeLong(tableId);
         } else if (tableId != 0) {
-            throwTablesRequired(serialVersion);
+            throwVersionRequired(serialVersion, TABLE_API_VERSION);
         }
-    }
+        if (serialVersion >= TTL_SERIAL_VERSION) {
+            int ttlVal = 0;
+            if (ttl != null) {
+                ttlVal = (int) ttl.getValue();
+            }
+            out.writeInt(ttlVal);
+            if (ttlVal != 0) {
+                out.writeByte(ttl.getUnit().ordinal());
+            }
+            out.writeBoolean(updateTTL);
+        } else if (ttl != null && ttl.getValue() != 0) {
+            /*
+             * Throw an exception so that TTL information is not
+             * transparently dropped when writing to older servers.
+             */
+            throwVersionRequired(serialVersion, TTL_SERIAL_VERSION);
+        }
+   }
 
     /**
      * Gets the value to be put
@@ -183,25 +236,23 @@ public class Put extends SingleKeyOperation {
     /**
      * Returns the tableId, which is 0 if this is not a table operation.
      */
+    @Override
     long getTableId() {
         return tableId;
     }
 
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          OperationHandler operationHandler) {
+    /**
+     * Returns expiry duration
+     */
+    TimeToLive getTTL() {
+        return ttl;
+    }
 
-        verifyDataAccess(operationHandler, getTableId());
-
-        final ReturnResultValueVersion prevVal =
-            new ReturnResultValueVersion(prevValChoice);
-
-        final Version newVersion = operationHandler.put
-            (txn, partitionId, getKeyBytes(), getValueBytes(), prevVal);
-
-        return new Result.PutResult(getOpCode(), prevVal.getValueVersion(),
-                                    newVersion);
+    /**
+     * Returns whether to update expiry
+     */
+    boolean getUpdateTTL() {
+        return updateTTL;
     }
 
     @Override
@@ -221,23 +272,7 @@ public class Put extends SingleKeyOperation {
         }
         sb.append(" Value: ");
         sb.append(requestValue);
+
         return sb.toString();
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> schemaAccessPrivileges() {
-        return SystemPrivilege.schemaWritePrivList;
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> generalAccessPrivileges() {
-        return SystemPrivilege.writeOnlyPrivList;
-    }
-
-    @Override
-    public List<? extends KVStorePrivilege>
-        tableAccessPrivileges(long tableId1) {
-        return Collections.singletonList(
-            new TablePrivilege.InsertTable(tableId1));
     }
 }

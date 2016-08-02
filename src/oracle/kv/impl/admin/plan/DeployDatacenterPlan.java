@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -77,6 +77,10 @@ public class DeployDatacenterPlan extends TopologyPlan {
     public static final KVVersion SECONDARY_DC_VERSION =
         KVVersion.R3_0;    /* R3.0 Q1/2014 */
 
+    /** The first version that supports arbiters. */
+    public static final KVVersion ARBITER_DC_VERSION =
+        KVVersion.R4_0;
+
     /* The original parameters. */
     private String datacenterName;
 
@@ -99,18 +103,20 @@ public class DeployDatacenterPlan extends TopologyPlan {
                          Topology topology,
                          String datacenterName,
                          int repFactor,
-                         DatacenterType datacenterType) {
+                         DatacenterType datacenterType,
+                         boolean allowArbiters) {
         super(idGen, planName, planner, topology);
 
         this.datacenterName = datacenterName;
 
         /* Error Checking */
         Rules.validateReplicationFactor(repFactor);
+        Rules.validateArbiter(allowArbiters, datacenterType);
 
         preexistingDC = getPreexistingDatacenter();
-        checkVersionRequirements(datacenterType);
+        checkVersionRequirements(datacenterType, allowArbiters);
         if (preexistingDC != null) {
-            checkPreexistingDCParams(repFactor, datacenterType);
+            checkPreexistingDCParams(repFactor, datacenterType, allowArbiters);
             datacenterId = preexistingDC.getResourceId();
             newDCParams =
                 planner.getAdmin().getCurrentParameters().get(datacenterId);
@@ -118,7 +124,7 @@ public class DeployDatacenterPlan extends TopologyPlan {
 
             /* Add new data center to topology and create DataCenterParams */
             final Datacenter newDc = Datacenter.newInstance(
-                datacenterName, repFactor, datacenterType);
+                datacenterName, repFactor, datacenterType, allowArbiters);
             datacenterId = topology.add(newDc).getResourceId();
             newDCParams = new DatacenterParams(datacenterId, datacenterName);
         }
@@ -152,7 +158,8 @@ public class DeployDatacenterPlan extends TopologyPlan {
      */
     private void checkPreexistingDCParams(
         final int repFactor,
-        final DatacenterType datacenterType) {
+        final DatacenterType datacenterType,
+        final boolean allowArbiters) {
 
         if (preexistingDC.getRepFactor() != repFactor) {
             throw new IllegalCommandException(
@@ -169,6 +176,13 @@ public class DeployDatacenterPlan extends TopologyPlan {
                 preexistingDC.getDatacenterType() +
                 " rather than the requested type " + datacenterType);
         }
+        if (preexistingDC.getAllowArbiters() != allowArbiters) {
+            throw new IllegalCommandException(
+                "Zone " + datacenterName +
+                " already exists but has allowArbiters " +
+                preexistingDC.getAllowArbiters() +
+                " rather than the requested allowArbiters of " + allowArbiters);
+        }
     }
 
     /**
@@ -176,35 +190,65 @@ public class DeployDatacenterPlan extends TopologyPlan {
      * supported by the store version.
      */
     private void checkVersionRequirements(
-        final DatacenterType datacenterType) {
+        final DatacenterType datacenterType,
+        final boolean allowArbiters) {
 
         final Admin admin = planner.getAdmin();
 
-        if (datacenterType.isSecondary()) {
+        if (datacenterType.isSecondary() ||
+            allowArbiters) {
             final KVVersion storeVersion;
             try {
                 storeVersion = admin.getStoreVersion();
             } catch (AdminFaultException e) {
+                if (datacenterType.isSecondary()) {
+                    throw new IllegalCommandException(
+                        "Cannot create zone " + datacenterName +
+                        " as a secondary zone when unable to confirm" +
+                        " that all nodes in the store support secondary" +
+                        " zones, which require version " +
+                        SECONDARY_DC_VERSION.getNumericVersionString() +
+                        " or later.",
+                        e);
+                }
                 throw new IllegalCommandException(
                     "Cannot create zone " + datacenterName +
-                    " as a secondary zone when unable to confirm" +
-                    " that all nodes in the store support secondary" +
-                    " zones, which require version " +
-                    SECONDARY_DC_VERSION.getNumericVersionString() +
+                    " zone allowing Arbiters when unable to confirm" +
+                    " that all nodes in the store support" +
+                    " zones allowing Arbiters, which require version " +
+                    ARBITER_DC_VERSION.getNumericVersionString() +
                     " or later.",
                     e);
             }
-            if (VersionUtil.compareMinorVersion(
-                    storeVersion, SECONDARY_DC_VERSION) < 0) {
-                throw new IllegalCommandException(
-                    "Cannot create zone " + datacenterName +
-                    " as a secondary zone when not all nodes in the" +
-                    " store support secondary zones." +
-                    " The highest version supported by all nodes is " +
-                    storeVersion.getNumericVersionString() +
-                    ", but secondary zones require version "
-                    + SECONDARY_DC_VERSION.getNumericVersionString() +
-                    " or later.");
+
+            if (datacenterType.isSecondary()) {
+                if (VersionUtil.compareMinorVersion(
+                         storeVersion, SECONDARY_DC_VERSION) < 0) {
+                    throw new IllegalCommandException(
+                        "Cannot create zone " + datacenterName +
+                        " as a secondary zone when not all nodes in the" +
+                        " store support secondary zones." +
+                        " The highest version supported by all nodes is " +
+                        storeVersion.getNumericVersionString() +
+                        ", but secondary zones require version "
+                        + SECONDARY_DC_VERSION.getNumericVersionString() +
+                        " or later.");
+                }
+            }
+
+            if (allowArbiters) {
+                if (VersionUtil.compareMinorVersion(
+                        storeVersion, ARBITER_DC_VERSION) < 0) {
+                   throw new IllegalCommandException(
+                       "Cannot create zone " + datacenterName +
+                       " allowing Arbiters when not all nodes in the" +
+                       " store support zones allowing Arbiters." +
+                       " The highest version supported by all nodes is " +
+                       storeVersion.getNumericVersionString() +
+                       ", but zones allowing Arbiters require version "
+                       + ARBITER_DC_VERSION.getNumericVersionString() +
+                       " or later.");
+               }
             }
         }
 
@@ -289,13 +333,20 @@ public class DeployDatacenterPlan extends TopologyPlan {
         return getTopology().get(datacenterId).getDatacenterType();
     }
 
+    private boolean getAllowArbiters() {
+        return getTopology().get(datacenterId).getAllowArbiters();
+    }
+
     @Override
     public String getOperation() {
+        String arbiterOption =
+            getAllowArbiters() ? " -arbiters " : " -no-arbiters ";
         return "plan deploy-zone -name " + datacenterName +
                " -rf " + getRepFactor() +
-               " -type " + getDatacenterType().name();
+               " -type " + getDatacenterType().name() +
+               arbiterOption;
     }
-    
+
     /*
      * TODO: replace field names with constants held in a json/command output
      * utility class.
@@ -308,6 +359,7 @@ public class DeployDatacenterPlan extends TopologyPlan {
         jsonTop.put("zone_id", datacenterId.toString());
         jsonTop.put("type", getDatacenterType().name());
         jsonTop.put("rf", getRepFactor());
+        jsonTop.put("allow_arbiters", getAllowArbiters());
         return jsonTop;
     }
 }

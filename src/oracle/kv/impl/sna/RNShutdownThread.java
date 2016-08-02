@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,6 +48,7 @@ import java.rmi.RemoteException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import oracle.kv.impl.arb.admin.ArbNodeAdminAPI;
 import oracle.kv.impl.rep.admin.RepNodeAdminAPI;
 
 /**
@@ -106,44 +107,10 @@ class RNShutdownThread implements Runnable {
             }
 
             if (mgr.isRunning()) {
-                final ManagedRepNode mrn = (ManagedRepNode) mgr.getService();
-                /**
-                 * Get the RN's RMI handle
-                 *
-                 * NOTE: this timeout is helpful but not critical
-                 * so it need not be tuneable.
-                 */
-                final RepNodeAdminAPI rna = mrn.waitForRepNodeAdmin(sna, 5);
-
-                /**
-                 * Try clean shutdown first. If that fails for any reason kill
-                 * the process to be sure the service is gone. Give the RN some
-                 * time in case it's still running. Stopping it at a random
-                 * time can cause problems.
-                 */
-                if (rna != null) {
-                    try {
-                        rna.shutdown(force);
-                    } catch (RemoteException e) {
-                        final Throwable ce = e.getCause();
-
-                        /*
-                         * Make special provisions for a request timeout, the
-                         * RN could just be in the midst of a long checkpoint:
-                         * Don't kill the process right away, but wait for the
-                         * configured period.
-                         */
-                        if (! (ce instanceof SocketTimeoutException)) {
-                            /* Kill the process in the handler. */
-                            throw e;
-                        }
-
-                        logger.warning(String.format(
-                            "Socket timed out waiting for %s." +
-                            " Message:%s. Wait %,d ms for process exit.",
-                            mgr.getService().getServiceName(),
-                            ce.getMessage(), serviceWaitMs));
-                    }
+                if (mgr.getService() instanceof ManagedRepNode) {
+                    stopRN();
+                } else {
+                    stopAN();
                 }
             }
 
@@ -160,11 +127,62 @@ class RNShutdownThread implements Runnable {
              * is really stopped.
              */
             logger.log(Level.WARNING, mgr.getService().getServiceName() +
-                        ": Exception stopping RepNode", e);
+                        ": Exception stopping Node", e);
             mgr.stop();
         } finally {
             sna.unbindService(sna.makeRepNodeBindingName
                               (mgr.getService().getServiceName()));
+        }
+    }
+
+    private void stopRN() throws RemoteException {
+        final ManagedRepNode mrn = (ManagedRepNode) mgr.getService();
+        /**
+         * Get the RN's RMI handle
+         *
+         * NOTE: this timeout is helpful but not critical
+         * so it need not be tuneable.
+         */
+        final RepNodeAdminAPI rna = mrn.waitForRepNodeAdmin(sna, 5);
+
+        /**
+         * Try clean shutdown first. If that fails for any reason kill
+         * the process to be sure the service is gone. Give the RN some
+         * time in case it's still running. Stopping it at a random
+         * time can cause problems.
+         */
+        if (rna != null) {
+            try {
+                rna.shutdown(force);
+            } catch (RemoteException e) {
+                final Throwable ce = e.getCause();
+
+                /*
+                 * Make special provisions for a request timeout, the
+                 * RN could just be in the midst of a long checkpoint:
+                 * Don't kill the process right away, but wait for the
+                 * configured period.
+                 */
+                if (! (ce instanceof SocketTimeoutException)) {
+                    /* Kill the process in the handler. */
+                    throw e;
+                }
+
+                logger.warning(String.format(
+                        "Socket timed out waiting for %s." +
+                                " Message:%s. Wait %,d ms for process exit.",
+                                mgr.getService().getServiceName(),
+                                ce.getMessage(), serviceWaitMs));
+            }
+        }
+    }
+
+    private void stopAN() throws RemoteException {
+        final ManagedArbNode man = (ManagedArbNode) mgr.getService();
+        final ArbNodeAdminAPI ana = man.waitForArbNodeAdmin(sna, 5);
+
+        if (ana != null) {
+            ana.shutdown(force);
         }
     }
 }

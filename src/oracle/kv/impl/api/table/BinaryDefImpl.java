@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,19 +45,18 @@ package oracle.kv.impl.api.table;
 
 import java.io.IOException;
 
-import oracle.kv.table.BinaryDef;
+import com.sleepycat.persist.model.Persistent;
 
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.TextNode;
 
-import com.sleepycat.persist.model.Persistent;
+import oracle.kv.table.BinaryDef;
 
 /**
  * BinaryDefImpl implements the BinaryDef interface.
  */
 @Persistent(version=1)
-class BinaryDefImpl extends FieldDefImpl
-    implements BinaryDef {
+public class BinaryDefImpl extends FieldDefImpl implements BinaryDef {
 
     private static final long serialVersionUID = 1L;
 
@@ -73,8 +72,27 @@ class BinaryDefImpl extends FieldDefImpl
         super(impl);
     }
 
+    /*
+     * Public api methods from Object and FieldDef
+     */
+
+    @Override
+    public BinaryDefImpl clone() {
+        return new BinaryDefImpl(this);
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        return (other instanceof BinaryDefImpl);
+    }
+
     @Override
     public boolean isBinary() {
+        return true;
+    }
+
+    @Override
+    public boolean isAtomic() {
         return true;
     }
 
@@ -84,18 +102,38 @@ class BinaryDefImpl extends FieldDefImpl
     }
 
     @Override
-    public boolean equals(Object other) {
-        return (other instanceof BinaryDefImpl);
-    }
-
-    @Override
-    public BinaryDefImpl clone() {
-        return new BinaryDefImpl(this);
-    }
-
-    @Override
     public BinaryValueImpl createBinary(byte[] value) {
         return new BinaryValueImpl(value);
+    }
+
+    /*
+     * Public api methods from BinaryDef
+     */
+
+    @Override
+    public BinaryValueImpl fromString(String base64) {
+        TextNode n = new TextNode(base64);
+        try {
+            return createBinary(n.getBinaryValue());
+        } catch (IOException ioe) {
+            throw new IllegalArgumentException
+                ("Cannot create binary from string: " + base64, ioe);
+        }
+    }
+
+    /*
+     * FieldDefImpl internal api methods
+     */
+
+    @Override
+    public boolean isSubtype(FieldDefImpl superType) {
+
+        if (superType.isBinary() ||
+            superType.isAny() ||
+            superType.isAnyAtomic()) {
+            return true;
+        }
+        return false;
     }
 
     @Override
@@ -112,17 +150,6 @@ class BinaryDefImpl extends FieldDefImpl
         } catch (IOException ioe) {
             throw new IllegalArgumentException
                 ("IOException creating binary value: " + ioe, ioe);
-        }
-    }
-
-    @Override
-    public BinaryValueImpl fromString(String base64) {
-        TextNode n = new TextNode(base64);
-        try {
-            return createBinary(n.getBinaryValue());
-        } catch (IOException ioe) {
-            throw new IllegalArgumentException
-                ("Cannot create binary from string: " + base64, ioe);
         }
     }
 }

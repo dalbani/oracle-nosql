@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -69,8 +69,10 @@ import com.sleepycat.je.DatabaseEntry;
 import com.sleepycat.je.DatabaseException;
 import com.sleepycat.je.DbInternal;
 import com.sleepycat.je.Durability;
+import com.sleepycat.je.Get;
 import com.sleepycat.je.LockConflictException;
 import com.sleepycat.je.LockMode;
+import com.sleepycat.je.OperationResult;
 import com.sleepycat.je.Transaction;
 import com.sleepycat.je.TransactionConfig;
 import com.sleepycat.je.rep.NoConsistencyRequiredPolicy;
@@ -332,41 +334,33 @@ class MigrationSource implements Runnable {
                 assert cursor != null;
 
                 try {
+                    final OperationResult result =
+                        cursor.get(key, value,
+                                   Get.NEXT, LockMode.DEFAULT.toReadOptions());
+                    if (result != null) {
+                        if (transferOnly) {
+                            sendCopy(key, value,
+                                     getVLSNFromCursor(cursor, false),
+                                     result.getExpirationTime());
+                        } else {
+                            sendCopy(key, value, 0, result.getExpirationTime());
+                        }
+                    } else {
+                        /*
+                         * Must close cursor here because transfer complete
+                         * will cause the underlying DB to be closed.
+                         */
+                        cursor.close();
+                        cursor = null;
 
-                    switch (cursor.getNext(key, value, LockMode.DEFAULT)) {
-                        case SUCCESS:
-                            if (transferOnly) {
-                                sendCopy(key, value,
-                                        getVLSNFromCursor(cursor, false));
-                            } else {
-                                sendCopy(key, value, 0);
-                            }
-                            break;
-
-                        case NOTFOUND:
-                            /*
-                             * Must close cursor here because transfer complete
-                             * will cause the underlying DB to be closed.
-                             */
-                            cursor.close();
-                            cursor = null;
-
-                            /* ToO #1 - Finished reading on-disk records */
-                            transferComplete();
-                            return;
-
-                        case KEYEMPTY:
-                            /* Key under cursor was deleted, move on */
-                            break;
-
-                        case KEYEXIST:
-                            /* Can't happen but keeps Eclipse happy */
-                            break;
+                        /* ToO #1 - Finished reading on-disk records */
+                        transferComplete();
+                        return;
                     }
                 } catch (LockConflictException lce) {
-                	if (cursor == null) {
-                            return;
-                	}
+                    if (cursor == null) {
+                        return;
+                    }
 
                     /* retry */
                     transactionConflicts++;
@@ -478,11 +472,12 @@ class MigrationSource implements Runnable {
     }
 
     private synchronized void sendCopy(DatabaseEntry key, DatabaseEntry value,
-                                       long vlsn) {
+                                       long vlsn, long expirationTime) {
         try {
             writeOp(OP.COPY);
             writeDbEntry(key);
             writeDbEntry(value);
+            writeExpirationTime(expirationTime);
             writeVLSN(vlsn);
             lastKey = new DatabaseEntry(key.getData());
             recordsSent++;
@@ -494,7 +489,8 @@ class MigrationSource implements Runnable {
     synchronized boolean sendPut(long txnId,
                                  DatabaseEntry key,
                                  DatabaseEntry value,
-                                 long vlsn) {
+                                 long vlsn,
+                                 long expirationTime) {
         if (canceled) {
             return false;
         }
@@ -506,6 +502,7 @@ class MigrationSource implements Runnable {
             writeOp(OP.PUT, txnId);
             writeDbEntry(key);
             writeDbEntry(value);
+            writeExpirationTime(expirationTime);
             writeVLSN(vlsn);
             clientOpsSent++;
             return true;
@@ -651,6 +648,11 @@ class MigrationSource implements Runnable {
         if (transferOnly) {
             stream.writeLong(vlsn);
         }
+    }
+
+    private void writeExpirationTime(long expTime) throws IOException {
+        assert Thread.holdsLock(this);
+        stream.writeLong(expTime);
     }
 
     private long getVLSNFromCursor(Cursor cursor, boolean fetchLN) {

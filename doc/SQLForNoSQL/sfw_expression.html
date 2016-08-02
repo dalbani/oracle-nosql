@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <title>Chapter 2. SQL for Oracle NoSQL Database Queries</title>
+    <link rel="stylesheet" href="gettingStarted.css" type="text/css" />
+    <meta name="generator" content="DocBook XSL Stylesheets V1.73.2" />
+    <link rel="start" href="index.html" title="Getting Started with SQL for Oracle NoSQL Database" />
+    <link rel="up" href="index.html" title="Getting Started with SQL for Oracle NoSQL Database" />
+    <link rel="prev" href="introduction_sql.html" title="Chapter 1. The SQL for Oracle NoSQL Database Data Model" />
+    <link rel="next" href="simple_expressions.html" title="Simple Select-From-Where Queries" />
+  </head>
+  <body>
+    <div xmlns="" class="navheader">
+      <div class="libver">
+        <p>Library Version 12.1.4.0</p>
+      </div>
+      <table width="100%" summary="Navigation header">
+        <tr>
+          <th colspan="3" align="center">Chapter 2. SQL for Oracle NoSQL Database Queries</th>
+        </tr>
+        <tr>
+          <td width="20%" align="left"><a accesskey="p" href="introduction_sql.html">Prev</a> </td>
+          <th width="60%" align="center"> </th>
+          <td width="20%" align="right"> <a accesskey="n" href="simple_expressions.html">Next</a></td>
+        </tr>
+      </table>
+      <hr />
+    </div>
+    <div class="chapter" lang="en" xml:lang="en">
+      <div class="titlepage">
+        <div>
+          <div>
+            <h2 class="title"><a id="sfw_expression"></a>Chapter 2. SQL for Oracle NoSQL Database Queries</h2>
+          </div>
+        </div>
+      </div>
+      <div class="toc">
+        <p>
+          <b>Table of Contents</b>
+        </p>
+        <dl>
+          <dt>
+            <span class="sect1">
+              <a href="sfw_expression.html#expressions">Expressions</a>
+            </span>
+          </dt>
+          <dt>
+            <span class="sect1">
+              <a href="simple_expressions.html">Simple Select-From-Where
+            Queries</a>
+            </span>
+          </dt>
+          <dd>
+            <dl>
+              <dt>
+                <span class="sect2">
+                  <a href="simple_expressions.html#selecting_columns">Selecting columns</a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="simple_expressions.html#renaming_columns">Renaming columns</a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="simple_expressions.html#computing_columns">Computing new columns</a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="simple_expressions.html#identifying_tables">Identifying tables and their columns</a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="simple_expressions.html#filtering_results">Filtering results</a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="simple_expressions.html#ordering_results">Ordering Results</a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="simple_expressions.html#using_variables">Using External Variables</a>
+                </span>
+              </dt>
+            </dl>
+          </dd>
+          <dt>
+            <span class="sect1">
+              <a href="complextypes.html">Working with complex data</a>
+            </span>
+          </dt>
+          <dd>
+            <dl>
+              <dt>
+                <span class="sect2">
+                  <a href="complextypes.html#records">Working With Records</a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="complextypes.html#arrays">Working With Arrays</a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="complextypes.html#maps">Working With Maps</a>
+                </span>
+              </dt>
+            </dl>
+          </dd>
+          <dt>
+            <span class="sect1">
+              <a href="functions.html">Built-in Functions</a>
+            </span>
+          </dt>
+          <dd>
+            <dl>
+              <dt>
+                <span class="sect2">
+                  <a href="functions.html#func_keys">keys</a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="functions.html#func_size">size</a>
+                </span>
+              </dt>
+            </dl>
+          </dd>
+          <dt>
+            <span class="sect1">
+              <a href="indexes.html">Working With Indexes</a>
+            </span>
+          </dt>
+        </dl>
+      </div>
+      <p> 
+        This chapter walks you through query examples run with the
+        interactive SQL shell, which is used to directly execute DDL, DML, user
+        management, security, and informational statements. 
+    </p>
+      <p> 
+        If you are interested in using the JAVA API to execute queries see
+            <em class="citetitle">Getting Started with the Table API</em>. 
+    </p>
+      <p> 
+        Note that this is a preview release of SQL for Oracle NoSQL Database. As a preview release its use 
+        and feedback is encouraged. For more details on what it means
+        for a feature to be a preview release feature, please see the release notes.
+    </p>
+      <div class="sect1" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h2 class="title" style="clear: both"><a id="expressions"></a>Expressions</h2>
+            </div>
+          </div>
+        </div>
+        <p>
+            In general, an expression represents a set of operations to
+            be executed in order to produce a result. Expressions are built by
+            combining other subexpressions using operators (arithmetic, logical,
+            value and sequence comparisons), function calls, or other
+            grammatical constructs. As we will see, the simplest kinds of
+            expressions are constants and references to variables or
+            identifiers. 
+        </p>
+        <p>
+            In SQL for Oracle NoSQL Database, the result of any expression is always a sequence of
+            zero or more items. Notice that a single item is considered
+            equivalent to a sequence containing that single item. 
+        </p>
+        <p> 
+            In the current version, a query is always a single
+            Select-From-Where (SFW) expression. The SFW expression is
+            essentially a simplified version of the SQL Select-From-Where query
+            block. The two most important simplifications are the lack of
+            support for joins and for subqueries. On the other hand, to
+            manipulate complex data (records, arrays, and maps), provides
+            extensions to traditional SQL through novel kinds of expressions,
+            such as path expressions. 
+        </p>
+        <p>
+            In this chapter we present the kinds of expressions that are
+            currently supported. Expressions will be presented using a
+            series of example queries. For each query, we will show the result
+            it generates on a set of sample data. 
+        </p>
+        <p>
+	    For a more detailed description of the language see the
+            <em class="citetitle">SQL for Oracle NoSQL Database Specification</em>. 
+        </p>
+      </div>
+    </div>
+    <div class="navfooter">
+      <hr />
+      <table width="100%" summary="Navigation footer">
+        <tr>
+          <td width="40%" align="left"><a accesskey="p" href="introduction_sql.html">Prev</a> </td>
+          <td width="20%" align="center"> </td>
+          <td width="40%" align="right"> <a accesskey="n" href="simple_expressions.html">Next</a></td>
+        </tr>
+        <tr>
+          <td width="40%" align="left" valign="top">Chapter 1. The SQL for Oracle NoSQL Database Data Model </td>
+          <td width="20%" align="center">
+            <a accesskey="h" href="index.html">Home</a>
+          </td>
+          <td width="40%" align="right" valign="top"> Simple Select-From-Where
+            Queries</td>
+        </tr>
+      </table>
+    </div>
+  </body>
+</html>

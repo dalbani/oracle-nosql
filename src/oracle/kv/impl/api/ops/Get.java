@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,19 +43,11 @@
 
 package oracle.kv.impl.api.ops;
 
+import static oracle.kv.impl.util.SerialVersion.TABLE_API_VERSION;
+
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
-import java.util.Collections;
-import java.util.List;
-
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.security.SystemPrivilege;
-import oracle.kv.impl.security.TablePrivilege;
-import oracle.kv.impl.topo.PartitionId;
-import oracle.kv.impl.util.SerialVersion;
-
-import com.sleepycat.je.Transaction;
 
 /**
  * A get operation gets a value from the KV Store.
@@ -86,6 +78,7 @@ public class Get extends SingleKeyOperation {
     /**
      * Returns the tableId, which is 0 if this is not a table operation.
      */
+    @Override
     long getTableId() {
         return tableId;
     }
@@ -94,11 +87,11 @@ public class Get extends SingleKeyOperation {
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    Get(ObjectInput in, short serialVersion)
+    Get(DataInput in, short serialVersion)
         throws IOException {
 
         super(OpCode.GET, in, serialVersion);
-        if (serialVersion >= SerialVersion.V4) {
+        if (serialVersion >= TABLE_API_VERSION) {
 
             /*
              * Read table id.
@@ -114,11 +107,11 @@ public class Get extends SingleKeyOperation {
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
-        if (serialVersion >= SerialVersion.V4) {
+        if (serialVersion >= TABLE_API_VERSION) {
 
             /*
              * Write the table id.  If this is not a table operation the
@@ -126,23 +119,9 @@ public class Get extends SingleKeyOperation {
              */
             out.writeLong(tableId);
         } else if (tableId != 0) {
-            throwTablesRequired(serialVersion);
+            throwVersionRequired(serialVersion, TABLE_API_VERSION);
         }
     }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          OperationHandler operationHandler) {
-
-        verifyDataAccess(operationHandler, tableId);
-
-        final ResultValueVersion resultValueVersion =
-            operationHandler.get(txn, partitionId, getKeyBytes());
-
-        return new Result.GetResult(getOpCode(), resultValueVersion);
-    }
-
 
     @Override
     public String toString() {
@@ -153,22 +132,5 @@ public class Get extends SingleKeyOperation {
             sb.append(tableId);
         }
         return sb.toString();
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> schemaAccessPrivileges() {
-        return SystemPrivilege.schemaReadPrivList;
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> generalAccessPrivileges() {
-        return SystemPrivilege.readOnlyPrivList;
-    }
-
-    @Override
-    public List<? extends KVStorePrivilege>
-        tableAccessPrivileges(long tableId1) {
-        return Collections.singletonList(
-            new TablePrivilege.ReadTable(tableId1));
     }
 }

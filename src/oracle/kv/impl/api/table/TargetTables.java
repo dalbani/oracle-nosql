@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,9 +43,9 @@
 
 package oracle.kv.impl.api.table;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 import java.util.List;
 
 import oracle.kv.impl.util.FastExternalizable;
@@ -138,7 +138,7 @@ public class TargetTables implements FastExternalizable {
     /**
      * Creates a TargetTables instance on the server side from a messsage
      */
-    public TargetTables(ObjectInput in,
+    public TargetTables(DataInput in,
                         @SuppressWarnings("unused") short serialVersion)
         throws IOException {
 
@@ -160,7 +160,7 @@ public class TargetTables implements FastExternalizable {
      * Serializes a TargetTables instance to be sent to the server
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         out.writeShort(targetAndChildIds.length);

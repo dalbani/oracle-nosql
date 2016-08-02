@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,7 +45,10 @@ package oracle.kv.impl.util;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.Reader;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.JsonParser;
@@ -60,6 +63,19 @@ import org.codehaus.jackson.node.ObjectNode;
 public class JsonUtils {
 
     protected static final ObjectMapper mapper = new ObjectMapper();
+
+    /**
+     * Returns a JSON parser that parses input from a reader.
+     *
+     * @param in the reader
+     * @returns the parser
+     * @throws IOException if there is a problem parsing the input
+     */
+    public static JsonParser createJsonParser(Reader in)
+        throws IOException {
+
+        return enableFeatures(mapper.getJsonFactory().createJsonParser(in));
+    }
 
     /**
      * Returns a JSON parser that parses input from an input stream.
@@ -265,5 +281,36 @@ public class JsonUtils {
             return Collections.emptyList();
         }
         return fieldNode;
+    }
+
+    /**
+     * Compare the contents of two JSON strings without regard
+     * to the order in which fields appear in the string.
+     *
+     * @param a , b Two JSON strings to compare
+     * @return true if the two strings represent equivalent JSON documents
+     */
+    public static boolean jsonStringsEqual(String a, String b) {
+        Map<String, Object> mapa = getMapFromJsonStr(a);
+        Map<String, Object> mapb = getMapFromJsonStr(b);
+        if (mapa == null) {
+            return false;
+        }
+        return mapa.equals(mapb);
+    }
+    
+    /**
+     * Turn a JSON string into a Map.
+     * 
+     * @param s the JSON string
+     * @return A Map representing the JSON document.
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> getMapFromJsonStr(String s) {
+        try {
+            return mapper.readValue(s, HashMap.class);
+        } catch (IOException e) {
+            return null;
+        }
     }
 }

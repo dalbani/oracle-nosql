@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -91,7 +91,7 @@ public abstract class CommandWithSubs extends ShellCommand {
 
         if ((command == null) || (command.isHidden() && !shell.showHidden())) {
             Shell.checkHelp(args, this);
-            throw new ShellArgumentException(
+            throw new CommandNotFoundException(
                 "Could not find " + name + " subcommand: " + commandName +
                 eol + getVerboseHelp());
         }
@@ -116,7 +116,7 @@ public abstract class CommandWithSubs extends ShellCommand {
     protected final String getHelp(String[] args, Shell shell) {
         if (args.length <= 1) {
             String msg = getCommandOverview();
-            msg += eol + getBriefHelp(shell.showHidden(), 
+            msg += eol + getBriefHelp(shell.showHidden(),
                     shell.showDeprecated());
             return msg;
         }
@@ -144,7 +144,7 @@ public abstract class CommandWithSubs extends ShellCommand {
     }
 
     private String getBriefHelp(boolean showHidden, boolean showDeprecated) {
-        
+
         final StringBuilder sb = new StringBuilder();
         sb.append("Usage: ").append(name).append(" ");
         final String ws = Shell.makeWhiteSpace(sb.length());

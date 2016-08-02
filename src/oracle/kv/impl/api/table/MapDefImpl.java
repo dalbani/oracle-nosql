@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,34 +43,33 @@
 
 package oracle.kv.impl.api.table;
 
-import static oracle.kv.impl.api.table.TableJsonUtils.COLLECTION;
-import static oracle.kv.impl.api.table.TableImpl.KEY_TAG;
-import static oracle.kv.table.MapValue.ANONYMOUS;
-
 import java.util.ListIterator;
 
+import com.sleepycat.persist.model.Persistent;
 import oracle.kv.impl.util.JsonUtils;
 import oracle.kv.table.FieldDef;
 import oracle.kv.table.MapDef;
-
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.ObjectNode;
 
-import com.sleepycat.persist.model.Persistent;
+import static oracle.kv.impl.api.table.TableImpl.KEY_TAG;
+import static oracle.kv.impl.api.table.TableJsonUtils.COLLECTION;
+import static oracle.kv.table.MapValue.ANONYMOUS;
 
 /**
  * MapDefImpl implements the MapDef interface.
  */
 @Persistent(version=1)
-class MapDefImpl extends FieldDefImpl
-    implements MapDef {
+public class MapDefImpl extends FieldDefImpl implements MapDef {
 
     private static final long serialVersionUID = 1L;
+
     private final FieldDefImpl element;
+
     private static final StringDefImpl keyType = new StringDefImpl();
 
-    MapDefImpl(FieldDefImpl element,
-               String description) {
+    MapDefImpl(FieldDefImpl element, String description) {
+
         super(FieldDef.Type.MAP, description);
         if (element == null) {
             throw new IllegalArgumentException
@@ -79,9 +78,9 @@ class MapDefImpl extends FieldDefImpl
         this.element = element;
     }
 
-    MapDefImpl(FieldDefImpl element) {
-        this(element, null);
-    }
+   MapDefImpl(FieldDefImpl element) {
+       this(element, null);
+   }
 
     private MapDefImpl(MapDefImpl impl) {
         super(impl);
@@ -96,29 +95,18 @@ class MapDefImpl extends FieldDefImpl
         element = null;
     }
 
+    /*
+     * Public api methods from Object and FieldDef
+     */
+
     @Override
-    public boolean isValidIndexField() {
-        return true;
+    public MapDefImpl clone() {
+        return new MapDefImpl(this);
     }
 
     @Override
-    public FieldDef getElement() {
-        return element;
-    }
-
-    @Override
-    public FieldDef getKeyDefinition() {
-        return keyType;
-    }
-
-    @Override
-    public boolean isMap() {
-        return true;
-    }
-
-    @Override
-    public MapDef asMap() {
-        return this;
+    public int hashCode() {
+        return element.hashCode();
     }
 
     @Override
@@ -130,8 +118,18 @@ class MapDefImpl extends FieldDefImpl
     }
 
     @Override
-    public int hashCode() {
-        return element.hashCode();
+    public boolean isMap() {
+        return true;
+    }
+
+    @Override
+    public boolean isComplex() {
+        return true;
+    }
+
+    @Override
+    public MapDef asMap() {
+        return this;
     }
 
     @Override
@@ -139,57 +137,40 @@ class MapDefImpl extends FieldDefImpl
         return new MapValueImpl(this);
     }
 
-    @Override
-    void toJson(ObjectNode node) {
-        super.toJson(node);
-        ObjectNode collNode = node.putObject(COLLECTION);
-        if (element != null) {
-            element.toJson(collNode);
-        }
-    }
-
-    /**
-     * {
-     *  "type": {
-     *    "type" : "map",
-     *    "values" : "simpleType"  or for a complex type
-     *    "values" : {
-     *        "type" : ...
-     *        ...
-     *     }
-     *  }
-     * }
+    /*
+     * Public api methods from MapDef
      */
-    @Override
-    public JsonNode mapTypeToAvro(ObjectNode node) {
-        if (node == null) {
-            node = JsonUtils.createObjectNode();
-        }
 
-        node.put("type", "map");
-        node.put("values", element.mapTypeToAvroJsonNode());
-        return node;
+    @Override
+    public FieldDef getElement() {
+        return element;
     }
 
     @Override
-    public MapDefImpl clone() {
-        return new MapDefImpl(this);
+    public FieldDef getKeyDefinition() {
+        return keyType;
+    }
+
+    /*
+     * FieldDefImpl internal api methods
+     */
+
+    @Override
+    public boolean isPrecise() {
+        return element.isPrecise();
     }
 
     @Override
-    FieldValueImpl createValue(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return NullValueImpl.getInstance();
+    public boolean isSubtype(FieldDefImpl superType) {
+
+        if (superType.isMap()) {
+            MapDefImpl supMap = (MapDefImpl)superType;
+            return element.isSubtype(supMap.element);
+        } else if (superType.isAny()) {
+            return true;
+        } else {
+            return false;
         }
-        if (!node.isObject()) {
-            throw new IllegalArgumentException
-                ("Default value for type MAP is not a map");
-        }
-        if (node.size() != 0) {
-            throw new IllegalArgumentException
-                ("Default value for map must be null or an empty map");
-        }
-        return createMap();
     }
 
     /**
@@ -271,6 +252,58 @@ class MapDefImpl extends FieldDefImpl
     FieldDefImpl findField(String fieldName) {
         return element;
     }
+
+    @Override
+    void toJson(ObjectNode node) {
+        super.toJson(node);
+        ObjectNode collNode = node.putObject(COLLECTION);
+        if (element != null) {
+            element.toJson(collNode);
+        }
+    }
+
+    /**
+     * {
+     *  "type": {
+     *    "type" : "map",
+     *    "values" : "simpleType"  or for a complex type
+     *    "values" : {
+     *        "type" : ...
+     *        ...
+     *     }
+     *  }
+     * }
+     */
+    @Override
+    public JsonNode mapTypeToAvro(ObjectNode node) {
+        if (node == null) {
+            node = JsonUtils.createObjectNode();
+        }
+
+        node.put("type", "map");
+        node.put("values", element.mapTypeToAvroJsonNode());
+        return node;
+    }
+
+    @Override
+    FieldValueImpl createValue(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return NullValueImpl.getInstance();
+        }
+        if (!node.isObject()) {
+            throw new IllegalArgumentException
+                ("Default value for type MAP is not a map");
+        }
+        if (node.size() != 0) {
+            throw new IllegalArgumentException
+                ("Default value for map must be null or an empty map");
+        }
+        return createMap();
+    }
+
+    /*
+     * local methods
+     */
 
     static boolean isMapKeyTag(String target) {
         return KEY_TAG.equalsIgnoreCase(target);

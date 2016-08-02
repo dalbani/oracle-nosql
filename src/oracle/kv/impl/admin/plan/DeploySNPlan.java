@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -47,10 +47,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.codehaus.jackson.node.ObjectNode;
 
+import oracle.kv.impl.admin.Admin;
 import oracle.kv.impl.admin.CommandResult;
 import oracle.kv.impl.admin.IllegalCommandException;
+import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.admin.plan.task.DeploySN;
+import oracle.kv.impl.admin.plan.task.Utils;
 import oracle.kv.impl.param.ParameterMap;
 import oracle.kv.impl.param.ParameterState;
 import oracle.kv.impl.topo.Datacenter;
@@ -102,6 +105,7 @@ public class DeploySNPlan extends TopologyPlan {
          * being deployed.
          */
         newSNParams = new StorageNodeParams(inputSNP.getFilteredMap());
+        setSearchParamsMaybe(newSNParams, getAdmin());
 
         StorageNode alreadyExists = alreadyInTopology(sn);
         StorageNode useStorageNode = null;
@@ -158,6 +162,29 @@ public class DeploySNPlan extends TopologyPlan {
      */
     @SuppressWarnings("unused")
     private DeploySNPlan() {
+    }
+
+    /**
+     * Check for the presence of search cluster registration parameters
+     * in any existing SN.  If they are present, copy them into the
+     * new SN's parameters.
+     *
+     * This method is not called if it's the first SN in the topology.
+     */
+    private void setSearchParamsMaybe
+        (StorageNodeParams snp, Admin admin) {
+
+        final Parameters p = admin.getCurrentParameters();
+        ParameterMap pm = Utils.verifyAndGetSearchParams(p);
+
+        /* If the search parameters are not set, don't bother merging them. */
+        if ("".equals
+            (pm.getOrDefault
+             (ParameterState.SN_SEARCH_CLUSTER_MEMBERS).asString())) {
+            return;
+        }
+
+        snp.getMap().merge(pm, false);
     }
 
     /**
@@ -252,9 +279,9 @@ public class DeploySNPlan extends TopologyPlan {
          * execution, and after the SN is created and registered.
          */
     }
-    
+
     @Override
-    void stripForDisplay() {
+    public void stripForDisplay() {
         super.stripForDisplay();
         inputSNP = null;
         newSNParams = null;
@@ -265,8 +292,8 @@ public class DeploySNPlan extends TopologyPlan {
         return true;
     }
 
-    /* 
-     * TODO: These constants can probably be replaced with constants from 
+    /*
+     * TODO: These constants can probably be replaced with constants from
      * CommandParser.
      */
     @Override
@@ -275,7 +302,7 @@ public class DeploySNPlan extends TopologyPlan {
                " -host " + inputSNP.getHostname() +
                " -port " + inputSNP.getRegistryPort();
     }
-    
+
     /*
      * TODO: replace field names with constants held in a json/command output
      * utility class.

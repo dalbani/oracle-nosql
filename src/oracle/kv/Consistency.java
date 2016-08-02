@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,10 +45,10 @@ package oracle.kv;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
 import java.io.ObjectInputStream;
-import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.util.EnumSet;
@@ -115,8 +115,7 @@ public abstract class Consistency implements FastExternalizable, Serializable {
     private enum SerialType {
         NONE_REQUIRED_TYPE() {
             @Override
-            Consistency readConsistency(ObjectInput in,
-                                        short serialVersion)
+            Consistency readConsistency(DataInput in, short serialVersion)
                 throws IOException {
 
                 return Consistency.NONE_REQUIRED;
@@ -125,7 +124,7 @@ public abstract class Consistency implements FastExternalizable, Serializable {
 
         ABSOLUTE_TYPE() {
             @Override
-            Consistency readConsistency(ObjectInput in, short serialVersion)
+            Consistency readConsistency(DataInput in, short serialVersion)
                 throws IOException {
 
                 return Consistency.ABSOLUTE;
@@ -135,7 +134,7 @@ public abstract class Consistency implements FastExternalizable, Serializable {
         VERSION_TYPE() {
 
             @Override
-            Consistency readConsistency(ObjectInput in, short serialVersion)
+            Consistency readConsistency(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Version(in, serialVersion);
@@ -145,7 +144,7 @@ public abstract class Consistency implements FastExternalizable, Serializable {
         TIME_TYPE() {
 
             @Override
-            Consistency readConsistency(ObjectInput in, short serialVersion)
+            Consistency readConsistency(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Time(in, serialVersion);
@@ -154,16 +153,14 @@ public abstract class Consistency implements FastExternalizable, Serializable {
 
         NONE_REQUIRED_NO_MASTER_TYPE() {
             @Override
-            Consistency readConsistency(ObjectInput in,
-                                        short serialVersion)
+            Consistency readConsistency(DataInput in, short serialVersion)
                 throws IOException {
 
                 return Consistency.NONE_REQUIRED_NO_MASTER;
             }
         };
 
-        abstract Consistency readConsistency(ObjectInput in,
-                                             short serialVersion)
+        abstract Consistency readConsistency(DataInput in, short serialVersion)
             throws IOException;
     }
 
@@ -193,7 +190,7 @@ public abstract class Consistency implements FastExternalizable, Serializable {
      *
      * FastExternalizable factory for all Consistency subclasses.
      */
-    public static Consistency readFastExternal(ObjectInput in,
+    public static Consistency readFastExternal(DataInput in,
                                                short serialVersion)
         throws IOException {
 
@@ -260,7 +257,7 @@ public abstract class Consistency implements FastExternalizable, Serializable {
          * FastExternalizable writer.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out,
+        public void writeFastExternal(DataOutput out,
                                       short serialVersion)
             throws IOException {
 
@@ -309,7 +306,7 @@ public abstract class Consistency implements FastExternalizable, Serializable {
          * FastExternalizable writer.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out,
+        public void writeFastExternal(DataOutput out,
                                       short serialVersion)
             throws IOException {
 
@@ -358,7 +355,7 @@ public abstract class Consistency implements FastExternalizable, Serializable {
          * FastExternalizable writer.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out,
+        public void writeFastExternal(DataOutput out,
                                       short serialVersion)
             throws IOException {
 
@@ -510,10 +507,10 @@ public abstract class Consistency implements FastExternalizable, Serializable {
          *
          * The SerialType was read by readFastExternal.
          */
-        Version(ObjectInput in, short serialVersion)
+        Version(DataInput in, short serialVersion)
             throws IOException {
 
-            version = new oracle.kv.Version(in, serialVersion);
+            version = oracle.kv.Version.createVersion(in, serialVersion);
             timeout = in.readInt();
         }
 
@@ -524,7 +521,7 @@ public abstract class Consistency implements FastExternalizable, Serializable {
          * FastExternalizable writer.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             out.writeByte(SerialType.VERSION_TYPE.ordinal());
@@ -690,7 +687,7 @@ public abstract class Consistency implements FastExternalizable, Serializable {
          *
          * The SerialType was read by readFastExternal.
          */
-        Time(ObjectInput in, @SuppressWarnings("unused") short serialVersion)
+        Time(DataInput in, @SuppressWarnings("unused") short serialVersion)
             throws IOException {
 
             permissibleLag = in.readInt();
@@ -704,7 +701,7 @@ public abstract class Consistency implements FastExternalizable, Serializable {
          * FastExternalizable writer.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out,
+        public void writeFastExternal(DataOutput out,
                                       short serialVersion)
             throws IOException {
 

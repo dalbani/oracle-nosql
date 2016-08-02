@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,19 +43,18 @@
 
 package oracle.kv.impl.api.table;
 
-import static oracle.kv.impl.api.table.TableJsonUtils.BOOLEAN;
-import static oracle.kv.impl.api.table.TableJsonUtils.BYTES;
-import static oracle.kv.impl.api.table.TableJsonUtils.DESC;
-import static oracle.kv.impl.api.table.TableJsonUtils.DOUBLE;
-import static oracle.kv.impl.api.table.TableJsonUtils.FLOAT;
-import static oracle.kv.impl.api.table.TableJsonUtils.INT;
-import static oracle.kv.impl.api.table.TableJsonUtils.LONG;
-import static oracle.kv.impl.api.table.TableJsonUtils.STRING;
-import static oracle.kv.impl.api.table.TableJsonUtils.TYPE;
-
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.Serializable;
 import java.util.ListIterator;
 
+import com.sleepycat.persist.model.Persistent;
+import oracle.kv.impl.admin.IllegalCommandException;
+import oracle.kv.impl.util.JsonUtils;
+import oracle.kv.table.AnyAtomicDef;
+import oracle.kv.table.AnyDef;
+import oracle.kv.table.AnyRecordDef;
 import oracle.kv.table.ArrayDef;
 import oracle.kv.table.ArrayValue;
 import oracle.kv.table.BinaryDef;
@@ -82,27 +81,48 @@ import oracle.kv.table.RecordDef;
 import oracle.kv.table.RecordValue;
 import oracle.kv.table.StringDef;
 import oracle.kv.table.StringValue;
-
 import org.codehaus.jackson.JsonNode;
+import org.codehaus.jackson.map.ObjectWriter;
 import org.codehaus.jackson.node.ObjectNode;
 import org.codehaus.jackson.node.TextNode;
 
-import com.sleepycat.persist.model.Persistent;
+import static oracle.kv.impl.api.table.TableJsonUtils.BOOLEAN;
+import static oracle.kv.impl.api.table.TableJsonUtils.BYTES;
+import static oracle.kv.impl.api.table.TableJsonUtils.DESC;
+import static oracle.kv.impl.api.table.TableJsonUtils.DOUBLE;
+import static oracle.kv.impl.api.table.TableJsonUtils.FLOAT;
+import static oracle.kv.impl.api.table.TableJsonUtils.INT;
+import static oracle.kv.impl.api.table.TableJsonUtils.LONG;
+import static oracle.kv.impl.api.table.TableJsonUtils.STRING;
+import static oracle.kv.impl.api.table.TableJsonUtils.TYPE;
 
 /**
  * Implements FieldDef
  */
 @Persistent(version=1)
-abstract class FieldDefImpl
-    implements FieldDef, Serializable, Cloneable {
+public abstract class FieldDefImpl implements FieldDef, Serializable, Cloneable {
 
     private static final long serialVersionUID = 1L;
+
+    public static final IntegerDefImpl integerDef =  new IntegerDefImpl();
+    public static final LongDefImpl longDef =  new LongDefImpl();
+    public static final FloatDefImpl floatDef = new FloatDefImpl();
+    public static final DoubleDefImpl doubleDef = new DoubleDefImpl();
+    public static final StringDefImpl stringDef = new StringDefImpl();
+    public static final BooleanDefImpl booleanDef = new BooleanDefImpl();
+    public static final BinaryDefImpl binaryDef = new BinaryDefImpl();
+
+    public static final AnyDefImpl anyDef = new AnyDefImpl();
+    public static final AnyRecordDefImpl anyRecordDef = new AnyRecordDefImpl();
+    public static final AnyAtomicDefImpl anyAtomicDef = new AnyAtomicDefImpl();
+    public static final EmptyDefImpl emptyDef = new EmptyDefImpl();
 
     /*
      * Immutable properties.
      */
     final private Type type;
-    final private String description;
+
+    private String description;
 
     /**
      * Convenience constructor.
@@ -111,8 +131,7 @@ abstract class FieldDefImpl
         this(type, null);
     }
 
-    FieldDefImpl(Type type,
-                 String description) {
+    FieldDefImpl(Type type, String description) {
         this.type = type;
         this.description = description;
     }
@@ -125,6 +144,31 @@ abstract class FieldDefImpl
     FieldDefImpl() {
         type = null;
         description = null;
+    }
+
+    @Override
+    public String toString() {
+        return toJsonString();
+    }
+
+    @Override
+    public FieldDefImpl clone() {
+        try {
+            return (FieldDefImpl) super.clone();
+        } catch (CloneNotSupportedException ignore) {
+        }
+        return null;
+    }
+
+    @Override
+    public int hashCode() {
+        return type.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        throw new IllegalStateException(
+            "Classes that implement FieldDefImpl must override equals");
     }
 
     @Override
@@ -155,6 +199,29 @@ abstract class FieldDefImpl
     @Override
     public boolean isValidIndexField() {
         return false;
+    }
+
+    public boolean isEmpty() {
+        return false;
+    }
+
+    @Override
+    public boolean isAny() {
+        return false;
+    }
+
+    @Override
+    public boolean isAnyRecord() {
+        return false;
+    }
+
+    @Override
+    public boolean isAnyAtomic() {
+        return false;
+    }
+
+    public boolean isWildcard() {
+        return (isAny() || isAnyRecord() || isAnyAtomic());
     }
 
     @Override
@@ -218,180 +285,320 @@ abstract class FieldDefImpl
     }
 
     @Override
+    public boolean isAtomic() {
+        return false;
+    }
+
+    @Override
+    public boolean isNumeric() {
+        return false;
+    }
+
+    @Override
+    public boolean isComplex() {
+        return false;
+    }
+
+    @Override
+    public AnyDef asAny() {
+        throw new ClassCastException
+            ("Type is not Any: " + getClass());
+    }
+
+    @Override
+    public AnyRecordDef asAnyRecord() {
+        throw new ClassCastException
+            ("Type is not AnyRecord: " + getClass());
+    }
+
+    @Override
+    public AnyAtomicDef asAnyAtomic() {
+        throw new ClassCastException
+            ("Type is not AnyAtomic: " + getClass());
+    }
+
+    @Override
     public BinaryDef asBinary() {
         throw new ClassCastException
-            ("Field is not a Binary: " + getClass());
+            ("Type is not a Binary: " + getClass());
     }
 
     @Override
     public FixedBinaryDef asFixedBinary() {
         throw new ClassCastException
-            ("Field is not a FixedBinary: " + getClass());
+            ("Type is not a FixedBinary: " + getClass());
     }
 
     @Override
     public BooleanDef asBoolean() {
         throw new ClassCastException
-            ("Field is not a Boolean: " + getClass());
+            ("Type is not a Boolean: " + getClass());
     }
 
     @Override
     public DoubleDef asDouble() {
         throw new ClassCastException
-            ("Field is not a Double: " + getClass());
+            ("Type is not a Double: " + getClass());
     }
 
     @Override
     public FloatDef asFloat() {
         throw new ClassCastException
-            ("Field is not a Float: " + getClass());
+            ("Type is not a Float: " + getClass());
     }
 
     @Override
     public IntegerDef asInteger() {
         throw new ClassCastException
-            ("Field is not an Integer: " + getClass());
+            ("Type is not an Integer: " + getClass());
     }
 
     @Override
     public LongDef asLong() {
         throw new ClassCastException
-            ("Field is not a Long: " + getClass());
+            ("Type is not a Long: " + getClass());
     }
 
     @Override
     public StringDef asString() {
         throw new ClassCastException
-            ("Field is not a String: " + getClass());
+            ("Type is not a String: " + getClass());
     }
 
     @Override
     public EnumDef asEnum() {
         throw new ClassCastException
-            ("Field is not an Enum: " + getClass());
+            ("Type is not an Enum: " + getClass());
     }
 
     @Override
     public ArrayDef asArray() {
         throw new ClassCastException
-            ("Field is not an Array: " + getClass());
+            ("Type is not an Array: " + getClass());
     }
 
     @Override
     public MapDef asMap() {
         throw new ClassCastException
-            ("Field is not a Map: " + getClass());
+            ("Type is not a Map: " + getClass());
     }
 
     @Override
     public RecordDef asRecord() {
         throw new ClassCastException
-            ("Field is not a Record: " + getClass());
-    }
-
-    @Override
-    public FieldDefImpl clone() {
-        try {
-            return (FieldDefImpl) super.clone();
-        } catch (CloneNotSupportedException ignore) {
-        }
-        return null;
+            ("Type is not a Record: " + getClass());
     }
 
     @Override
     public ArrayValue createArray() {
         throw new ClassCastException
-            ("Field is not an Array: " + getClass());
+            ("Type is not an Array: " + getClass());
     }
 
     @Override
     public BinaryValue createBinary(byte[] value) {
         throw new ClassCastException
-            ("Field is not a Binary: " + getClass());
+            ("Type is not a Binary: " + getClass());
     }
 
     @Override
     public FixedBinaryValue createFixedBinary(byte[] value) {
         throw new ClassCastException
-            ("Field is not a FixedBinary: " + getClass());
+            ("Type is not a FixedBinary: " + getClass());
     }
 
     @Override
     public BooleanValue createBoolean(boolean value) {
         throw new ClassCastException
-            ("Field is not a Boolean: " + getClass());
+            ("Type is not a Boolean: " + getClass());
     }
 
     @Override
     public DoubleValue createDouble(double value) {
         throw new ClassCastException
-            ("Field is not a Double: " + getClass());
+            ("Type is not a Double: " + getClass());
     }
 
     @Override
     public FloatValue createFloat(float value) {
         throw new ClassCastException
-            ("Field is not a Float: " + getClass());
+            ("Type is not a Float: " + getClass());
     }
 
     @Override
     public EnumValue createEnum(String value) {
         throw new ClassCastException
-            ("Field is not an Enum: " + getClass());
+            ("Type is not an Enum: " + getClass());
     }
 
     @Override
     public IntegerValue createInteger(int value) {
         throw new ClassCastException
-            ("Field is not an Integer: " + getClass());
+            ("Type is not an Integer: " + getClass());
     }
 
     @Override
     public LongValue createLong(long value) {
         throw new ClassCastException
-            ("Field is not a Long: " + getClass());
+            ("Type is not a Long: " + getClass());
     }
 
     @Override
     public MapValue createMap() {
         throw new ClassCastException
-            ("Field is not a Map: " + getClass());
+            ("Type is not a Map: " + getClass());
     }
 
     @Override
     public RecordValue createRecord() {
         throw new ClassCastException
-            ("Field is not a Record: " + getClass());
+            ("Type is not a Record: " + getClass());
     }
 
     @Override
     public StringValue createString(String value) {
         throw new ClassCastException
-            ("Field is not a String: " + getClass());
+            ("Type is not a String: " + getClass());
+    }
+
+    /*
+     * Common utility to compare objects for equals() overrides.  It handles
+     * the fact that one or both objects may be null.
+     */
+    boolean compare(Object o, Object other) {
+        if (o != null) {
+            return o.equals(other);
+        }
+        return (other == null);
+    }
+
+    public void setDescription(String descr) {
+        description = descr;
     }
 
     /**
-     * Creates a value instance for the type based on JsonNode input.
-     * This is used when constructing a table definition from
-     * JSON input or from an Avro schema.
+     * An internal interface for those fields which have a special encoding
+     * length.  By default an invalid value is returned.  This is mostly useful
+     * for testing.  It is only used by Integer and Long.
+     */
+    int getEncodingLength() {
+        return -1;
+    }
+
+    /*
+     * A "precise" type is a type that is fully specified, ie, it is not one of
+     * the "any" types and, for complext types, it does not contain any of the
+     * "any" types.
+     */
+    public boolean isPrecise() {
+        return true;
+    }
+
+    public boolean hasMin() {
+        return false;
+    }
+
+    public boolean hasMax() {
+        return false;
+    }
+
+    /**
+     * Return whether this is a subtype of a given type.
      */
     @SuppressWarnings("unused")
-    FieldValueImpl createValue(JsonNode node) {
+    public boolean isSubtype(FieldDefImpl superType) {
+        throw new IllegalStateException(
+            "Classes that implement FieldDefImpl must override isSubtype");
+    }
+
+    /**
+     * Get the union of this type and the given other type.
+     */
+    public FieldDefImpl getUnionType(FieldDefImpl other) {
+
+        if (isSubtype(other)) {
+            return other;
+        }
+
+        if (other.isSubtype(this)) {
+            return this;
+        }
+
+        Type t1 = getType();
+        Type t2 = other.getType();
+
+        if (t1 == t2) {
+
+            if (t1 == Type.RECORD || t2 == Type.ANY_RECORD) {
+                return anyRecordDef;
+            }
+
+            if (t1 == Type.ARRAY) {
+                ArrayDefImpl def1 = (ArrayDefImpl)this;
+                ArrayDefImpl def2 = (ArrayDefImpl)other;
+                FieldDefImpl edef1 = (FieldDefImpl)def1.getElement();
+                FieldDefImpl edef2 = (FieldDefImpl)def2.getElement();
+
+                FieldDefImpl eunion = edef1.getUnionType(edef2);
+
+                return new ArrayDefImpl(eunion);
+            }
+
+            if (t1 == Type.MAP) {
+                MapDefImpl def1 = (MapDefImpl)this;
+                MapDefImpl def2 = (MapDefImpl)other;
+                FieldDefImpl edef1 = (FieldDefImpl)def1.getElement();
+                FieldDefImpl edef2 = (FieldDefImpl)def2.getElement();
+
+                FieldDefImpl eunion = edef1.getUnionType(edef2);
+
+                return new MapDefImpl(eunion);
+            }
+        }
+
+        if (isAtomic() && other.isAtomic()) {
+            return anyAtomicDef;
+        }
+
+        return anyDef;
+    }
+
+    /**
+     * Returns the FieldDefImpl associated with the names in the iterator.
+     *
+     * This is used to parse dot notation for navigating fields within complex
+     * field types such as Record.  Simple types don't support navigation so the
+     * default implementation returns null.  This is used primarily when
+     * locating field definitions associated with index fields.
+     */
+    @SuppressWarnings("unused")
+    FieldDefImpl findField(ListIterator<String> fieldPath) {
         return null;
     }
 
     /**
-     * Implementing classes must override equals
+     * Returns the FieldDef associated with the single field name.  By default
+     * this is null, for simple types.  Complex types override this to
+     * potentially return non-null FieldDef instances.
      */
-    @Override
-    public boolean equals(Object other) {
-        throw new IllegalStateException
-            ("Classes that implement FieldDefImpl must override equals");
+    @SuppressWarnings("unused")
+    FieldDefImpl findField(String fieldName) {
+        return null;
     }
 
-    @Override
-    public int hashCode() {
-        return type.hashCode();
+    public String toJsonString() {
+        ObjectWriter writer = JsonUtils.createWriter(true);
+        ObjectNode o = JsonUtils.createObjectNode();
+
+        toJson(o);
+
+        try {
+            return writer.writeValueAsString(o);
+        } catch (IOException ioe) {
+            throw new IllegalArgumentException(
+                "Failed to serialize type description: " +
+                ioe.getMessage());
+        }
     }
 
     /**
@@ -415,27 +622,18 @@ abstract class FieldDefImpl
     }
 
     /**
-     * An internal interface for those fields which have a special encoding
-     * length.  By default an invalid value is returned.  This is mostly useful
-     * for testing.  It is only used by Integer and Long.
-     */
-    int getEncodingLength() {
-        return -1;
-    }
-
-    /**
      * Record type must override this in order to return their full definition.
      * This method is used to help generate an Avro schema for a table.
      */
     @SuppressWarnings("unused")
     JsonNode mapTypeToAvro(ObjectNode node) {
-        throw new IllegalArgumentException("Type must override mapTypeToAvro: " +
-                                           getType());
+        throw new IllegalArgumentException(
+            "Type must override mapTypeToAvro: " + getType());
     }
 
     /**
-     * This method returns the JsonNode representing the Avro schema type
-     * for the field.  For simple types it's just a string (TextNode) with
+     * This method returns the JsonNode representing the Avro schema for this
+     * type. For simple types it's just a string (TextNode) with
      * the required syntax for Avro.  Complex types and Enumeration override
      * the mapTypeToAvro function to perform the appropriate mapping.
      */
@@ -473,6 +671,12 @@ abstract class FieldDefImpl
              * If null, they will allocate the new node.
              */
             return mapTypeToAvro(null);
+
+        case ANY:
+        case ANY_ATOMIC:
+        case ANY_RECORD:
+            throw new IllegalStateException(
+                "Wildcard types cannot be mapped to AVRO types: " + type);
         default:
             throw new IllegalStateException
                 ("Unknown type in mapTypeToAvroJsonNode: " + type);
@@ -480,15 +684,120 @@ abstract class FieldDefImpl
         return new TextNode(textValue);
     }
 
-    /*
-     * Common utility to compare objects for equals() overrides.  It handles
-     * the fact that one or both objects may be null.
+    /**
+     * Creates a value instance for the type based on JsonNode input.
+     * This is used when constructing a table definition from
+     * JSON input or from an Avro schema.
      */
-    boolean compare(Object o, Object other) {
-        if (o != null) {
-            return o.equals(other);
+    @SuppressWarnings("unused")
+    FieldValueImpl createValue(JsonNode node) {
+        return null;
+    }
+
+    /*
+     * The following 4 methods are used to construct DM values out of strings
+     * that are the serialized version of primary key values (see
+     * createAtomicFromKey() below).
+     */
+    @SuppressWarnings("unused")
+    IntegerValueImpl createInteger(String value) {
+        throw new ClassCastException("Type is not an Integer: " + getClass());
+    }
+
+    @SuppressWarnings("unused")
+    LongValueImpl createLong(String value) {
+        throw new ClassCastException("Type is not a Long: " + getClass());
+    }
+
+    @SuppressWarnings("unused")
+    DoubleValueImpl createDouble(String value) {
+        throw new ClassCastException("Type is not a Double: " + getClass());
+    }
+
+    @SuppressWarnings("unused")
+    FloatValueImpl createFloat(String value) {
+        throw new ClassCastException("Type is not a Float: " + getClass());
+    }
+
+    /**
+     * Create FieldValue instances from String formats for keys.
+     */
+    static FieldValueImpl createValueFromKeyString(
+        String value,
+        FieldDefImpl type) {
+
+        switch (type.getType()) {
+        case INTEGER:
+            return type.createInteger(value);
+        case LONG:
+            return type.createLong(value);
+        case STRING:
+            return (FieldValueImpl)type.createString(value);
+        case DOUBLE:
+            return type.createDouble(value);
+        case FLOAT:
+            return type.createFloat(value);
+        case ENUM:
+            return EnumValueImpl.createFromKey((EnumDefImpl)type, value);
+        default:
+            throw new IllegalCommandException("Type is not allowed in a key: " +
+                                              type.getType());
         }
-        return (other == null);
+    }
+
+    /**
+     * Create FieldValue instances from Strings that are stored "naturally"
+     * for the data type. This is opposed to the String encoding used for
+     * key components.
+     */
+    public static FieldValue createValueFromString(String value,
+                                                   final FieldDef def) {
+
+        final InputStream jsonInput;
+
+        switch (def.getType()) {
+        case INTEGER:
+            return def.createInteger(Integer.parseInt(value));
+        case LONG:
+            return def.createLong(Long.parseLong(value));
+        case STRING:
+            return def.createString(value);
+        case DOUBLE:
+            return def.createDouble(Double.parseDouble(value));
+        case FLOAT:
+            return def.createFloat(Float.parseFloat(value));
+        case BOOLEAN:
+            /*
+             * Boolean.parseBoolean simply does a case-insensitive comparison
+             * to "true" and assigns that value. This means any other string
+             * results in false.
+             */
+            return def.createBoolean(Boolean.parseBoolean(value));
+        case ENUM:
+            return def.createEnum(value);
+        case BINARY:
+            return ((BinaryDefImpl)def).fromString(value);
+        case FIXED_BINARY:
+            return ((FixedBinaryDefImpl)def).fromString(value);
+        case RECORD:
+            final RecordValueImpl recordValue = (RecordValueImpl)def.createRecord();
+            jsonInput =  new ByteArrayInputStream(value.getBytes());
+            ComplexValueImpl.createFromJson(recordValue, jsonInput, false);
+            return recordValue;
+        case ARRAY:
+            final ArrayValueImpl arrayValue = (ArrayValueImpl)def.createArray();
+            jsonInput =  new ByteArrayInputStream(value.getBytes());
+            ComplexValueImpl.createFromJson(arrayValue, jsonInput, false);
+            return arrayValue;
+        case MAP:
+            final MapValueImpl mapValue = (MapValueImpl)def.createMap();
+            jsonInput =  new ByteArrayInputStream(value.getBytes());
+            ComplexValueImpl.createFromJson(mapValue, jsonInput, false);
+            return mapValue;
+        default:
+            throw new IllegalArgumentException(
+                "Type not yet implemented: " + def.getType());
+        }
     }
 
     /**
@@ -508,13 +817,14 @@ abstract class FieldDefImpl
      * this method.   Record is not because a record itself cannot
      * be the target of an index.
      */
-    FieldValue createValue(FieldDef.Type typ, Object value) {
-        assert typ == getType();
+    FieldValue createValue(Object value) {
+
         if (value instanceof FieldValueImpl) {
-            assert typ == ((FieldValue) value).getType();
+            assert(getType() == ((FieldValue) value).getType());
             return (FieldValue) value;
         }
-        switch (typ) {
+
+        switch (getType()) {
         case INTEGER:
             return createInteger((Integer) value);
         case STRING:
@@ -535,32 +845,13 @@ abstract class FieldDefImpl
         case BOOLEAN:
         case FIXED_BINARY:
         case RECORD:
+        case ANY:
+        case ANY_ATOMIC:
+        case ANY_RECORD:
+        case EMPTY:
             throw new IllegalStateException
-                ("Type not supported by createValue: " + typ);
+                ("Type not supported by createValue: " + getType());
         }
-        return null;
-    }
-
-    /**
-     * Returns the FieldDefImpl associated with the names in the iterator.
-     *
-     * This is used to parse dot notation for navigating fields within complex
-     * field types such as Record.  Simple types don't support navigation so the
-     * default implementation returns null.  This is used primarily when
-     * locating field definitions associated with index fields.
-     */
-    @SuppressWarnings("unused")
-    FieldDefImpl findField(ListIterator<String> fieldPath) {
-        return null;
-    }
-
-    /**
-     * Returns the FieldDef associated with the single field name.  By default
-     * this is null, for simple types.  Complex types override this to
-     * potentially return non-null FieldDef instances.
-     */
-    @SuppressWarnings("unused")
-    FieldDefImpl findField(String fieldName) {
         return null;
     }
 }

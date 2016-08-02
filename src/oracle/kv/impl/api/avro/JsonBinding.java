@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -51,14 +51,6 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 
-import oracle.kv.Value;
-import oracle.kv.avro.JsonAvroBinding;
-import oracle.kv.avro.JsonRecord;
-import oracle.kv.avro.RawAvroBinding;
-import oracle.kv.avro.RawRecord;
-import oracle.kv.avro.SchemaNotAllowedException;
-import oracle.kv.avro.UndefinedSchemaException;
-
 import org.apache.avro.AvroTypeException;
 import org.apache.avro.Schema;
 import org.apache.avro.UnresolvedUnionException;
@@ -74,6 +66,14 @@ import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.ArrayNode;
 import org.codehaus.jackson.node.JsonNodeFactory;
 import org.codehaus.jackson.node.ObjectNode;
+
+import oracle.kv.Value;
+import oracle.kv.avro.JsonAvroBinding;
+import oracle.kv.avro.JsonRecord;
+import oracle.kv.avro.RawAvroBinding;
+import oracle.kv.avro.RawRecord;
+import oracle.kv.avro.SchemaNotAllowedException;
+import oracle.kv.avro.UndefinedSchemaException;
 
 /**
  * Implements our JSON binding API by subclassing the built-in Avro generic
@@ -186,6 +186,7 @@ import org.codehaus.jackson.node.ObjectNode;
  *   </li>
  * </ul>
  */
+@SuppressWarnings("deprecation")
 class JsonBinding implements JsonAvroBinding {
 
     /**
@@ -239,6 +240,39 @@ class JsonBinding implements JsonAvroBinding {
 
         return new JsonRecord(node, readerSchema);
     }
+
+    /**
+     * Straightforward deserialization to JsonRecord using RawBinding,
+     * BinaryDecoder and JsonDatumReader used by import utility. The schema is
+     * needed for deserialization is provided by the export package.
+     */
+     @Override
+     public JsonRecord toObjectForImport(Value value, Schema schema)
+         throws SchemaNotAllowedException, IllegalArgumentException {
+
+         RawBinding rBinding = (RawBinding)rawBinding;
+
+         final RawRecord raw = rBinding.toObjectForImport(value, schema);
+         final Schema writerSchema = raw.getSchema();
+         /* May throw SchemaNotAllowedException. */
+         final Schema readerSchema =
+             AvroCatalogImpl.checkToObjectSchema(writerSchema, allowedSchemas);
+
+         final JsonDatumReader reader =
+             new JsonDatumReader(writerSchema, readerSchema);
+         final Decoder decoder =
+             DecoderFactory.get().binaryDecoder(raw.getRawData(), null);
+
+         final JsonNode node;
+         try {
+             node = reader.read(null, decoder);
+         } catch (Exception e) {
+             throw new IllegalArgumentException
+                 ("Unable to deserialize JsonNode", e);
+         }
+
+         return new JsonRecord(node, readerSchema);
+     }
 
     /**
      * Straightforward serialization of JsonRecord using RawBinding,
@@ -444,7 +478,7 @@ class JsonBinding implements JsonAvroBinding {
         JsonDatumWriter(Schema schema) {
             this(schema, false);
         }
-      
+
         /**
          * @param applyDefaultValues if true, default field values are used for
          * missing fields during serialization, and the first type in a union
@@ -454,7 +488,7 @@ class JsonBinding implements JsonAvroBinding {
          */
         JsonDatumWriter(Schema schema, boolean applyDefaultValues) {
             /** Always use the JsonData singleton. */
-            super(schema, JsonData.INSTANCE); 
+            super(schema, JsonData.INSTANCE);
             this.applyDefaultValues = applyDefaultValues;
         }
 

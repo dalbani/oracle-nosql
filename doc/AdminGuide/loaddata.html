@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <title>load</title>
+    <link rel="stylesheet" href="gettingStarted.css" type="text/css" />
+    <meta name="generator" content="DocBook XSL Stylesheets V1.73.2" />
+    <link rel="start" href="index.html" title="Oracle NoSQL Database Administrator's Guide" />
+    <link rel="up" href="utility_command_reference.html" title="Appendix B. Utility Command Reference" />
+    <link rel="prev" href="importutility.html" title="import" />
+    <link rel="next" href="makebootconfig.html" title="makebootconfig" />
+  </head>
+  <body>
+    <div xmlns="" class="navheader">
+      <div class="libver">
+        <p>Library Version 12.1.4.0</p>
+      </div>
+      <table width="100%" summary="Navigation header">
+        <tr>
+          <th colspan="3" align="center">load</th>
+        </tr>
+        <tr>
+          <td width="20%" align="left"><a accesskey="p" href="importutility.html">Prev</a> </td>
+          <th width="60%" align="center">Appendix B. Utility Command Reference</th>
+          <td width="20%" align="right"> <a accesskey="n" href="makebootconfig.html">Next</a></td>
+        </tr>
+      </table>
+      <hr />
+    </div>
+    <div class="sect1" lang="en" xml:lang="en">
+      <div class="titlepage">
+        <div>
+          <div>
+            <h2 class="title" style="clear: both"><a id="loaddata"></a>load</h2>
+          </div>
+        </div>
+      </div>
+      <pre class="programlisting">java -Xmx256m -Xms256m \
+-jar KVHOME/lib/kvstore.jar load [-verbose]
+-source &lt;backupDir&gt; -host &lt;hostname&gt; -port &lt;port&gt;
+-store &lt;storeName&gt; -username &lt;user&gt; -security &lt;security-file-path&gt;
+[-load-admin] [-force] [-status &lt;pathToFile&gt;] </pre>
+      <p>
+                where:
+            </p>
+      <div class="itemizedlist">
+        <ul type="disc">
+          <li>
+            <p>
+                        <code class="literal">-load-admin</code>
+                        loads the store metadata from the snapshot to the new
+                        store. In this case the <code class="literal">-source</code> directory
+                        must point to the environment directory of the admin node from 
+                        the snapshot. The store must not be available for use by users 
+                        at the time of this operation.
+                    </p>
+            <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+              <h3 class="title">Note</h3>
+              <p>
+                        This option should not be used on a store unless
+                        that store is being restored from scratch. If <code class="literal">-force</code>
+                        is specified in conjunction with <code class="literal">-load-admin</code>,
+                        any existing metadata in the store, including tables and
+                        security metadata, will be overwritten.
+                      </p>
+            </div>
+          </li>
+          <li>
+            <p>
+                        <code class="literal">-host &lt;hostname&gt;</code>
+                        identifies the host name of a node in your
+                        store.
+                    </p>
+          </li>
+          <li>
+            <p>
+                        <code class="literal">-port &lt;port&gt;</code>
+                        identifies the registry port in use by the
+                        store's node.
+                    </p>
+          </li>
+          <li>
+            <p>
+                        <code class="literal">-security &lt;security-file-path&gt;</code>
+                        identifies the security file used to specify properties
+                        for login.
+                    </p>
+          </li>
+          <li>
+            <p>
+                        <code class="literal">-source &lt;backupDir&gt;</code>
+                        identifies the on-disk location where the
+                        snapshot data is stored.
+                    </p>
+          </li>
+          <li>
+            <p>
+                        <code class="literal">-status &lt;pathToFile&gt;</code>
+                        is an optional parameter that causes the
+                        status of the load operation to be saved in
+                        the named location on the local machine.
+                    </p>
+          </li>
+          <li>
+            <p>
+                        <code class="literal">-store &lt;storeName&gt;</code>
+                        identifies the name of the store.
+                    </p>
+          </li>
+          <li>
+            <p>
+                        <code class="literal">-username &lt;user&gt;</code>
+                        identifies the name of the user to login to the
+                        secured store.
+                    </p>
+          </li>
+        </ul>
+      </div>
+      <p>
+                Program used to restore a store from a previously
+                created snapshot. By using this tool, you can restore
+                the store to any topology, not just the one that was
+                in use when the snapshot was created.
+                <code class="literal">Load</code> should be used only to
+                restore to a new, empty store. Do not use this with an
+                existing store because it only writes records if they
+                do not already exist. See <a class="xref" href="recovery.html#usingload" title="Using the Load Program">Using the Load Program</a> for more information.
+
+            </p>
+    </div>
+    <div class="navfooter">
+      <hr />
+      <table width="100%" summary="Navigation footer">
+        <tr>
+          <td width="40%" align="left"><a accesskey="p" href="importutility.html">Prev</a> </td>
+          <td width="20%" align="center">
+            <a accesskey="u" href="utility_command_reference.html">Up</a>
+          </td>
+          <td width="40%" align="right"> <a accesskey="n" href="makebootconfig.html">Next</a></td>
+        </tr>
+        <tr>
+          <td width="40%" align="left" valign="top">import </td>
+          <td width="20%" align="center">
+            <a accesskey="h" href="index.html">Home</a>
+          </td>
+          <td width="40%" align="right" valign="top"> makebootconfig</td>
+        </tr>
+      </table>
+    </div>
+  </body>
+</html>

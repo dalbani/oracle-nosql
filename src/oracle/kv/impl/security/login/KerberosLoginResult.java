@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,9 +43,9 @@
 
 package oracle.kv.impl.security.login;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 
 /**
  * KerberosLoginResult is the result of a Kerberos login. It extends LoginResult
@@ -74,7 +74,7 @@ public class KerberosLoginResult extends LoginResult {
         super(null);
         this.mutualAuthenToken = token;
     }
-    
+
     public KerberosLoginResult(LoginToken loginToken, byte[] authenToken) {
         super(loginToken);
         mutualAuthenToken = authenToken;
@@ -84,7 +84,7 @@ public class KerberosLoginResult extends LoginResult {
      * FastExternalizable constructor.  Must call superclass constructor
      * first to read common elements.
      */
-    public KerberosLoginResult(ObjectInput in, short serialVersion)
+    public KerberosLoginResult(DataInput in, short serialVersion)
         throws IOException {
 
         super(in, serialVersion);
@@ -99,7 +99,7 @@ public class KerberosLoginResult extends LoginResult {
      * write common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);

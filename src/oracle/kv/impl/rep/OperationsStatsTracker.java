@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -50,7 +50,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -127,7 +126,7 @@ public class OperationsStatsTracker implements ParameterListener {
 
     /**
      * Encapsulates the logger used by this class. When this logger is used,
-     * for each type of PerfEvent, the rate at which this logger writes 
+     * for each type of PerfEvent, the rate at which this logger writes
      * records corresponding to the given type will be bounded; to prevent
      * overwhelming the store's log file.
      */
@@ -187,11 +186,15 @@ public class OperationsStatsTracker implements ParameterListener {
 
         DurationParameter dp =
             (DurationParameter) map.get(ParameterState.SP_INTERVAL);
-        Start start = calculateStart
-            (Calendar.getInstance(), (int) dp.getAmount(), dp.getUnit());
+        ScheduleStart start =
+            ScheduleStart.calculateStart(Calendar.getInstance(),
+                                         (int) dp.getAmount(), dp.getUnit());
         logger.fine("Starting operationStatsCollector " + start);
-        collectorFuture = collector.scheduleAtFixedRate
-            (new CollectStats(), start.delay, start.interval, start.unit);
+        collectorFuture =
+            collector.scheduleAtFixedRate(new CollectStats(),
+                                          start.getDelay(),
+                                          start.getInterval(),
+                                          start.getTimeUnit());
         lastEnd = System.currentTimeMillis();
         trackingStart = lastEnd;
     }
@@ -222,113 +225,6 @@ public class OperationsStatsTracker implements ParameterListener {
                                  ParameterMap map2,
                                  String param) {
         return map1.get(param).equals(map2.get(param));
-    }
-
-    /*
-     * Struct to package together the information needed to schedule the
-     * executor. Packaged this way rather than making these fields be class
-     * members for easier unit testing.
-     */
-    static class Start {
-        int delay;
-        int interval;
-        TimeUnit unit;
-    }
-
-    static Start calculateStart(Calendar now,
-                                int configuredInterval,
-                                TimeUnit configuredUnit) {
-
-        Start start = new Start();
-
-        start.unit = configuredUnit;
-        start.interval = configuredInterval;
-
-        /*
-         * It's easier to calculate a sync'ed up start if the intervals are
-         * promoted to their maximum unit.
-         */
-        switch (configuredUnit) {
-        case HOURS:
-            /* Round interval up to days. */
-            if (configuredInterval > 24) {
-                start.unit = TimeUnit.DAYS;
-                start.interval = configuredInterval/24;
-                if (configuredInterval%24 > 0) {
-                    start.interval++;
-                }
-            }
-            break;
-
-        case MINUTES:
-            /* Round interval up to hours. */
-            if (configuredInterval > 60) {
-                start.unit = TimeUnit.HOURS;
-                start.interval = configuredInterval/60;
-                if (configuredInterval%60 > 0) {
-                    start.interval++;
-                }
-            }
-            break;
-
-        case SECONDS:
-            /* Round interval up to minutes. */
-            if (configuredInterval > 60) {
-                start.unit = TimeUnit.MINUTES;
-                start.interval = configuredInterval/60;
-                if (configuredInterval%60 > 0) {
-                    start.interval++;
-                }
-            }
-            break;
-
-        default:
-            break;
-        }
-
-        /*
-         * Calculate delayToNext to see if it's possible to sync up all the rep
-         * nodes.  This works fine as long as the unit is an even factor of the
-         * next largest granularity unit.
-         *
-         * i.e. if the interval is 5, 10, 15, 20, 30 minutes, we can figure out
-         * a good point in the hour to start. But if the interval doesn't
-         * divide into an the next unit evenly, it's not worth doing, so skip
-         * it.
-         */
-        switch (start.unit) {
-        case HOURS:
-            nextStart(start, now, Calendar.HOUR, 24);
-            break;
-
-        case  MINUTES:
-            nextStart(start, now, Calendar.MINUTE, 60);
-            break;
-
-        case SECONDS:
-            nextStart(start, now, Calendar.SECOND, 60);
-            break;
-
-        default:
-            break;
-        }
-
-        return start;
-    }
-
-    private static void nextStart(Start start,
-                                  Calendar now,
-                                  int calField,
-                                  int numTotalUnits) {
-
-        if ((numTotalUnits % start.interval) != 0) {
-            start.delay = 0;
-            return;
-        }
-
-        int nowUnits = now.get(calField);
-        int nextStartUnit = (nowUnits / start.interval) + 1;
-        start.delay = (nextStartUnit * start.interval) - nowUnits;
     }
 
     public void close() {

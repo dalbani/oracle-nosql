@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -49,11 +49,8 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.EnumSet;
-import java.util.List;
 import java.util.logging.LogRecord;
 
 import oracle.kv.impl.admin.NonfatalAssertionException;
@@ -63,12 +60,6 @@ import oracle.kv.impl.topo.ResourceId;
 import oracle.kv.impl.util.LogFormatter;
 import oracle.kv.impl.util.server.LoggerUtils;
 
-import com.sleepycat.je.CursorConfig;
-import com.sleepycat.je.LockMode;
-import com.sleepycat.je.Transaction;
-import com.sleepycat.persist.EntityCursor;
-import com.sleepycat.persist.EntityStore;
-import com.sleepycat.persist.PrimaryIndex;
 import com.sleepycat.persist.model.Entity;
 import com.sleepycat.persist.model.KeyField;
 import com.sleepycat.persist.model.Persistent;
@@ -222,89 +213,6 @@ public class CriticalEvent implements Serializable {
     /** Returns a formatted string for a log record. */
     public static String formatLogEvent(final LogRecord logRecord) {
         return ef.format(logRecord);
-    }
-
-    public void persist(EntityStore estore, Transaction txn) {
-        final PrimaryIndex<EventKey, CriticalEvent> pi =
-            estore.getPrimaryIndex(EventKey.class, CriticalEvent.class);
-
-        pi.put(txn, this);
-    }
-
-    /**
-     * Retrieve a list of events matching the given criteria.
-     */
-    public static List<CriticalEvent> fetch
-        (EntityStore estore, Transaction txn, long startTime, long endTime,
-         CriticalEvent.EventType type) {
-
-        final PrimaryIndex<EventKey, CriticalEvent> pi =
-            estore.getPrimaryIndex(EventKey.class, CriticalEvent.class);
-
-        EventKey startKey = new EventKey(startTime, type);
-        EventKey endKey = new EventKey(endTime == 0 ? Long.MAX_VALUE : endTime,
-                                       type);
-
-        List<CriticalEvent> events = new ArrayList<CriticalEvent>();
-
-        EntityCursor<CriticalEvent> eventCursor =
-            pi.entities(txn, startKey, true, endKey, false,
-                        CursorConfig.READ_UNCOMMITTED);
-
-        try {
-            for (CriticalEvent ev : eventCursor) {
-                if (type == EventType.ALL || type.equals(ev.getEventType())) {
-                    events.add(ev);
-                }
-            }
-        } finally {
-            eventCursor.close();
-        }
-
-        return events;
-    }
-
-    /**
-     * Expire older events from the persistent store.
-     */
-    public static void ageStore
-        (EntityStore estore, Transaction txn, long pruningAge) {
-
-        final PrimaryIndex<EventKey, CriticalEvent> pi =
-            estore.getPrimaryIndex(EventKey.class, CriticalEvent.class);
-
-        long expiry = new Date().getTime() - pruningAge;
-
-        EventKey startKey = new EventKey(0L, EventType.ALL);
-        EventKey endKey = new EventKey(expiry, EventType.ALL);
-
-        EntityCursor<CriticalEvent> eventCursor =
-            pi.entities(txn, startKey, true, endKey, true,
-                        CursorConfig.READ_UNCOMMITTED);
-
-        try {
-            for (CriticalEvent ev = eventCursor.first();
-                 ev != null;
-                 ev = eventCursor.next()) {
-
-                eventCursor.delete();
-            }
-        } finally {
-            eventCursor.close();
-        }
-    }
-
-    /**
-     * Retrieve a single event from the database, using the given key.
-     */
-    public static CriticalEvent fetch
-        (EntityStore estore, Transaction txn, String eventId) {
-
-        final PrimaryIndex<EventKey, CriticalEvent> pi =
-            estore.getPrimaryIndex(EventKey.class, CriticalEvent.class);
-
-        return pi.get(txn, EventKey.fromString(eventId),
-                      LockMode.READ_UNCOMMITTED);
     }
 
     public EventKey getKey() {

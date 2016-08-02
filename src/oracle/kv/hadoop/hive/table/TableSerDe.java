@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,7 +44,6 @@
 package oracle.kv.hadoop.hive.table;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Properties;
 
@@ -144,13 +143,32 @@ public class TableSerDe extends TableSerDeBase {
             throw new SerDeException(new IllegalArgumentException(msg));
         }
 
-        final List<String> columnNames = params.getColumnNames();
-        if (columnNames == null || columnNames.size() == 0) {
+        final List<String> rawColumnNames = params.getColumnNames();
+        if (rawColumnNames == null || rawColumnNames.size() == 0) {
             final String msg =
                 "No columns defined in Hive table [name=" +
                 getHiveTableName() + "]";
             LOG.error(msg);
             throw new SerDeException(new IllegalArgumentException(msg));
+        }
+
+        /*
+         * Note that even if upper case or mixed case was used in the Hive
+         * 'CREATE TABLE' command, the Hive infrastructure converts and
+         * stores the column names in lower case; and as a result, the call
+         * to SerDeParameters.getColumnNames() above will always return the
+         * names of the Hive columns in LOWER CASE (except when testing).
+         * When testing, mocks are sometimes used to simulate various parts
+         * of the Hive and/or KVStore infrastructure; in which case, if mixed
+         * or upper case names are used for the Hive columns in a given test,
+         * the names returned above may not be lower case. Thus, to guarantee
+         * that the Hive column names processed below are alwyays lower case,
+         * even while testing, those values are converted to lower case here.
+         */
+        final List<String> columnNames =
+            new ArrayList<String>(rawColumnNames.size());
+        for (String rawColumnName : rawColumnNames) {
+            columnNames.add(rawColumnName.toLowerCase());
         }
         LOG.debug("HIVE Column Names = " + columnNames);
 
@@ -268,7 +286,10 @@ public class TableSerDe extends TableSerDeBase {
 
     @Override
     public Object deserialize(Writable field) throws SerDeException {
+
         hiveRow.clear();
+
+        LOG.debug("deserialize field = " + field);
         final Row kvRow = getKvTable().createRowFromJson(
                                            field.toString(), true);
         LOG.debug("kvRow = " + kvRow);
@@ -446,19 +467,20 @@ public class TableSerDe extends TableSerDeBase {
 
         case MAP:
 
-            final Collection<FieldValue> mapValues =
-                (((MapValue) fieldValue).getFields()).values();
-            final FieldValue anyMapValue = mapValues.iterator().next();
+            final FieldDef mapElementDef =
+                (((MapValue) fieldValue).getDefinition()).getElement();
+            final ObjectInspector mapElementObjectInspector =
+                                      objectInspector(mapElementDef);
             return new TableMapObjectInspector(
                     PrimitiveObjectInspectorFactory.javaStringObjectInspector,
-                    objectInspector(anyMapValue));
+                    mapElementObjectInspector);
 
         case ARRAY:
 
-            final FieldValue firstElementValue =
-                ((ArrayValue) fieldValue).get(0);
+            final FieldDef arrayElementDef =
+                (((ArrayValue) fieldValue).getDefinition()).getElement();
             final ObjectInspector listElementObjectInspector =
-                                      objectInspector(firstElementValue);
+                                      objectInspector(arrayElementDef);
             return new TableArrayObjectInspector(listElementObjectInspector);
 
         case RECORD:

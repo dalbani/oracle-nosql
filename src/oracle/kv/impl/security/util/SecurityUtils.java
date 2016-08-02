@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -110,7 +110,7 @@ public final class SecurityUtils {
     /*
      * The strings used by the Kerberos utility.
      */
-    private static final String KADMIN_DEFAULT = "/usr/kerberos/sbin/kadmin";
+    public static final String KADMIN_DEFAULT = "/usr/kerberos/sbin/kadmin";
     public static final String KRB_CONF_FILE = "/etc/krb5.conf";
 
     private static final String PRINCIPAL_VALIDITY = "krbPrincValidity";

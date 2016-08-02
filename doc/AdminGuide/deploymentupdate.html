@@ -14,7 +14,7 @@
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
@@ -53,23 +53,18 @@
           </dt>
           <dt>
             <span class="sect1">
-              <a href="upgrade_release_2_to_2.1.html">Upgrade from Release 2.0 to Release 3.0</a>
+              <a href="upgrade_release_3_to_current.html">Upgrade to This Release from Release 3.0 or Later</a>
             </span>
           </dt>
           <dd>
             <dl>
               <dt>
                 <span class="sect2">
-                  <a href="upgrade_release_2_to_2.1.html#scriptto21">Using a Script to Upgrade to Release 3</a>
+                  <a href="upgrade_release_3_to_current.html#scriptto21">Using a Script to Upgrade to Release 4</a>
                 </span>
               </dt>
             </dl>
           </dd>
-          <dt>
-            <span class="sect1">
-              <a href="upgrade_release_1_to_2.html">Upgrade from NoSQL DB Release 1.0 to NoSQL DB Release 2.0</a>
-            </span>
-          </dt>
         </dl>
       </div>
       <p>
@@ -89,8 +84,7 @@
       </p>
       <p>
           Online upgrade can succeed if the store's replication factor is greater
-          than 2, and the upgrade is not being performed on a release 2.0 store
-          whose topology contains only a single zone.
+          than 2.
       </p>
       <p>
           For stores with a replication factor greater than two,
@@ -116,12 +110,8 @@
           </p>
         <p>
               In Oracle NoSQL Database, configuration changes and other administrative
-              activities involve <code class="literal">plans</code>.  In NoSQL DB
-              release 3.0, the execution or restarting of plans that were
-              created in NoSQL DB release 1.0 is not supported.  Any plans
-              that are not in a completed state should be canceled before
-              the upgrade begins.  For information about plans, see 
-              <a class="xref" href="plans.html" title="Chapter 2. Plans">Plans</a>.
+              activities involve <code class="literal">plans</code>. For information about plans, 
+              see <a class="xref" href="plans.html" title="Chapter 2. Plans">Plans</a>.
           </p>
         <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
           <h3 class="title">Note</h3>
@@ -135,9 +125,7 @@
               Application programs that use the kvstore client library
               should be upgraded to the new software version as soon
               as possible after the service components have been
-              upgraded.  New clients can also be used with an old
-              store, so it is possible to test upgraded clients
-              before upgrading the store services.
+              upgraded.
           </p>
       </div>
     </div>

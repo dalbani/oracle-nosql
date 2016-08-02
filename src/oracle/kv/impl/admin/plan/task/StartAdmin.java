@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -61,6 +61,9 @@ import com.sleepycat.persist.model.Persistent;
 /**
  * A task for starting a given Admin. Assumes the node has already been created.
  *
+ * NOTE: This class is for backward compatibility only, it has been replaced
+ * by StartAdminV2.
+ *
  * version 0: original.
  * version 1: Changed inheritance chain.
  */
@@ -74,15 +77,16 @@ public class StartAdmin extends SingleJobTask {
     private AdminId adminId;
     private boolean continuePastError;
 
-    public StartAdmin(ChangeAdminParamsPlan plan,
-                      StorageNodeId storageNodeId,
-                      AdminId adminId,
-                      boolean continuePastError) {
-        super();
-        this.plan = plan;
-        this.snId = storageNodeId;
-        this.adminId = adminId;
-        this.continuePastError = continuePastError;
+    /*
+     * Unused constructor to clarify that no instances should be created.
+     * Callers should use StartAdminV2.
+    */
+    @SuppressWarnings("unused")
+    private StartAdmin(ChangeAdminParamsPlan plan,
+                       StorageNodeId storageNodeId,
+                       AdminId adminId,
+                       boolean continuePastError) {
+        throw new AssertionError("Use StartAdminV2");
     }
 
     /* DPL */

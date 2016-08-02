@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,16 +43,11 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
-import java.util.List;
 
 import oracle.kv.impl.api.rgstate.RepNodeStateUpdateThread;
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.topo.PartitionId;
-
-import com.sleepycat.je.Transaction;
 
 /**
  * A NOP request used internally by the <code>RequestDispatcher</code> to
@@ -70,7 +65,7 @@ public class NOP extends InternalOperation {
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    public NOP(ObjectInput in, short serialVersion) {
+    public NOP(DataInput in, short serialVersion) {
         super(OpCode.NOP, in, serialVersion);
     }
 
@@ -78,22 +73,9 @@ public class NOP extends InternalOperation {
      * FastExternalizable writer.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
-    }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          OperationHandler operationHandler) {
-       return  new Result.NOPResult();
-    }
-
-    @Override
-    public List<KVStorePrivilege> getRequiredPrivileges() {
-        /* NOP needs no privilege */
-        return emptyPrivilegeList;
     }
 }

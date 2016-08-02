@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -55,6 +55,8 @@ import oracle.kv.impl.param.ParameterMap;
 import oracle.kv.impl.security.AuthContext;
 import oracle.kv.impl.sna.masterBalance.MasterBalancingInterface;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
 import oracle.kv.impl.topo.Topology;
@@ -338,7 +340,7 @@ public interface StorageNodeAgentInterface extends
         throws RemoteException;
 
     /**
-     * Added and then deprecated in R3 purely to support the creation of a 
+     * Added and then deprecated in R3 purely to support the creation of a
      * SecureProxy.
      */
     @Deprecated
@@ -347,7 +349,7 @@ public interface StorageNodeAgentInterface extends
                                  AuthContext authCtx,
                                  short serialVersion)
         throws RemoteException;
-    
+
     /**
      * To be removed after R2 compatibility period.
      * @deprecated
@@ -473,6 +475,130 @@ public interface StorageNodeAgentInterface extends
      */
     @Deprecated
     public void newRepNodeParameters(ParameterMap repNodeParams,
+                                     short serialVersion)
+        throws RemoteException;
+
+    /**
+     * Query whether a give ArbNode has been defined on this Storage Node, as
+     * indicated by its configuration existing in the store's configuration
+     * file.  This is not an indication of its runtime status.
+     *
+     * @param arbNodeId the unique identifier of the ArbNode
+     *
+     * @return true if the specified ArbNode exists in the configuration file
+     *
+     * @since 4.0
+     */
+    public boolean arbNodeExists(ArbNodeId arbNodeId,
+                                 AuthContext authCtx,
+                                 short serialVersion)
+        throws RemoteException;
+
+    /**
+     * Creates and starts a {@link ArbNode} instance
+     * on this Storage Node.  This will cause a new process to be started to
+     * run the ArbNode.  The StorageNodeAgent will continue to start this
+     * ArbNode if the Storage Node is restarted unless the ArbNode is stopped
+     * explicitly.
+     *
+     * Once the configuration file is written so that a restart of the SNA will
+     * also start the ArbNode this call will unconditionally succeed, even if
+     * it cannot actually start or contact the ArbNode itself.  This is so that
+     * the state of the SNA is consistent with the topology in the admin
+     * database.
+     *
+     * @param arbNodeParams the configuration of the ArbNode to create
+     *
+     * @return true if the ArbNode is successfully created.
+     *
+     * @throws RuntimeException if the operation failed.
+     *
+     * @since 4.0
+     */
+    public boolean createArbNode(ParameterMap arbNodeParams,
+                                 AuthContext authCtx,
+                                 short serialVersion)
+        throws RemoteException;
+
+
+    /**
+     * Starts a {@link ArbNode} that has already been
+     * defined on this Storage Node.  The ArbNode will be started automatically
+     * if the Storage Node is restarted or the ArbNode exits unexpectedly.
+     *
+     * @param arbNodeId the unique identifier of the ArbNode to start
+     *
+     * @return true if the operation succeeds.
+     *
+     * @throws RuntimeException if the operation fails or the service does not
+     * exist.
+     *
+     * @since 4.0
+     */
+    public boolean startArbNode(ArbNodeId arbNodeId,
+                                AuthContext authCtx,
+                                short serialVersion)
+        throws RemoteException;
+
+    /**
+     * Stops a {@link ArbNode} that has already been
+     * defined on this Storage Node.  The ArbNode will not be started if the
+     * Storage node is restarted until {@link #startArbNode} is called.
+     *
+     * @param arbNodeId the unique identifier of the ArbNode to stop
+     *
+     * @param force force a shutdown
+     *
+     * @return true if the ArbNode was running, false if it was not.
+     *
+     * @throws RuntimeException if the operation failed.
+     *
+     * @since 4.0
+     */
+    public boolean stopArbNode(ArbNodeId arbNodeId,
+                               boolean force,
+                               AuthContext authCtx,
+                               short serialVersion)
+        throws RemoteException;
+
+    /**
+     * Permanently removes the {@link ArbNode} with
+     * the specified ArbNodeId.
+     *
+     * @param arbNodeId the unique identifier of the ArbNode to destroy
+     *
+     * @param deleteData true if the data stored on disk for this ArbNode
+     *                   should be deleted
+     *
+     * @return true if the ArbNode is successfully destroyed.  This will be the
+     * case if it does not exist in the first place.
+     *
+     * @throws RuntimeException if the operation failed.
+     *
+     * @since 4.0
+     */
+    public boolean destroyArbNode(ArbNodeId arbNodeId,
+                                  boolean deleteData,
+                                  AuthContext authCtx,
+                                  short serialVersion)
+        throws RemoteException;
+
+     /**
+     * Modifies the parameters of a (@link ArbNode}
+     * ArbNode managed by this StorageNode.  The new parameters will be written
+     * out to the storage node's configuration file.  If the service needs
+     * notification of the new parameters that is done by the admin/planner.
+     *
+     * @param arbNodeParams the new parameters to configure the arb node. This
+     * is a full set of replacement parameters, not partial.
+     *
+     * @throws RuntimeException if the ArbNode is not configured or the
+     * operation failed.
+     *
+     * @since 4.0
+     */
+    public void newArbNodeParameters(ParameterMap arbNodeParams,
+                                     AuthContext authCtx,
                                      short serialVersion)
         throws RemoteException;
 

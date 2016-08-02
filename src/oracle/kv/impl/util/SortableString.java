@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -120,7 +120,7 @@ public class SortableString {
     private final static int BASE_128_DIGITS_OFFSET = 48;
     private final static char[] BASE_128_DIGITS = new char[128];
     private final static short[] LOOKUP_BYTE_128 = new short[256];
-    
+
     static {
         for (int i = 0; i < BASE_128_DIGITS.length; i++) {
             BASE_128_DIGITS[i] = (char) (i + BASE_128_DIGITS_OFFSET);
@@ -299,7 +299,7 @@ public class SortableString {
     private static final int INT_STRING_LEN_128 = 5;
 
     /*
-     * Utility method to convert a long to a Base64 string.  The sign bit is
+     * Utility method to convert a long to a Base128 string.  The sign bit is
      * handled in the caller before calling this method.
      */
     private static String toString(long l, int stringLen) {
@@ -312,7 +312,7 @@ public class SortableString {
     }
 
     /*
-     * Utility method to convert a Base64 string to a long.  The sign bit is
+     * Utility method to convert a Base128 string to a long.  The sign bit is
      * handled in the caller on return.  This used to use a char[] but it is
      * more efficient to leave the String intact and just extract the char
      * members one at a time.
@@ -346,7 +346,7 @@ public class SortableString {
      */
     public static String toSortable(final long l) {
         /*
-         * Toggle the sign bit and dump out as Base64 string
+         * Toggle the sign bit and dump out as Base128 string
          */
         return toString(l ^ SIGN_BIT, LONG_STRING_LEN_128);
     }
@@ -442,7 +442,6 @@ public class SortableString {
     public static String toSortable(final float f) {
         int tmp = Float.floatToRawIntBits(f);
         return toString((tmp < 0) ? ~tmp : (tmp ^ SIGN_BIT_32),
-                        //                        INT_STRING_LEN);
                         INT_STRING_LEN_128);
     }
 
@@ -470,7 +469,7 @@ public class SortableString {
      */
     public static String toSortable(final int i) {
         /*
-         * Toggle the sign bit and dump out as Base64 string
+         * Toggle the sign bit and dump out as Base128 string
          */
         return toString(i ^ SIGN_BIT_32, INT_STRING_LEN_128);
     }
@@ -496,9 +495,10 @@ public class SortableString {
      */
     public static String toSortable(final int i, final int stringLen) {
         /*
-         * Mask the value, toggle the sign bit and dump out as Base64 string
+         * Mask the value, toggle the sign bit and dump out as Base128 string
          */
-        return toString((i & INTEGER_MASK_128[stringLen]) ^ INTEGER_SIGN_BIT_128[stringLen],
+        return toString((i & INTEGER_MASK_128[stringLen]) ^
+                        INTEGER_SIGN_BIT_128[stringLen],
                         stringLen != 0 ? stringLen : INT_STRING_LEN_128 );
     }
 

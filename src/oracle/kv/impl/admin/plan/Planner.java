@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -46,7 +46,6 @@ package oracle.kv.impl.admin.plan;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -58,7 +57,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import oracle.kv.KVVersion;
 import oracle.kv.impl.admin.Admin;
 import oracle.kv.impl.admin.AdminServiceParams;
 import oracle.kv.impl.admin.CommandResult;
@@ -66,13 +64,16 @@ import oracle.kv.impl.admin.IllegalCommandException;
 import oracle.kv.impl.admin.NonfatalAssertionException;
 import oracle.kv.impl.admin.PlanLocksHeldException;
 import oracle.kv.impl.admin.param.StorageNodeParams;
+import oracle.kv.impl.admin.plan.task.Utils;
 import oracle.kv.impl.api.table.FieldMap;
 import oracle.kv.impl.api.table.IndexImpl.AnnotatedField;
+import oracle.kv.impl.api.table.TableImpl;
 import oracle.kv.impl.fault.CommandFaultException;
 import oracle.kv.impl.fault.OperationFaultException;
 import oracle.kv.impl.param.ParameterMap;
 import oracle.kv.impl.topo.AdminId;
 import oracle.kv.impl.topo.AdminType;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.DatacenterType;
 import oracle.kv.impl.topo.RepGroupId;
@@ -81,6 +82,7 @@ import oracle.kv.impl.topo.ResourceId;
 import oracle.kv.impl.topo.StorageNodeId;
 import oracle.kv.impl.util.KVThreadFactory;
 import oracle.kv.impl.util.server.LoggerUtils;
+import oracle.kv.table.TimeToLive;
 import oracle.kv.util.ErrorMessage;
 
 /**
@@ -150,18 +152,6 @@ import oracle.kv.util.ErrorMessage;
  */
 
 public class Planner {
-
-    static final KVVersion CHANGE_ZONE_TYPE_VERSION = KVVersion.R3_4;
-    static final KVVersion START_STOP_SERVICES_VERSION = KVVersion.R3_4;
-
-    {
-        assert CHANGE_ZONE_TYPE_VERSION.
-                            compareTo(KVVersion.PREREQUISITE_VERSION) > 0 :
-               "CHANGE_ZONE_TYPE_VERSION can be removed";
-        assert START_STOP_SERVICES_VERSION.
-                            compareTo(KVVersion.PREREQUISITE_VERSION) > 0 :
-               "START_STOP_SERVICES_VERSION can be removed";
-    }
 
     /**
      * The executor that we'll use for carrying out execution of the plan and
@@ -299,19 +289,21 @@ public class Planner {
      * Creates a data center and registers it with the topology.
      */
     public synchronized int
-        createDeployDatacenterPlan(String planName,
-                                   String datacenterName,
-                                   int repFactor,
-                                   DatacenterType datacenterType) {
+    createDeployDatacenterPlan(String planName,
+                               String datacenterName,
+                               int repFactor,
+                               DatacenterType datacenterType,
+                               boolean allowArbiters) {
 
-            final DeployDatacenterPlan plan =
-                new DeployDatacenterPlan(planIdGenerator, planName, this,
-                                         admin.getCurrentTopology(),
-                                         datacenterName, repFactor,
-                                         datacenterType);
-            register(plan);
-            return admin.saveCreatePlan(plan);
-        }
+        final DeployDatacenterPlan plan =
+            new DeployDatacenterPlan(planIdGenerator, planName, this,
+                                     admin.getCurrentTopology(),
+                                     datacenterName, repFactor,
+                                     datacenterType,
+                                     allowArbiters);
+        register(plan);
+        return admin.saveCreatePlan(plan);
+    }
 
     /**
      * Creates a storage node and registers it with the topology.
@@ -381,14 +373,6 @@ public class Planner {
                                   admin.getCandidate(candidateName));
         register(plan);
         return admin.saveCreatePlan(plan);
-    }
-
-    private void verifyAdminGroupVersion(KVVersion required) {
-        if (!admin.checkAdminGroupVersion(required)) {
-            throw new IllegalCommandException(
-                      "All Admins must be updated to software version " +
-                      required.getNumericVersionString());
-        }
     }
 
     public synchronized int createFailoverPlan(
@@ -461,22 +445,9 @@ public class Planner {
     public synchronized int
         createStopServicesPlan(String planName,
                                Set<? extends ResourceId> serviceIds) {
-        final Plan plan;
-        if (admin.checkAdminGroupVersion(START_STOP_SERVICES_VERSION)) {
-            plan = new StopServicesPlan(planIdGenerator, planName, this,
-                                        admin.getCurrentTopology(), serviceIds);
-        } else {
-            /* Must use old plan which requires RNs only */
-            final Set<RepNodeId> rnIds = new HashSet<>(serviceIds.size());
-            for (ResourceId id : serviceIds) {
-                if (!(id instanceof RepNodeId)) {
-                    verifyAdminGroupVersion(START_STOP_SERVICES_VERSION);
-                }
-                rnIds.add((RepNodeId)id);
-            }
-            plan = new StopRepNodesPlan(planIdGenerator, planName, this,
-                                        admin.getCurrentTopology(), rnIds);
-        }
+        final Plan plan = new StopServicesPlan(planIdGenerator, planName, this,
+                                               admin.getCurrentTopology(),
+                                               serviceIds);
         register(plan);
         return admin.saveCreatePlan(plan);
     }
@@ -487,23 +458,9 @@ public class Planner {
     public synchronized int
         createStartServicesPlan(String planName,
                                 Set<? extends ResourceId> serviceIds) {
-        final Plan plan;
-        if (admin.checkAdminGroupVersion(START_STOP_SERVICES_VERSION)) {
-            plan = new StartServicesPlan(planIdGenerator, planName, this,
-                                         admin.getCurrentTopology(),
-                                         serviceIds);
-        } else {
-            /* Must use old plan which requires RNs only */
-            final Set<RepNodeId> rnIds = new HashSet<>(serviceIds.size());
-            for (ResourceId id : serviceIds) {
-                if (!(id instanceof RepNodeId)) {
-                    verifyAdminGroupVersion(START_STOP_SERVICES_VERSION);
-                }
-                rnIds.add((RepNodeId)id);
-            }
-            plan = new StartRepNodesPlan(planIdGenerator, planName, this,
-                                         admin.getCurrentTopology(), rnIds);
-        }
+        final Plan plan = new StartServicesPlan(planIdGenerator, planName, this,
+                                                admin.getCurrentTopology(),
+                                                serviceIds);
         register(plan);
         return admin.saveCreatePlan(plan);
     }
@@ -562,21 +519,11 @@ public class Planner {
         }
 
     public synchronized int createAddTablePlan(String planName,
-                                               String tableName,
-                                               String parentName,
-                                               FieldMap fieldMap,
-                                               List<String> primaryKey,
-                                               List<String> majorKey,
-                                               boolean r2compat,
-                                               int schemaId,
-                                               String description) {
-
+                                               TableImpl table,
+                                               String parentName) {
         final Plan plan = TablePlanGenerator.
             createAddTablePlan(planIdGenerator, planName, this,
-                               tableName, parentName,
-                               fieldMap, primaryKey,
-                               majorKey, r2compat, schemaId,
-                               description);
+                               table, parentName);
         register(plan);
         return admin.saveCreatePlan(plan);
     }
@@ -584,12 +531,14 @@ public class Planner {
     public synchronized int createEvolveTablePlan(String planName,
                                                   String tableName,
                                                   int tableVersion,
-                                                  FieldMap fieldMap) {
+                                                  FieldMap fieldMap,
+                                                  TimeToLive ttl) {
 
         final Plan plan = TablePlanGenerator.
             createEvolveTablePlan(planIdGenerator, planName, this,
                                   tableName,
-                                  tableVersion, fieldMap);
+                                  tableVersion, fieldMap,
+                                  ttl);
         register(plan);
         return admin.saveCreatePlan(plan);
     }
@@ -632,12 +581,13 @@ public class Planner {
 
     public synchronized int createAddTextIndexPlan
         (String planName, String indexName, String tableName,
-         AnnotatedField[] ftsFields, String description) {
-        
+         AnnotatedField[] ftsFields, Map<String,String> properties,
+         String description) {
+
         final Plan plan = TablePlanGenerator.
             createAddTextIndexPlan(planIdGenerator, planName, this,
                                    indexName, tableName,
-                                   ftsFields, description);
+                                   ftsFields, properties, description);
         register(plan);
         return admin.saveCreatePlan(plan);
     }
@@ -680,10 +630,34 @@ public class Planner {
                 plan =
                     new ChangeAdminParamsPlan(planIdGenerator, planName, this,
                                               (AdminId) rid, newParams);
+            } else if (rid instanceof ArbNodeId) {
+                final Set<ArbNodeId> ids = new HashSet<>();
+                ids.add((ArbNodeId) rid);
+                plan =
+                    new ChangeANParamsPlan(planIdGenerator, planName, this,
+                                         admin.getCurrentTopology(),
+                                         ids, newParams);
             }
             register(plan);
             return admin.saveCreatePlan(plan);
         }
+
+    /**
+     * Creates a plan to apply parameters to all ArbNodes deployed in the
+     * specified datacenter or if null, to all ArbNodes in the store.
+     */
+    public synchronized int
+        createChangeAllANParamsPlan(String planName,
+                                    DatacenterId dcid,
+                                    ParameterMap newParams) {
+        Set<ArbNodeId> anIds = admin.getCurrentTopology().getArbNodeIds(dcid);
+        final Plan plan =
+            new ChangeANParamsPlan(planIdGenerator, planName, this,
+                                   admin.getCurrentTopology(),
+                                   anIds, newParams);
+        register(plan);
+        return admin.saveCreatePlan(plan);
+    }
 
     /**
      * Creates a plan to apply parameters to all RepNodes deployed in the
@@ -1087,9 +1061,9 @@ public class Planner {
         catalog.lockElasticityChange(planId, planName);
     }
 
-    public void lockRN(int planId, String planName, RepNodeId rnId)
+    public void lock(int planId, String planName, ResourceId rnId)
         throws PlanLocksHeldException {
-        catalog.lockRN(planId, planName, rnId);
+        catalog.lock(planId, planName, rnId);
     }
 
     public void lockShard(int planId, String planName, RepGroupId rgId)
@@ -1124,14 +1098,15 @@ public class Planner {
          * plans are those that might move a single RN or migrate all the
          * components on a single SN.
          *
-         * Locking a shard requires first checking for locks against any RNs
-         * in the shard. The same applies in reverse; locking a RN is only
-         * possible if there is no shard lock. For simplicity, and because this
-         * does not need to be a performant action, all serialization is
-         * accomplished simply be synchronizing on elasticityLock.
+         * Locking a shard requires first checking for locks against any RNs or
+         * ANs in the shard. The same applies in reverse; locking a RN/AN is
+         * only possible if there is no shard lock. For simplicity, and
+         * because this does not need to be a performant action, all
+         * serialization is accomplished simply be synchronizing
+         * on elasticityLock.
          */
         private final TopoLock elasticityLock;
-        private final Map<RepNodeId, TopoLock> rnLocks;
+        private final Map<ResourceId, TopoLock> rnAnLocks;
         private final Map<RepGroupId, TopoLock> rgLocks;
 
         Catalog() {
@@ -1139,7 +1114,7 @@ public class Planner {
             futures = new HashMap<>();
 
             elasticityLock = new TopoLock();
-            rnLocks = new HashMap<>();
+            rnAnLocks = new HashMap<>();
             rgLocks = new HashMap<>();
         }
 
@@ -1155,11 +1130,11 @@ public class Planner {
          * Check the shard locks before locking the RN.
          * @throws PlanLocksHeldException
          */
-        public void lockRN(int planId, String planName, RepNodeId rnId)
+        public void lock(int planId, String planName, ResourceId resId)
             throws PlanLocksHeldException {
             synchronized (elasticityLock) {
                 final TopoLock rgl =
-                    rgLocks.get(new RepGroupId(rnId.getGroupId()));
+                    rgLocks.get(Utils.getRepGroupId(resId));
                 if (rgl != null) {
                     if (rgl.lockingPlanId != planId) {
                         throw cantLock(planId, planName, rgl.lockingPlanId,
@@ -1167,10 +1142,10 @@ public class Planner {
                     }
                 }
 
-                TopoLock rnl = rnLocks.get(rnId);
+                TopoLock rnl = rnAnLocks.get(resId);
                 if (rnl == null) {
                     rnl = new TopoLock();
-                    rnLocks.put(rnId, rnl);
+                    rnAnLocks.put(resId, rnl);
                 }
                 if (!rnl.get(planId, planName)) {
                     throw cantLock(planId, planName, rnl.lockingPlanId,
@@ -1206,10 +1181,10 @@ public class Planner {
                                    rgl.lockingPlanName);
                 }
 
-                /* check RNs first */
-                for (Map.Entry<RepNodeId, TopoLock> entry:
-                         rnLocks.entrySet()) {
-                    if (rgId.sameGroup(entry.getKey())) {
+                /* check RNs/ANs first */
+                for (Map.Entry<ResourceId, TopoLock> entry:
+                         rnAnLocks.entrySet()) {
+                    if (rgId.equals(Utils.getRepGroupId(entry.getKey()))) {
                         final TopoLock l = entry.getValue();
                         if ((l.lockingPlanId != planId) && l.locked) {
                             throw cantLock(planId, planName, l.lockingPlanId,
@@ -1230,7 +1205,7 @@ public class Planner {
         public void clearLocks(int planId) {
             /* Remove all locks that pertain to this plan */
             synchronized (elasticityLock) {
-                Iterator<TopoLock> iter = rnLocks.values().iterator();
+                Iterator<TopoLock> iter = rnAnLocks.values().iterator();
                 while (iter.hasNext()) {
                     final TopoLock tl = iter.next();
                     if (tl.lockingPlanId == planId) {
@@ -1485,4 +1460,28 @@ public class Planner {
     public void setExecutor(ExecutorService executor) {
         this.executor = executor;
     }
+
+    /**
+     * Registers an externally managed Elasticsearch cluster and updates
+     * SNA Parameters to reflect it.
+     */
+    public Integer createRegisterESClusterPlan(String planName,
+                                               String clusterName,
+                                               String transportHp,
+                                               boolean forceClear) {
+        final Plan plan =
+            new RegisterESPlan(planIdGenerator, planName, this,
+                               clusterName, transportHp,
+                               forceClear);
+        register(plan);
+        return admin.saveCreatePlan(plan);
+    }
+
+    public Integer createDeregisterESClusterPlan(String planName) {
+        final Plan plan =
+            new DeregisterESPlan(planIdGenerator, planName, this);
+        register(plan);
+        return admin.saveCreatePlan(plan);
+    }
+
 }

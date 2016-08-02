@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,6 +43,7 @@
 
 package oracle.kv.impl.admin.plan.task;
 
+import java.util.concurrent.TimeUnit;
 import java.util.List;
 
 import oracle.kv.impl.admin.IllegalCommandException;
@@ -54,13 +55,17 @@ import oracle.kv.impl.api.table.TableMetadata;
 import oracle.kv.impl.security.AccessCheckUtils;
 import oracle.kv.impl.security.ExecutionContext;
 import oracle.kv.impl.security.util.SecurityUtils;
+import oracle.kv.table.TimeToLive;
 
 import com.sleepycat.persist.model.Persistent;
 
 /**
  * Adds a table
+ *
+ * version 0: original
+ * version 1: added primaryKeySizes, ttl and ttlUnit fields
  */
-@Persistent
+@Persistent(version=1)
 public class AddTable extends UpdateMetadata<TableMetadata> {
     private static final long serialVersionUID = 1L;
 
@@ -68,7 +73,7 @@ public class AddTable extends UpdateMetadata<TableMetadata> {
     private /*final*/ String parentName;
     private /*final*/ List<String> primaryKey;
 
-    /* 
+    /*
      * The major key is the shard key. Since this is a DPL object, the
      * field cannot be renamed without upgrade issues, so we will
      * maintain the name.
@@ -78,35 +83,44 @@ public class AddTable extends UpdateMetadata<TableMetadata> {
     private /*final*/ boolean r2compat;
     private /*final*/ int schemaId;
     private /*final*/ String description;
+    /*
+     * Note that we persist the base types instead of a TimeToLive instance
+     * in order to avoid having to add DPL annotations to TimeToLive and its
+     * superclass. If ttlUnit is null, no ttl was specified.
+     */
+    private /*final*/ int ttl;
+    private /*final*/ TimeUnit ttlUnit;
+    private /*final*/ List<Integer> primaryKeySizes;
 
     /**
      */
     public AddTable(MetadataPlan<TableMetadata> plan,
-                    String tableName,
-                    String parentName,
-                    FieldMap fieldMap,
-                    List<String> primaryKey,
-                    List<String> shardKey,
-                    boolean r2compat,
-                    int schemaId,
-                    String description) {
+                    TableImpl table,
+                    String parentName) {
         super(plan);
 
         /*
          * Caller verifies parameters
          */
 
-        this.tableName = tableName;
+        this.tableName = table.getName();
         this.parentName = parentName;
-        this.primaryKey = primaryKey;
+        this.primaryKey = table.getPrimaryKey();
+        this.primaryKeySizes = table.getPrimaryKeySizes();
 
         /* Note that the major key is the shard key */
-        this.majorKey = shardKey;
-
-        this.fieldMap = fieldMap;
-        this.r2compat = r2compat;
-        this.schemaId = schemaId;
-        this.description = description;
+        this.majorKey = table.getShardKey();
+        if (table.getDefaultTTL() != null) {
+            this.ttl = (int) table.getDefaultTTL().getValue();
+            this.ttlUnit = table.getDefaultTTL().getUnit();
+        } else {
+            this.ttl = 0;
+            this.ttlUnit = null;
+        }
+        this.fieldMap = table.getFieldMap();
+        this.r2compat = table.isR2compatible();
+        this.schemaId = table.getSchemaId();
+        this.description = table.getDescription();
 
         final TableMetadata md = plan.getMetadata();
         if ((md != null) && md.tableExists(tableName, parentName)) {
@@ -165,11 +179,14 @@ public class AddTable extends UpdateMetadata<TableMetadata> {
          */
         if (!md.tableExists(tableName, parentName)) {
             // TODO the add table method does not check for dup
-            md.addTable(tableName, 
+            md.addTable(tableName,
                         parentName,
                         primaryKey,
+                        primaryKeySizes,
                         majorKey,
                         fieldMap,
+                        (ttlUnit == null) ? null :
+                        TimeToLive.createTimeToLive(ttl, ttlUnit),
                         r2compat,
                         schemaId,
                         description,
@@ -212,7 +229,7 @@ public class AddTable extends UpdateMetadata<TableMetadata> {
 
         AddTable other = (AddTable) t;
         if (!tableName.equalsIgnoreCase(other.tableName)) {
-            return false; 
+            return false;
         }
 
         if (parentName == null) {

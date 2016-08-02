@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,6 +44,8 @@ package oracle.kv.impl.admin;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 import oracle.kv.impl.admin.DdlHandler.DdlOperation;
 import oracle.kv.impl.api.table.TableImpl;
@@ -120,14 +122,9 @@ public abstract class TableDdlOperation  implements DdlOperation {
                     ddlHandler.operationSucceeds();
                     return;
                 }
-                
+
                 final int planId = admin.getPlanner().createAddTablePlan
-                    ("CreateTable", table.getName(),
-                     table.getParentName(),
-                     table.getFieldMap(),
-                     table.getPrimaryKey(),
-                     table.getShardKey(),
-                     false, 0, table.getDescription());
+                    ("CreateTable", table, table.getParentName());
                 ddlHandler.approveAndExecute(planId);
             } catch (IllegalCommandException ice) {
                 ddlHandler.operationFails(opName() + " failed for table " +
@@ -195,7 +192,8 @@ public abstract class TableDdlOperation  implements DdlOperation {
                 final int planId =
                     ddlHandler.getAdmin().getPlanner().createEvolveTablePlan
                         ("AlterTable", table.getFullName(),
-                         tableVersion, table.getFieldMap());
+                         tableVersion, table.getFieldMap(),
+                         table.getDefaultTTL());
                 ddlHandler.approveAndExecute(planId);
             } catch (IllegalCommandException ice) {
                 ddlHandler.operationFails("ALTER TABLE failed for table " +
@@ -203,7 +201,7 @@ public abstract class TableDdlOperation  implements DdlOperation {
             }
         }
     }
-    
+
     /**
      * Operation of dropping table, needing DROP_ANY_TABLE privilege and
      * DROP_INDEX (if to remove data) for non-owners.
@@ -263,7 +261,7 @@ public abstract class TableDdlOperation  implements DdlOperation {
     }
 
     /**
-     * Operation of creating index, needing CREATE_INDEX privilege.
+     * Create an index (normal or full-text). Requires CREATE_INDEX privilege.
      */
     public static class CreateIndex extends TableDdlOperation {
         private final OperationContext opCtx;
@@ -271,102 +269,20 @@ public abstract class TableDdlOperation  implements DdlOperation {
         private final String indexName;
         private final String tableName;
         private final String[] newFields;
+        private final AnnotatedField[] annotatedFields;
+        private final Map<String, String> properties;
         private final String indexComments;
+        private final boolean isFullText;
 
         public CreateIndex(TableImpl tableIfExists,
                            String tableName,
                            String indexName,
                            String[] newFields,
+                           AnnotatedField[] annotatedFields,
+                           Map<String, String> properties,
                            String indexComments,
                            boolean ifNotExists) {
-            super("CREATE INDEX" + (ifNotExists ? " IF NOT EXISTS" : "") ,
-                  tableIfExists);
-
-            this.ifNotExists = ifNotExists;
-            this.indexName = indexName;
-            this.tableName = tableName;
-            this.newFields = newFields;
-            this.indexComments = indexComments;
-
-            if (tableIfExists == null) {
-                opCtx = new NoTableOpContext(tableName);
-            } else {
-                opCtx = new TableContext(
-                    opName(), tableIfExists,
-                    new TablePrivilege.CreateIndex(tableIfExists.getId()));
-            }
-        }
-
-        @Override
-        public OperationContext getOperationCtx() {
-            return opCtx;
-        }
-
-        /**
-         * Returns true if the index in the current tableDdl instance exists
-         * and is equal to the fields of the current tableDdl.
-         */
-        private boolean indexExistsAndEqual(Admin admin) {
-            TableMetadata metadata =
-                admin.getMetadata(TableMetadata.class,
-                                  MetadataType.TABLE);
-            if (metadata != null) {
-                Index index = metadata.getIndex(tableName, indexName);
-                if (index != null) {
-                    List<String> fields = index.getFields();
-                    if (newFields.length == fields.size()) {
-                        for (int i = 0; i < newFields.length; i++) {
-                            if (!newFields[i].equalsIgnoreCase(fields.get(i))) {
-                                return false;
-                            }
-                        }
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
-        @Override
-        public void perform(DdlHandler ddlHandler) {
-            final Admin admin = ddlHandler.getAdmin();
-            if (ifNotExists && indexExistsAndEqual(admin)) {
-                ddlHandler.operationSucceeds();
-                return;
-            }
-            try {
-                final int planId = admin.getPlanner().createAddIndexPlan
-                    ("CreateIndex", indexName, tableName, newFields,
-                     indexComments);
-                ddlHandler.approveAndExecute(planId);
-            } catch (IllegalCommandException ice) {
-                ddlHandler.operationFails("CREATE INDEX failed for table " +
-                    tableName + ", index " + indexName + ": " +
-                    ice.getMessage());
-
-            }
-        }
-    }
-
-    /**
-     * Operation of creating fulltext index, needing CREATE_INDEX privilege.
-     * TBD: consider merging with CreateIndex.
-     */
-    public static class CreateTextIndex extends TableDdlOperation {
-        private final OperationContext opCtx;
-        private final boolean ifNotExists;
-        private final String indexName;
-        private final String tableName;
-        private AnnotatedField[] newFields;
-        private final String indexComments;
-
-        public CreateTextIndex(TableImpl tableIfExists,
-                           String tableName,
-                           String indexName,
-                           AnnotatedField[] newFields,
-                           String indexComments,
-                           boolean ifNotExists) {
-            super("CREATE FULLTEXT INDEX" +
+            super("CREATE [FULLTEXT] INDEX" +
                   (ifNotExists ? " IF NOT EXISTS" : "") ,
                   tableIfExists);
 
@@ -374,7 +290,12 @@ public abstract class TableDdlOperation  implements DdlOperation {
             this.indexName = indexName;
             this.tableName = tableName;
             this.newFields = newFields;
+            this.annotatedFields = annotatedFields;
+            this.properties = properties;
             this.indexComments = indexComments;
+            isFullText = (annotatedFields != null);
+
+            assert newFields == null || annotatedFields == null;
 
             if (tableIfExists == null) {
                 opCtx = new NoTableOpContext(tableName);
@@ -399,22 +320,52 @@ public abstract class TableDdlOperation  implements DdlOperation {
                 admin.getMetadata(TableMetadata.class,
                                   MetadataType.TABLE);
             if (metadata != null) {
-                IndexImpl index = (IndexImpl)metadata.getIndex(tableName,
-                                                               indexName);
+                IndexImpl index =
+                    (IndexImpl) metadata.getIndex(tableName, indexName);
                 if (index != null) {
-                    List<AnnotatedField> fields =
-                        index.getFieldsWithAnnotations();
-                    if (newFields.length == fields.size()) {
-                        for (int i = 0; i < newFields.length; i++) {
-                            if (!newFields[i].equals(fields.get(i))) {
-                                return false;
-                            }
+                    if (isFullText) {
+                        if (!Objects.equals(properties,
+                                            index.getProperties())) {
+                            return false;
                         }
-                        return true;
+                        List<AnnotatedField> fields =
+                            index.getFieldsWithAnnotations();
+                        return compareAnnotatedFields(fields);
                     }
+                    List<String> fields = index.getFields();
+                    return compareFields(fields);
                 }
             }
             return false;
+        }
+
+        /**
+         * Compare our list of regular fields against the given list.
+         */
+        private boolean compareFields(List<String> fields) {
+            if (newFields.length == fields.size()) {
+                for (int i = 0; i < newFields.length; i++) {
+                    if (!newFields[i].equalsIgnoreCase(fields.get(i))) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        /**
+         * Compare our list of annotated fields against the given list.
+         * This method is package-visible for testing purposes.
+         */
+        boolean compareAnnotatedFields(List<AnnotatedField> fields) {
+            if (annotatedFields.length == fields.size()) {
+                for (int i = 0; i < annotatedFields.length; i++) {
+                    if (!annotatedFields[i].equals(fields.get(i))) {
+                        return false;
+                    }
+                }
+            }
+            return true;
         }
 
         @Override
@@ -425,16 +376,22 @@ public abstract class TableDdlOperation  implements DdlOperation {
                 return;
             }
             try {
-                final int planId = admin.getPlanner().createAddTextIndexPlan
-                    ("CreateIndex", indexName, tableName, newFields,
-                     indexComments);
+                int planId;
+                if (!isFullText) {
+                    planId = admin.getPlanner().createAddIndexPlan
+                        ("CreateIndex", indexName, tableName, newFields,
+                         indexComments);
+                } else {
+                    planId = admin.getPlanner().createAddTextIndexPlan
+                        ("CreateTextIndex", indexName, tableName,
+                         annotatedFields, properties, indexComments);
+                }
                 ddlHandler.approveAndExecute(planId);
             } catch (IllegalCommandException ice) {
-                ddlHandler.operationFails
-                    ("CREATE FULLTEXT INDEX failed for table " +
+                ddlHandler.operationFails(
+                    "CREATE [FULLTEXT] INDEX failed for table " +
                     tableName + ", index " + indexName + ": " +
                     ice.getMessage());
-
             }
         }
     }
@@ -528,7 +485,7 @@ public abstract class TableDdlOperation  implements DdlOperation {
         private final boolean isShowTables;
         private final boolean showIndexes;
         private final boolean asJson;
-        
+
         public ShowTableOrIndex(String tableName,
                                 boolean isShowTables,
                                 boolean showIndexes,
@@ -616,7 +573,7 @@ public abstract class TableDdlOperation  implements DdlOperation {
                 sb.append("\" : [");
                 for (String s : list) {
                     if (!first) {
-                        sb.append(","); 
+                        sb.append(",");
                     }
                     first = false;
                     sb.append("\"");

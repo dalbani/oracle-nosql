@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -61,11 +61,30 @@ public interface MapValue extends FieldValue {
      */
     static final String ANONYMOUS = "[]";
 
+   /**
+     * Returns a deep copy of this object.
+     *
+     * @return a deep copy of this object
+     */
+    @Override
+    public MapValue clone();
+
+    /**
+     * Returns a String representation of the value.  The value is returned
+     * is a JSON string, and is the same as that returned by
+     * {@link FieldValue#toJsonString}.
+     *
+     * @return a String representation of the value
+     */
+    @Override
+    public String toString();
+
     /**
      * Returns the MapDef that defines the content of this map.
      *
      * @return the MapDef
      */
+    @Override
     MapDef getDefinition();
 
     /**
@@ -299,22 +318,4 @@ public interface MapValue extends FieldValue {
      * is not an ArrayDef
      */
     ArrayValue putArray(String fieldName);
-
-    /**
-     * Returns a deep copy of this object.
-     *
-     * @return a deep copy of this object
-     */
-    @Override
-    public MapValue clone();
-
-    /**
-     * Returns a String representation of the value.  The value is returned
-     * is a JSON string, and is the same as that returned by
-     * {@link FieldValue#toJsonString}.
-     *
-     * @return a String representation of the value
-     */
-    @Override
-    public String toString();
 }

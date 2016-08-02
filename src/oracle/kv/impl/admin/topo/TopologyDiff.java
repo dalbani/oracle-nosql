@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -58,6 +58,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.DatacenterType;
@@ -108,6 +110,10 @@ public class TopologyDiff {
 
     private final Set<RepNodeId> newRNs;
 
+    private final Set<ArbNodeId> newANs;
+    private final Set<ArbNodeId> removedANs;
+
+
     /* Map of changes to zone types */
     private final Map<DatacenterId, DatacenterType> changedZones;
 
@@ -142,6 +148,8 @@ public class TopologyDiff {
     private int numCreatedPartitions;
     private int numPartitionMigrations;
     private int numRelocatedRNs;
+    private int numRelocatedANs;
+
 
     /** Mount point assignments created by the topology building phase. */
     private Map<RepNodeId, String> mountPointAssignments;
@@ -201,6 +209,8 @@ public class TopologyDiff {
         removedShards = new HashSet<RepGroupId>();
         changedZones = new HashMap<DatacenterId, DatacenterType>();
         newRNs = new HashSet<RepNodeId>();
+        newANs = new HashSet<ArbNodeId>();
+        removedANs = new HashSet<ArbNodeId>();
 
         pMigrationSources = new HashSet<RepGroupId>();
         pMigrationDestinations = new HashSet<RepGroupId>();
@@ -236,6 +246,19 @@ public class TopologyDiff {
     public int getNumRelocatedRNs() {
         return numRelocatedRNs;
     }
+
+    private int getNumNewANs() {
+        return newANs.size();
+    }
+
+    private int getNumRelocatedANs() {
+        return numRelocatedANs;
+    }
+
+    private int getNumRemovedANs() {
+        return removedANs.size();
+    }
+
 
     /**
      * Returns true if the specified zone type is changed.
@@ -301,6 +324,24 @@ public class TopologyDiff {
                 append("\n");
         }
 
+        int nNewANs = getNumNewANs();
+        if (nNewANs > 0) {
+            sb.append("Create ").append(nNewANs).append(" AN").
+                append(plural(nNewANs)).append("\n");
+        }
+
+        moved = getNumRelocatedANs();
+        if (moved > 0) {
+            sb.append("Relocate ").append(moved).append(" AN").
+                append(plural(moved)).append("\n");
+        }
+
+        moved = getNumRemovedANs();
+        if (moved > 0) {
+            sb.append("Remove ").append(moved).append(" AN").
+                append(plural(moved)).append("\n");
+        }
+
         /* If some summary information has been generated, add a newline */
         if (sb.length() > 0) {
             sb.append("\n");
@@ -331,6 +372,36 @@ public class TopologyDiff {
                 for (RelocatedRN rel : c.getRelocatedRNs()) {
                     sb.append(indent).append(rel).append("\n");
                 }
+            }
+
+            newCreates = c.newlyCreatedANs.size();
+            if (newCreates > 0) {
+                sb.append(indent);
+                sb.append(newCreates).append(" new AN").
+                    append(plural(newCreates)).append(": ");
+
+                for (ArbNodeId arbId : c.newlyCreatedANs) {
+                    sb.append(arbId).append(" ");
+                }
+                sb.append("\n");
+            }
+
+            if (!c.getRelocatedANs().isEmpty()) {
+                for (RelocatedAN rel : c.getRelocatedANs()) {
+                    sb.append(indent).append(rel).append("\n");
+                }
+            }
+
+            final int nRemovedANs = c.removedANs.size();
+            if (nRemovedANs > 0) {
+                sb.append(indent);
+                sb.append(nRemovedANs).append(" remove AN").
+                    append(plural(nRemovedANs)).append(": ");
+
+                for (ArbNodeId arbId : c.removedANs) {
+                    sb.append(arbId).append(" ");
+                }
+                sb.append("\n");
             }
 
             if (c.newPartitionCount != 0) {
@@ -452,6 +523,19 @@ public class TopologyDiff {
          */
         identifyRelocatedRNs(originalRNs);
 
+        Set<ArbNodeId> originalANs = source.getArbNodeIds();
+        Set<ArbNodeId> targetANs = target.getArbNodeIds();
+        newANs.addAll(targetANs);
+        newANs.removeAll(originalANs);
+
+        removedANs.addAll(originalANs);
+        removedANs.removeAll(targetANs);
+
+        identifyANsToShards();
+
+        identifyRelocatedANs(originalANs);
+
+
         /*
          * Find all the shards that did not exist before..
          */
@@ -533,6 +617,54 @@ public class TopologyDiff {
                 change.addRelocatedRN(rel);
                 numRelocatedRNs++;
             }
+        }
+    }
+
+    /**
+     * Add information about which shards have relocated Arbiters
+     */
+    private void identifyRelocatedANs(Set<ArbNodeId> originalARBs) {
+        Topology target = candidate.getTopology();
+        for (ArbNodeId existingARBId : originalARBs) {
+            StorageNodeId sourceSNId =
+                source.get(existingARBId).getStorageNodeId();
+            ArbNode targetAN = target.get(existingARBId);
+            if (targetAN == null) {
+                /* AN is not in the target topo */
+                continue;
+            }
+            StorageNodeId targetSNId = targetAN.getStorageNodeId();
+
+            if (!sourceSNId.equals(targetSNId)) {
+                RelocatedAN rel = new RelocatedAN(existingARBId,
+                                                  sourceSNId,
+                                                  targetSNId);
+
+                ShardChange change =
+                    getShardChange(new RepGroupId(existingARBId.getGroupId()));
+                change.addRelocatedANs(rel);
+                numRelocatedANs++;
+            }
+        }
+    }
+
+    /**
+     * Find shards and add/remove Arbiters
+     */
+    private void identifyANsToShards() {
+
+        /* Identify all brand new ARBs, grouping them by shard. */
+        for (ArbNodeId arbId : newANs) {
+            ShardChange change =
+                getShardChange(new RepGroupId(arbId.getGroupId()));
+            change.addNewAN(arbId);
+        }
+
+        /* Identify all removed ANs, grouping them by shard. */
+        for (ArbNodeId arbId : removedANs) {
+            ShardChange change =
+                getShardChange(new RepGroupId(arbId.getGroupId()));
+            change.addRemovedAN(arbId);
         }
     }
 
@@ -687,6 +819,15 @@ public class TopologyDiff {
         /* RNs that are to be moved from one SN to another. */
         private final Set<RelocatedRN> relocatedRNs;
 
+        /* ANs that need to be created */
+        private final Set<ArbNodeId> newlyCreatedANs;
+
+        /* ANs that are to be moved from one SN to another. */
+        private final Set<RelocatedAN> relocatedANs;
+
+        private final Set<ArbNodeId> removedANs;
+
+
         /*
          * The number of partitions that should be created on this shard.
          * Applies only to brand new shards. Partitions that are migrated
@@ -720,6 +861,31 @@ public class TopologyDiff {
             (new Comparator<RepNodeId>() {
                 @Override
                 public int compare(RepNodeId o1, RepNodeId o2) {
+                    return o1.getNodeNum() - o2.getNodeNum();
+                }
+
+            });
+            relocatedANs = new TreeSet<RelocatedAN>
+            (new Comparator<RelocatedAN>() {
+                @Override
+                public int compare(RelocatedAN o1, RelocatedAN o2) {
+                    return o1.getArbId().getNodeNum() -
+                        o2.getArbId().getNodeNum();
+                }
+
+            });
+            newlyCreatedANs = new TreeSet<ArbNodeId>
+            (new Comparator<ArbNodeId>() {
+                @Override
+                public int compare(ArbNodeId o1, ArbNodeId o2) {
+                    return o1.getNodeNum() - o2.getNodeNum();
+                }
+
+            });
+            removedANs = new TreeSet<ArbNodeId>
+            (new Comparator<ArbNodeId>() {
+                @Override
+                public int compare(ArbNodeId o1, ArbNodeId o2) {
                     return o1.getNodeNum() - o2.getNodeNum();
                 }
 
@@ -758,6 +924,30 @@ public class TopologyDiff {
 
         void addRelocatedRN(RelocatedRN rel) {
             relocatedRNs.add(rel);
+        }
+
+        public Set<ArbNodeId> getNewANs() {
+            return newlyCreatedANs;
+        }
+
+        void addNewAN(ArbNodeId arbId) {
+            newlyCreatedANs.add(arbId);
+        }
+
+        public Set<ArbNodeId> getRemovedANs() {
+            return removedANs;
+        }
+
+        void addRemovedAN(ArbNodeId arbId) {
+            removedANs.add(arbId);
+        }
+
+        public Set<RelocatedAN> getRelocatedANs() {
+            return relocatedANs;
+        }
+
+        void addRelocatedANs(RelocatedAN rel) {
+            relocatedANs.add(rel);
         }
 
         /**
@@ -831,6 +1021,45 @@ public class TopologyDiff {
             } else {
                 sb.append(newMountPoint);
             }
+            return sb.toString();
+        }
+    }
+
+    /**
+     * Records info for ANs that have moved to a different SN.
+     */
+    public static class RelocatedAN {
+        private final ArbNodeId arbId;
+        private final StorageNodeId oldSNId;
+        private final StorageNodeId newSNId;
+
+        RelocatedAN(ArbNodeId arbId,
+                    StorageNodeId oldSNId,
+                    StorageNodeId newSNId) {
+            this.arbId = arbId;
+            this.oldSNId = oldSNId;
+            this.newSNId = newSNId;
+        }
+
+        public ArbNodeId getArbId() {
+            return arbId;
+        }
+
+        public StorageNodeId getNewSNId() {
+            return newSNId;
+        }
+
+        public StorageNodeId getOldSNId() {
+            return oldSNId;
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Relocate ").append(arbId).append(" from ");
+            sb.append(oldSNId).append(" ");
+            sb.append(" to ");
+            sb.append(newSNId).append(" ");
             return sb.toString();
         }
     }

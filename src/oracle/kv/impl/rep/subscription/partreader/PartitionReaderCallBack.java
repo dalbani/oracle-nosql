@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -54,23 +54,27 @@ public interface PartitionReaderCallBack {
     /**
      * callback function to process a COPY or PUT operation
      *
-     * @param pid          id of partition
-     * @param vlsn         vlsn of operation
-     * @param key          key to copy or put
-     * @param value        value part of operation
+     * @param pid             id of partition
+     * @param vlsn            vlsn of operation
+     * @param expirationTime  expiration time of record
+     * @param key             key to copy or put
+     * @param value           value part of operation
      */
-    void processCopy(PartitionId pid, long vlsn, byte[] key, byte[] value);
+    void processCopy(PartitionId pid, long vlsn, long expirationTime,
+                     byte[] key, byte[] value);
 
     /**
      * callback function to process a COPY or PUT operation
-     * 
-     * @param pid          id of partition
-     * @param vlsn         vlsn of operation
-     * @param key          key to copy or put
-     * @param value        value part of operation
-     * @param txnId        id of transaction
+     *
+     * @param pid             id of partition
+     * @param vlsn            vlsn of operation
+     * @param expirationTime  expiration time of record
+     * @param key             key to copy or put
+     * @param value           value part of operation
+     * @param txnId           id of transaction
      */
-    void processPut(PartitionId pid, long vlsn, byte[] key, byte[] value,
+    void processPut(PartitionId pid, long vlsn, long expirationTime,
+                    byte[] key, byte[] value,
                     long txnId);
 
     /**
@@ -110,7 +114,7 @@ public interface PartitionReaderCallBack {
     /**
      * callback function to process EOD
      *
-     * @param pid  id of partition 
+     * @param pid  id of partition
      */
     void processEOD(PartitionId pid);
 

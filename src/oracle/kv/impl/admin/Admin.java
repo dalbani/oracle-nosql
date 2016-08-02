@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,6 +45,7 @@ package oracle.kv.impl.admin;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.Serializable;
 import java.lang.Thread.UncaughtExceptionHandler;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -78,18 +79,17 @@ import oracle.kv.impl.admin.criticalevent.CriticalEvent;
 import oracle.kv.impl.admin.criticalevent.EventRecorder;
 import oracle.kv.impl.admin.criticalevent.EventRecorder.LatestEventTimestamps;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.DatacenterParams;
 import oracle.kv.impl.admin.param.GlobalParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.admin.param.StorageNodePool;
-import oracle.kv.impl.admin.plan.AbstractPlan;
 import oracle.kv.impl.admin.plan.DeploymentInfo;
 import oracle.kv.impl.admin.plan.ExecutionState.ExceptionTransfer;
 import oracle.kv.impl.admin.plan.Plan;
 import oracle.kv.impl.admin.plan.PlanRun;
-import oracle.kv.impl.admin.plan.PlanStore;
 import oracle.kv.impl.admin.plan.Planner;
 import oracle.kv.impl.admin.plan.StatusReport;
 import oracle.kv.impl.admin.topo.RealizedTopology;
@@ -98,8 +98,6 @@ import oracle.kv.impl.admin.topo.Rules.Results;
 import oracle.kv.impl.admin.topo.TopologyBuilder;
 import oracle.kv.impl.admin.topo.TopologyCandidate;
 import oracle.kv.impl.admin.topo.TopologyDiff;
-import oracle.kv.impl.admin.topo.TopologyStore;
-import oracle.kv.impl.api.table.TableMetadataProxy;
 import oracle.kv.impl.client.admin.ExecutionInfo;
 import oracle.kv.impl.client.admin.ExecutionInfoImpl;
 import oracle.kv.impl.fault.CommandFaultException;
@@ -109,7 +107,6 @@ import oracle.kv.impl.fault.ProcessExitCode;
 import oracle.kv.impl.metadata.Metadata;
 import oracle.kv.impl.metadata.Metadata.MetadataType;
 import oracle.kv.impl.metadata.MetadataInfo;
-import oracle.kv.impl.metadata.MetadataStore;
 import oracle.kv.impl.monitor.Monitor;
 import oracle.kv.impl.monitor.MonitorKeeper;
 import oracle.kv.impl.param.LoadParameters;
@@ -118,6 +115,8 @@ import oracle.kv.impl.param.ParameterMap;
 import oracle.kv.impl.param.ParameterState;
 import oracle.kv.impl.param.ParameterTracker;
 import oracle.kv.impl.param.ParameterUtils;
+import oracle.kv.impl.query.QueryException;
+import oracle.kv.impl.query.QueryStateException;
 import oracle.kv.impl.security.AccessChecker;
 import oracle.kv.impl.security.ClientProxyCredentials;
 import oracle.kv.impl.security.KVStoreUserPrincipal;
@@ -128,7 +127,6 @@ import oracle.kv.impl.security.metadata.SecurityMDListener;
 import oracle.kv.impl.security.metadata.SecurityMDTracker;
 import oracle.kv.impl.security.metadata.SecurityMDUpdater;
 import oracle.kv.impl.security.metadata.SecurityMetadata;
-import oracle.kv.impl.security.metadata.SecurityMetadataProxy;
 import oracle.kv.impl.sna.StorageNodeAgentAPI;
 import oracle.kv.impl.sna.StorageNodeStatus;
 import oracle.kv.impl.test.TestHook;
@@ -136,6 +134,7 @@ import oracle.kv.impl.test.TestHookExecute;
 import oracle.kv.impl.test.TestStatus;
 import oracle.kv.impl.topo.AdminId;
 import oracle.kv.impl.topo.AdminType;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.DatacenterType;
@@ -176,7 +175,6 @@ import com.sleepycat.je.Durability.ReplicaAckPolicy;
 import com.sleepycat.je.Durability.SyncPolicy;
 import com.sleepycat.je.EnvironmentConfig;
 import com.sleepycat.je.LockConflictException;
-import com.sleepycat.je.LockMode;
 import com.sleepycat.je.ThreadInterruptedException;
 import com.sleepycat.je.Transaction;
 import com.sleepycat.je.TransactionConfig;
@@ -206,15 +204,7 @@ import com.sleepycat.je.rep.impl.RepParams;
 import com.sleepycat.je.rep.util.ReplicationGroupAdmin;
 import com.sleepycat.je.rep.utilint.HostPortPair;
 import com.sleepycat.je.utilint.StoppableThread;
-import com.sleepycat.persist.EntityStore;
-import com.sleepycat.persist.IndexNotAvailableException;
-import com.sleepycat.persist.PrimaryIndex;
-import com.sleepycat.persist.StoreConfig;
-import com.sleepycat.persist.evolve.Deleter;
-import com.sleepycat.persist.evolve.Mutations;
-import com.sleepycat.persist.model.AnnotationModel;
 import com.sleepycat.persist.model.Entity;
-import com.sleepycat.persist.model.EntityModel;
 import com.sleepycat.persist.model.PrimaryKey;
 
 /**
@@ -226,7 +216,6 @@ import com.sleepycat.persist.model.PrimaryKey;
 public class Admin
         implements MonitorKeeper, ParameterListener, StateChangeListener {
 
-    public static final String ADMIN_STORE_NAME = "AdminEntityStore";
     public static final String CAUSE_CREATE = "after create";
     public static final String CAUSE_APPROVE = "after approval";
     private static final String CAUSE_CANCEL = "after cancel";
@@ -240,9 +229,6 @@ public class Admin
 
     /* For testing only */
     public static TestHook<Admin> EXECUTE_HOOK;
-
-    /* Persistent storage of the current topology, candidates, and history. */
-    private final TopologyStore topoStore;
 
     /*
      * The parameters used to configure the Admin instance.
@@ -294,12 +280,6 @@ public class Admin
     private final StateTracker stateTracker;
     private final ReplicatedEnvironment environment;
 
-    /*
-     * Will be decommissioned when all admin entities are stored using basic
-     * JE APIs.
-     */
-    private EntityStore eStore;
-
     private final AdminService owner; /* May be null. */
 
     private final UncaughtExceptionHandler exceptionHandler;
@@ -326,11 +306,10 @@ public class Admin
      */
     private volatile KVVersion adminVersion = KVVersion.PREREQUISITE_VERSION;
 
-    /* Underlying non-DPL database for admin plans */
-    private volatile AdminPlanDatabase adminPlanDb;
+    private final AdminStores stores;
 
-    /* Plan store handle */
-    private volatile PlanStore planStore;
+    /* Thread to monotor Admin upgrade. */
+    private StoppableThread upgradeMonitor;
 
     /*
      * Public constructor for unit test.
@@ -426,7 +405,7 @@ public class Admin
 
         maybeResetRepGroup();
         environment = openEnv();
-        topoStore = new TopologyStore(this);
+        stores = new AdminStores(this);
 
         /*
          * Some initialization of the Admin takes place in a separate thread
@@ -444,10 +423,6 @@ public class Admin
 
     public Logger getLogger() {
         return logger;
-    }
-
-    public EntityStore getEStore() {
-        return eStore;
     }
 
     /**
@@ -482,11 +457,10 @@ public class Admin
                 @Override
                 Map<Integer, Plan> doTransaction(Transaction txn) {
                     final Map<Integer, Plan> plans =
-                                AbstractPlan.fetchActivePlans(planStore,
-                                                              txn,
-                                                              planner,
-                                                              myParams);
-                    topoStore.initCachedStartTime(txn);
+                            stores.getPlanStore().getActivePlans(txn,
+                                                                   planner,
+                                                                   myParams);
+                    stores.getTopologyStore().initCachedStartTime(txn);
                     logger.log(Level.FINE, "Fetched {0} plans.", plans.size());
 
                     return plans;
@@ -744,7 +718,7 @@ public class Admin
             @Override
             Void doTransaction(Transaction txn) {
 
-                final Topology topology = topoStore.readTopology(txn);
+                final Topology topology = stores.getTopology(txn);
                 parameters = readParameters(txn);
                 memo = readMemo(txn);
 
@@ -762,18 +736,18 @@ public class Admin
 
                     final String storeName =
                         myParams.getGlobalParams().getKVStoreName();
-                    topoStore.save(txn, new RealizedTopology(storeName));
+                    stores.putTopology(txn, new RealizedTopology(storeName));
 
                     logger.fine("Creating Parameters");
 
                     /* Seed new parameters with info from myParams. */
                     parameters = new Parameters(storeName);
                     parameters.update(myParams.getGlobalParams());
-                    parameters.persist(eStore, txn);
+                    stores.putParameters(txn, parameters);
 
                     logger.fine("Creating Memo");
                     memo = new Memo(1, new LatestEventTimestamps(0L, 0L, 0L));
-                    memo.persist(eStore, txn);
+                    stores.putMemo(txn, memo);
 
                     logger.info("Admin database initialized");
 
@@ -822,14 +796,17 @@ public class Admin
         closing = true;
         eventRecorder.shutdown();
 
+        if (upgradeMonitor != null) {
+            upgradeMonitor.shutdownThread(logger);
+        }
+
         /* This will wait for running plans to complete (if force == false) */
         shutdownPlanner(force, true);
         monitor.shutdown();
-        closeAdminPlanDb();
 
         if (force) {
             try {
-                eStore.close();
+                stores.close();
             } catch (Exception possible) /* CHECKSTYLE:OFF */ {
                 /*
                  * Ignore exceptions that come from a forced close of the
@@ -843,7 +820,7 @@ public class Admin
                 envImpl.close(false);
             }
         } else {
-            eStore.close();
+            stores.close();
             environment.close();
         }
         /* Release all files. */
@@ -945,7 +922,7 @@ public class Admin
             (environment, RunTransaction.readOnly, logger) {
             @Override
             Topology doTransaction(Transaction txn) {
-                return topoStore.readTopology(txn);
+                return stores.getTopology(txn);
             }
         }.run();
     }
@@ -992,7 +969,7 @@ public class Admin
 
             @Override
             Void doTransaction(Transaction txn) {
-                memo.persist(eStore, txn);
+                stores.putMemo(txn, memo);
                 return null;
             }
         }.run();
@@ -1039,7 +1016,7 @@ public class Admin
             @Override
             Void doTransaction(Transaction txn) {
                 synchronized(plan) {
-                   plan.persist(planStore, txn);
+                   stores.putPlan(txn, plan);
                 }
                 return null;
             }
@@ -1080,6 +1057,22 @@ public class Admin
         checkTopoVersion(topology);
         storeTopoAndParams(topology, info, plan);
     }
+
+    /**
+     * Persists a new topology and ArbNode params after deploying a single ARB.
+     * See note above regarding synchronization.
+     */
+    public synchronized
+        void saveTopoAndARBParam(Topology topology,
+                                 DeploymentInfo info,
+                                 ArbNodeParams anp,
+                                 Plan plan) {
+        checkTopoVersion(topology);
+        parameters.add(anp);
+        storeTopoAndParams(topology, info, plan);
+    }
+
+
 
     /**
      * Persists a new topology and RepNode params after deploying a single RN.
@@ -1167,6 +1160,23 @@ public class Admin
         storeTopoAndParams(topology, info, plan);
     }
 
+
+    /**
+     * Persists a new topology and removes the specified ArbNode from params.
+     * See note above regarding synchronization.
+     */
+    public synchronized void saveTopoAndRemoveAN(Topology topology,
+                                                 DeploymentInfo info,
+                                                 ArbNodeId targetAN,
+                                                 Plan plan) {
+
+        checkTopoVersion(topology);
+
+        /* Remove the anId from the params and all pools. */
+        parameters.remove(targetAN);
+        storeTopoAndParams(topology, info, plan);
+    }
+
     /**
      * Persists a new topology and params after RemoveDatacenterPlan runs.
      * See note above regarding synchronization.
@@ -1190,6 +1200,7 @@ public class Admin
                                                DeploymentInfo info,
                                                Set<RepNodeParams> repNodeParams,
                                                Set<AdminParams> adminParams,
+                                               Set<ArbNodeParams> arbNodeParams,
                                                Plan plan) {
 
         checkTopoVersion(topology);
@@ -1206,6 +1217,10 @@ public class Admin
             parameters.update(ap);
         }
 
+        for (ArbNodeParams arbParams : arbNodeParams) {
+            parameters.update(arbParams);
+        }
+
         storeTopoAndParams(topology, info, plan);
     }
 
@@ -1214,7 +1229,8 @@ public class Admin
      * runs.
      */
     public synchronized void saveParams(Set<RepNodeParams> repNodeParams,
-                                        Set<AdminParams> adminParams) {
+                                        Set<AdminParams> adminParams,
+                                        Set<ArbNodeParams> arbNodeParams) {
 
         /*
          * Use parameters.update rather than add, because we may be
@@ -1227,6 +1243,11 @@ public class Admin
         for (AdminParams ap : adminParams) {
             parameters.update(ap);
         }
+
+        for (ArbNodeParams arbParams : arbNodeParams) {
+            parameters.update(arbParams);
+        }
+
 
         storeParameters();
     }
@@ -1254,7 +1275,7 @@ public class Admin
                  */
                 Topology t = null;
                 synchronized (plan) {
-                    t = topoStore.readTopology(txn);
+                    t = stores.getTopology(txn);
 
                     /*
                      * If the partition is already at the target, there is no
@@ -1270,11 +1291,11 @@ public class Admin
                      * the topology is being updated. Save the plan if needed.
                      */
                     if (plan.updatingMetadata(t)) {
-                        plan.persist(planStore, txn);
+                        stores.putPlan(txn, plan);
                     }
                 }
 
-                topoStore.save(txn, new RealizedTopology(t, info));
+                stores.putTopology(txn, new RealizedTopology(t, info));
                 return true;
             }
         }.run();
@@ -1285,6 +1306,15 @@ public class Admin
      */
     public synchronized void updateParams(RepNodeParams rnp) {
         parameters.update(rnp);
+        storeParameters();
+    }
+
+
+    /**
+     * Persists new ArbNodeParams following a ChangeParamsPlan.
+     */
+    public synchronized void updateParams(ArbNodeParams anp) {
+        parameters.update(anp);
         storeParameters();
     }
 
@@ -1465,14 +1495,16 @@ public class Admin
                                  logger) {
             @Override
             Void doTransaction(Transaction txn) {
-                if (topoStore.exists(txn, candidateName)) {
+                if (stores.getTopologyStore().candidateExists(txn,
+                                                              candidateName)) {
                     throw new IllegalCommandException
                         (candidateName +
                          " already exists and can't be added as a new" +
                          " topology candidate.");
                 }
-                topoStore.save(txn, new TopologyCandidate(candidateName,
-                                                          newTopo));
+                stores.getTopologyStore().
+                        putCandidate(txn,
+                                 new TopologyCandidate(candidateName, newTopo));
                 return null;
             }
         }.run();
@@ -1507,12 +1539,12 @@ public class Admin
                                  RunTransaction.writeNoSync, logger) {
             @Override
             Void doTransaction(Transaction txn) {
-                if (!topoStore.exists(txn, candidateName)) {
+                final TopologyStore topoStore = stores.getTopologyStore();
+                if (!topoStore.candidateExists(txn, candidateName)) {
                       throw new IllegalCommandException
                           (candidateName + " doesn't exist");
                 }
-
-                topoStore.delete(txn, candidateName);
+                topoStore.deleteCandidate(txn, candidateName);
                 return null;
             }
         }.run();
@@ -1550,7 +1582,8 @@ public class Admin
 
                 final TopologyCandidate candidate = tb.build();
 
-                if (topoStore.exists(txn, topologyName)) {
+                final TopologyStore topoStore = stores.getTopologyStore();
+                if (topoStore.candidateExists(txn, topologyName)) {
                     final TopologyCandidate preexistingCandidate =
                         getCandidate(txn, topologyName);
 
@@ -1567,7 +1600,7 @@ public class Admin
                             "but with different mount point assignment");
                     }
                 } else {
-                    topoStore.save(txn, candidate);
+                    topoStore.putCandidate(txn, candidate);
                 }
                 if (json) {
                     return candidate.displayAsJson(currentParams);
@@ -1598,7 +1631,8 @@ public class Admin
      */
     private TopologyCandidate getCandidate(Transaction txn,
                                            String candidateName) {
-        final TopologyCandidate candidate = topoStore.get(txn, candidateName);
+        final TopologyCandidate candidate =
+             stores.getTopologyStore().getCandidate(txn, candidateName);
         if (candidate == null) {
             throw new IllegalCommandException
                 ("Topology " + candidateName + " does not exist. Use " +
@@ -1616,7 +1650,7 @@ public class Admin
                                    RunTransaction.readOnly, logger) {
             @Override
             List<String> doTransaction(Transaction txn) {
-                return topoStore.getCandidateNames(txn);
+                return stores.getTopologyStore().getCandidateNames(txn);
             }
         }.run();
     }
@@ -1651,7 +1685,7 @@ public class Admin
                                             getCurrentParameters(),
                                             myParams);
                     final TopologyCandidate newCandidate = tb.build();
-                    topoStore.save(txn, newCandidate);
+                    stores.getTopologyStore().putCandidate(txn, newCandidate);
                     return "Redistributed: " + newCandidate.getName();
                 } finally {
                     pool.thaw();
@@ -1683,7 +1717,7 @@ public class Admin
                                             getCurrentParameters(), myParams);
 
                     final TopologyCandidate newCandidate = tb.rebalance(dcId);
-                    topoStore.save(txn, newCandidate);
+                    stores.getTopologyStore().putCandidate(txn, newCandidate);
                     return "Rebalanced: " + newCandidate.getName();
                 } finally {
                     pool.thaw();
@@ -1711,7 +1745,7 @@ public class Admin
      * Get a new copy of the Parameters from the database.
      */
     private Parameters readParameters(Transaction txn) {
-        final Parameters params = Parameters.fetch(eStore, txn);
+        final Parameters params = stores.getParameters(txn);
         if (params == null) {
             logger.fine("Parameters not found");
         } else {
@@ -1725,7 +1759,7 @@ public class Admin
      * Get a new copy of the Memo from the database.
      */
     private Memo readMemo(Transaction txn) {
-        final Memo m = Memo.fetch(eStore, txn);
+        final Memo m = stores.getMemo(txn);
         if (m == null) {
             logger.fine("Memo not found");
         } else {
@@ -1763,16 +1797,16 @@ public class Admin
 
             @Override
             Void doTransaction(Transaction txn) {
+                final EventStore eventStore = stores.getEventStore();
 
                 for (CriticalEvent pe : events) {
-                    pe.persist(eStore, txn);
+                    eventStore.putEvent(txn, pe);
 
                     /*
                      * Age the store periodically.
                      */
                     if (eventStoreCounter++ % eventStoreAgingFrequency == 0) {
-                        CriticalEvent.ageStore
-                            (eStore, txn, getEventExpiryAge());
+                        eventStore.ageStore(txn, getEventExpiryAge());
                     }
                 }
 
@@ -1782,13 +1816,19 @@ public class Admin
                  * eventRecorder thread.
                  */
                 memo.setLatestEventTimestamps(let);
-                memo.persist(eStore, txn);
+                stores.putMemo(txn, memo);
                 return null;
             }
         };
 
         try {
             transaction.run();
+        } catch (AdminNotReadyException anre) {
+            /*
+             * ANRE is thrown during upgrade from DPL to non-DPL stores while
+             * the Admin is in read-only mode
+             */
+            logger.info(anre.getMessage());
         } catch (ReplicaWriteException | UnknownMasterException e) {
             logger.log(Level.FINE,
                        "Ignoring exception resulting from write operation " +
@@ -1829,8 +1869,8 @@ public class Admin
 
             @Override
             List<CriticalEvent> doTransaction(Transaction txn) {
-                return CriticalEvent.fetch
-                    (eStore, txn, startTime, endTime, type);
+                return stores.getEventStore().getEvents(txn, startTime, endTime,
+                                                        type);
             }
         }.run();
     }
@@ -1845,7 +1885,7 @@ public class Admin
 
             @Override
             CriticalEvent doTransaction(Transaction txn) {
-                return CriticalEvent.fetch(eStore, txn, eventId);
+                return stores.getEvent(txn, eventId);
             }
         }.run();
     }
@@ -2058,8 +2098,8 @@ public class Admin
                                         logger) {
             @Override
             Plan doTransaction(Transaction txn) {
-                final Plan uncachedPlan = AbstractPlan.fetchPlanById
-                    (id, planStore, txn, getPlanner(), myParams);
+                final Plan uncachedPlan = stores.getPlanStore().getPlanById
+                    (id, txn, getPlanner(), myParams);
                 if (uncachedPlan == null) {
                     return null;
                 }
@@ -2104,8 +2144,8 @@ public class Admin
 
             @Override
             Map<Integer, Plan> doTransaction(Transaction txn) {
-                return AbstractPlan.fetchRecentPlansForDisplay
-                    (nRecentPlans, planStore, txn, planner, myParams);
+                return stores.getPlanStore().getRecentPlansForDisplay
+                   (nRecentPlans, txn, planner, myParams);
             }
         }.run();
     }
@@ -2137,7 +2177,7 @@ public class Admin
 
             @Override
             int[] doTransaction(Transaction txn) {
-                return AbstractPlan.getPlanIdRange(planStore, txn,
+                return stores.getPlanStore().getPlanIdRange(txn,
                                                    startTime, endTime, n,
                                                    planOwnerId);
             }
@@ -2166,7 +2206,7 @@ public class Admin
 
             @Override
             Map<Integer, Plan> doTransaction(Transaction txn) {
-                return AbstractPlan.getPlanRange(planStore, txn,
+                return stores.getPlanStore().getPlanRange(txn,
                                                  planner,
                                                  myParams,
                                                  firstPlanId, howMany,
@@ -2190,7 +2230,7 @@ public class Admin
 
             @Override
             Void doTransaction(Transaction txn) {
-                parameters.persist(eStore, txn);
+                stores.putParameters(txn, parameters);
                 return null;
             }
         }.run();
@@ -2222,13 +2262,13 @@ public class Admin
                  */
                 synchronized (plan) {
                    if (plan.updatingMetadata(topology)) {
-                       plan.persist(planStore, txn);
+                       stores.putPlan(txn, plan);
                    }
                 }
 
-                topoStore.save(txn, new RealizedTopology(topology, info));
-                parameters.persist(eStore, txn);
-                memo.persist(eStore, txn);
+                stores.putTopology(txn, new RealizedTopology(topology, info));
+                stores.putParameters(txn, parameters);
+                stores.putMemo(txn, memo);
                 return null;
             }
         }.run();
@@ -2298,50 +2338,30 @@ public class Admin
     }
 
     /**
+     * Returns the params for the specified ArbNode.
+     */
+    public ArbNodeParams getArbNodeParams(ArbNodeId targetArbNodeId) {
+        return parameters.get(targetArbNodeId);
+    }
+
+
+    /**
      * Returns GlobalParams for the system.
      */
     public GlobalParams getGlobalParams() {
         return parameters.getGlobalParams();
     }
 
-    /**
-     * Initializes the EntityStore in the admin database used for metadata
-     * storage.  If it does not yet exist, allow it to be created.  This is a
-     * transactional EntityStore.
+    /*
+     * Initializes the Admin stores, checking the schema version and
+     * performing updates as needed.
      */
-    synchronized EntityStore initEstore() {
-        if (eStore == null) {
-            final EntityModel model = new AnnotationModel();
-            model.registerClass(TableMetadataProxy.class);
-            model.registerClass(SecurityMetadataProxy.class);
-            final StoreConfig stConfig = new StoreConfig();
-            stConfig.setAllowCreate(true);
-            stConfig.setTransactional(true);
-            stConfig.setModel(model);
-            setMutations(stConfig);
-            eStore = new EntityStore(environment, ADMIN_STORE_NAME, stConfig);
-        }
-        return eStore;
-    }
+    private void initStores(final boolean isMaster) {
+        assert Thread.holdsLock(this);
 
-    /**
-     * Mutations for schema evolution of the admin database:
-     * 1.  Remove RegistryUtils as a class.
-     * 2.  Remove RegistryUtils from DeployStorePlan version 0.
-     */
-    private void setMutations(StoreConfig stConfig) {
-        final Mutations mutations = new Mutations();
-        mutations.addDeleter
-            (new Deleter("oracle.kv.impl.util.registry.RegistryUtils", 0));
-        mutations.addDeleter
-            (new Deleter("oracle.kv.impl.admin.plan.DeployStorePlan", 0,
-                         "registryUtils"));
-        stConfig.setMutations(mutations);
-    }
-
-    private void checkSchemaVersion(final boolean isMaster) {
-        new RunTransaction<Void>(environment, RunTransaction.sync,
-                                  logger) {
+        final AdminSchemaVersion schemaVersion =
+                    new AdminSchemaVersion(Admin.this, logger);
+        new RunTransaction<Void>(environment, RunTransaction.sync, logger) {
             @Override
             Void doTransaction(Transaction txn) {
 
@@ -2349,16 +2369,11 @@ public class Admin
                  * Check that this release is compatible with the Admin db
                  * schema version, should it already exist.
                  */
-                final AdminSchemaVersion schemaVersion =
-                    new AdminSchemaVersion(Admin.this, logger);
-                if (isMaster) {
-                    schemaVersion.checkAndUpdateVersion(txn);
-                } else {
-                    schemaVersion.checkVersion(txn);
-                }
+                schemaVersion.checkAndUpdateVersion(txn, isMaster, stores);
                 return null;
             }
         }.run();
+        stores.init(schemaVersion.openAndReadSchemaVersion(), false /*force */);
     }
 
     /*
@@ -2409,9 +2424,7 @@ public class Admin
         try {
             startupStatus.setUnready(Admin.this);
             masterId = adminId;
-            checkSchemaVersion(true);
-            initEstore();
-            initPlanStore(true /* force */);
+            initStores(true /* isMaster */);
             eventRecorder.shutdown();
             monitor.shutdown();
             removeParameterListener(monitor);
@@ -2439,9 +2452,7 @@ public class Admin
         try {
             startupStatus.setUnready(Admin.this);
             masterId = newMaster;
-            checkSchemaVersion(false);
-            initEstore();
-            initPlanStore(false /* force */);
+            initStores(false /* isMaster */);
             eventRecorder.shutdown();
 
             /*
@@ -2540,7 +2551,7 @@ public class Admin
 
             @Override
             List<String> doTransaction(Transaction txn) {
-                return topoStore.displayHistory(txn, concise);
+                return stores.getTopologyStore().displayHistory(txn, concise);
             }
         }.run();
     }
@@ -2558,7 +2569,7 @@ public class Admin
      */
     public
     long validateStartTime(long proposedStartTime) {
-        return topoStore.validateStartTime(proposedStartTime);
+        return stores.getTopologyStore().validateStartTime(proposedStartTime);
     }
 
     /**
@@ -2588,9 +2599,11 @@ public class Admin
      * Admin needs to keep track of.
      */
     @Entity
-    public static class Memo {
+    public static class Memo implements Serializable {
 
-        private static final String MEMO_KEY = "Memo";
+        private static final long serialVersionUID = 1;
+
+        static final String MEMO_KEY = "Memo";
 
         @PrimaryKey
         private final String memoKey = MEMO_KEY;
@@ -2630,18 +2643,6 @@ public class Admin
             (EventRecorder.LatestEventTimestamps let) {
 
             latestEventTimestamps = let;
-        }
-
-        public void persist(EntityStore estore, Transaction txn) {
-            final PrimaryIndex<String, Memo> mi =
-                estore.getPrimaryIndex(String.class, Memo.class);
-            mi.put(txn, this);
-        }
-
-        public static Memo fetch(EntityStore estore, Transaction txn) {
-            final PrimaryIndex<String, Memo> mi =
-                estore.getPrimaryIndex(String.class, Memo.class);
-            return mi.get(txn, MEMO_KEY, LockMode.READ_COMMITTED);
         }
     }
 
@@ -3135,7 +3136,7 @@ public class Admin
 
                     final TopologyCandidate newCandidate =
                         tb.changeRepfactor(repFactor, dcId);
-                    topoStore.save(txn, newCandidate);
+                    stores.getTopologyStore().putCandidate(txn, newCandidate);
                     return "Changed replication factor in " +
                         newCandidate.getName();
                 } finally {
@@ -3170,13 +3171,65 @@ public class Admin
                 if (dc.getDatacenterType().equals(type)) {
                     return dcId + " is already of type " + type;
                 }
+
+                /*
+                 * Note that if you are converting secondary to primary allow
+                 * arbiters is false. If you convert from primary to secondary,
+                 * allow arbiters is also false.
+                 */
                 topo.update(dc.getResourceId(),
                             Datacenter.newInstance(dc.getName(),
                                                    dc.getRepFactor(),
-                                                   type));
-                topoStore.save(txn, candidate);
+                                                   type,
+                                                   false /* allowArbiters */));
+                stores.getTopologyStore().putCandidate(txn, candidate);
                 return "Changed zone type of " + dcId + " to " + type +
                        " in " + candidate.getName();
+            }
+        }.run();
+    }
+
+
+    /**
+     * Alter the arbiter attribute of a zone in a topology candidate.
+     * Does nothing if the zone already has the requested attribute value.
+     *
+     * @param candidateName the name of the topology candidate to modify
+     * @param dcId the ID of the zone to modify
+     * @param allowArbiters value of the attribute
+     * @throws DatabaseException if there is a problem modifying the database
+     */
+    public String changeZoneArbiters(final String candidateName,
+                                     final DatacenterId dcId,
+                                     final boolean allowArbiters) {
+        return new RunTransaction<String>(environment,
+                                          RunTransaction.writeNoSync, logger) {
+            @Override
+            String doTransaction(Transaction txn) {
+
+                final TopologyCandidate candidate = getCandidate(txn,
+                                                                 candidateName);
+                final Topology topo = candidate.getTopology();
+                final Datacenter dc = topo.get(dcId);
+
+                if (dc.getAllowArbiters() == allowArbiters) {
+                    String retval;
+                    if (allowArbiters) {
+                        retval = dcId + " already allow Arbiters ";
+                    } else {
+                        retval = dcId + " already does not allow Arbiters ";
+                    }
+                    return retval;
+                }
+
+                topo.update(dc.getResourceId(),
+                            Datacenter.newInstance(dc.getName(),
+                                                   dc.getRepFactor(),
+                                                   dc.getDatacenterType(),
+                                                   allowArbiters));
+                stores.getTopologyStore().putCandidate(txn, candidate);
+                return "Changed allow Arbiters " + dcId + " to " +
+                        allowArbiters  + " in " + candidate.getName();
             }
         }.run();
     }
@@ -3237,7 +3290,8 @@ public class Admin
                     if (!(newRN.getStorageNodeId().equals
                             (oldRN.getStorageNodeId()))) {
 
-                        topoStore.save(txn, newCandidate);
+                        stores.getTopologyStore().putCandidate(txn,
+                                                               newCandidate);
                         return "Moved " + rnId + " from " +
                             oldRN.getStorageNodeId() + " to " +
                             newRN.getStorageNodeId();
@@ -3305,13 +3359,6 @@ public class Admin
             return;
         }
         owner.updateAdminStatus(this, newStatus);
-    }
-
-    /**
-     * Return the TopologyStore.  Used during upgrade.
-     */
-    TopologyStore getTopoStore() {
-        return topoStore;
     }
 
     /**
@@ -3648,6 +3695,33 @@ public class Admin
     }
 
     /**
+     * Returns a map of the other Admins in the group with their software
+     * version. If there is a problem getting the information, null is returned.
+     *
+     * @return map of the other Admins in the group or null
+     */
+    Map<AdminId, KVVersion> getOtherAdminVersions() {
+        final Map<AdminId, KVVersion> map = new HashMap<>();
+        try {
+            final RegistryUtils registryUtils =
+                    new RegistryUtils(getCurrentTopology(), getLoginManager());
+            final Parameters params = getCurrentParameters();
+            for (AdminId aId : params.getAdminIds()) {
+                if (aId.equals(adminId)) {
+                    continue;
+                }
+                final StorageNodeId snId = params.get(aId).getStorageNodeId();
+                final KVVersion v =
+                                getSNStatus(snId, registryUtils).getKVVersion();
+                map.put(aId, v);
+            }
+        } catch (Exception e) {
+            return null;
+        }
+        return map;
+    }
+
+    /**
      * Check on all the SNs which host admins to return the highest software
      * version of all the running admins.
      *
@@ -3795,32 +3869,13 @@ public class Admin
                                      logger) {
             @Override
             T doTransaction(Transaction txn) {
-                try {
-                    return MetadataStore.read(returnType, metadataType,
-                                              eStore, txn);
-                } catch (IndexNotAvailableException inae) {
-
-                    /*
-                     * The operation is performed on an admin replica and the
-                     * primaryIndex for MetadataHolder is not yet created on
-                     * the admin master. Treat this case as no metadata is in
-                     * the entity store yet and return null.
-                     */
-                    logger.log(Level.FINE,
-                               "Metadata is currently unavailable: {0}",
-                               inae);
-                    return null;
-                }
+                return stores.getMetadata(returnType, metadataType, txn);
             }
         }.run();
     }
 
-    public AdminService getOwner() {
-        return owner;
-    }
-
     /**
-     * Saves the specified Metadata object in the admin's EntityStore.
+     * Saves the specified Metadata object in the admin's store.
      */
     public void saveMetadata(final Metadata<?> metadata, final Plan plan) {
         logger.log(Level.FINE, "Storing {0} ", metadata);
@@ -3840,12 +3895,12 @@ public class Admin
                      */
                     synchronized (plan) {
                         if (plan.updatingMetadata(metadata)) {
-                            plan.persist(planStore, txn);
+                            stores.putPlan(txn, plan);
                         }
                     }
                 }
 
-                MetadataStore.save(metadata, eStore, txn);
+                stores.putMetadata(metadata, txn);
                 return null;
             }
         }.run();
@@ -3859,6 +3914,10 @@ public class Admin
             return null;
         }
         return owner.getLoginManager();
+    }
+
+    public AdminService getOwner() {
+        return owner;
     }
 
     boolean isReady() {
@@ -3896,45 +3955,6 @@ public class Admin
             return null;
         }
         return owner.getRoleResolver();
-    }
-
-    public synchronized AdminPlanDatabase initAdminPlanDb() {
-        if (adminPlanDb == null) {
-            adminPlanDb = new AdminPlanDatabase(Admin.this, logger);
-            logger.info("Admin plan database initialized");
-        }
-        return adminPlanDb;
-    }
-
-    synchronized void closeAdminPlanDb() {
-        if (adminPlanDb == null) {
-            return;
-        }
-        adminPlanDb.closeEntityDb();
-        adminPlanDb = null;
-    }
-
-    public AdminPlanDatabase getAdminPlanDb() {
-        return adminPlanDb;
-    }
-
-    /**
-     * Initializes the plan store handle.  While entering the master mode, this
-     * handle will always be initialized by setting {@code force} to true.
-     * While entering replica or other modes, the handle will only be
-     * initialized when it is null.
-     */
-    private void initPlanStore(boolean force) {
-        if (force || planStore == null) {
-            final AdminSchemaVersion schemaVersion =
-                new AdminSchemaVersion(Admin.this, logger);
-            final int currentSchemaVersion =
-                schemaVersion.openAndReadSchemaVersion();
-            planStore = PlanStore.getStoreByVersion(Admin.this,
-                                                    currentSchemaVersion);
-            logger.log(Level.INFO,
-                "Initialized plan store to {0}", planStore.getName());
-        }
     }
 
     /* -- repairAdminQuorum -- */
@@ -4327,6 +4347,33 @@ public class Admin
             }
 
             /* This is a permanent problem, retries will not help */
+
+            if (handler.getException() instanceof QueryException) {
+                String msg = "User error in query: " +
+                    handler.getException().toString();
+                logger.fine(msg);
+                throw ((QueryException)handler.getException()).
+                    getWrappedIllegalArgument();
+            }
+
+            if (handler.getException() instanceof QueryStateException) {
+                logger.warning(handler.getException().toString());
+                ((QueryStateException)handler.getException()).
+                    throwClientException();
+            }
+
+            /*
+             * Not all errors throw exceptions. Wrap these in a generic
+             * QueryException. Location information is not available.
+             */
+            if (handler.getException() == null) {
+                String msg = "User error in query: " +
+                    handler.getErrorMessage();
+                logger.fine(msg);
+                throw new QueryException(msg).getWrappedIllegalArgument();
+            }
+
+            /* Unknown exception from the query */
             throw new IllegalCommandException
                 ("Error from " + ddlStatement + ": " +
                  handler.getErrorMessage());
@@ -4449,5 +4496,58 @@ public class Admin
                 " expected " + newNodeType +
                 ", found " + envNodeType);
         }
+    }
+
+    /**
+     * Starts a thread which monitors Admin upgrade. This should be called if
+     * the Admin is being upgraded and the master must wait until all Admins
+     * have been upgraded before the store schema can be updated.
+     */
+    void monitorUpgrade() {
+        assert Thread.holdsLock(this);
+
+        if ((upgradeMonitor != null) && upgradeMonitor.isAlive()) {
+            return;
+        }
+
+        /*
+         * The monitor thread will check every 10 seconds to see if the stores
+         * can be upgraded.
+         */
+        upgradeMonitor = new StoppableThread("MonitorUpgradeThread") {
+            @Override
+            public void run() {
+                logger.log(Level.FINE, "{0} started", this);
+                try {
+                    Thread.sleep(10000);
+                    while (true) {
+                        /*
+                         * Quit the thread if it is shutdown, the admin is
+                         * closing or no longer the master, or the stores have
+                         * been updated.
+                         */
+                        if (isShutdown() ||
+                            isClosing() ||
+                            !environment.getState().isMaster() ||
+                            !stores.isReadOnly()) {
+                            logger.log(Level.FINE, "{0} exiting", this);
+                            return;
+                        }
+                        logger.log(Level.FINE, "{0} checking for upgrade",this);
+                        synchronized (Admin.this) {
+                            initStores(true /* isMaster */);
+                        }
+                        Thread.sleep(10000);
+                    }
+                } catch (InterruptedException ex) {
+                    logger.log(Level.WARNING, "{0} interrupted, exited", this);
+                }
+            }
+            @Override
+            protected Logger getLogger() {
+                return logger;
+            }
+        };
+        upgradeMonitor.start();
     }
 }

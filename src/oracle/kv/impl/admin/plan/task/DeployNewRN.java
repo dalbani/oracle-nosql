@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -60,6 +60,8 @@ import oracle.kv.impl.admin.plan.DeployTopoPlan;
 import oracle.kv.impl.admin.plan.PortTracker;
 import oracle.kv.impl.fault.CommandFaultException;
 import oracle.kv.impl.param.ParameterMap;
+import oracle.kv.impl.param.ParameterState;
+import oracle.kv.impl.param.ParameterUtils;
 import oracle.kv.impl.security.login.LoginManager;
 import oracle.kv.impl.sna.StorageNodeAgentAPI;
 import oracle.kv.impl.test.TestHook;
@@ -220,8 +222,10 @@ public class DeployNewRN extends SingleJobTask {
          */
         StorageNodeParams snp = params.get(snId);
         int numRNsOnSN = current.getHostedRepNodeIds(snId).size();
-        RNHeapAndCacheSize heapAndCache = snp.calculateRNHeapAndCache
-                (pMap, numRNsOnSN, rnp.getRNCachePercent());
+        int numANsOnSN = current.getHostedArbNodeIds(snId).size();
+        RNHeapAndCacheSize heapAndCache =
+            snp.calculateRNHeapAndCache(pMap, numRNsOnSN,
+                                        rnp.getRNCachePercent(), numANsOnSN);
         long heapMB = heapAndCache.getHeapMB();
         long cacheBytes = heapAndCache.getCacheBytes();
 
@@ -332,8 +336,6 @@ public class DeployNewRN extends SingleJobTask {
             rn = new RepNode(snId);
             rg.add(rn);
             displayRNId = rn.getResourceId();
-            assert TestHookExecute.doHookIfSet(FAULT_HOOK,
-                                               makeHookTag("1"));
             rnp =  makeRepNodeParams(current,
                                      rg.getResourceId(),
                                      rn.getResourceId());
@@ -344,7 +346,7 @@ public class DeployNewRN extends SingleJobTask {
             displayRNId = rn.getResourceId();
         }
 
-        assert TestHookExecute.doHookIfSet(FAULT_HOOK, makeHookTag("2"));
+        assert TestHookExecute.doHookIfSet(FAULT_HOOK, makeHookTag("1"));
 
         /*
          * Invoke the creation of the RN after the metadata is safely stored.
@@ -365,7 +367,7 @@ public class DeployNewRN extends SingleJobTask {
             sna.createRepNode(rnp.getMap(),
                               Utils.getMetadataSet(current, plan));
         } catch (IllegalStateException e) {
-            throw new CommandFaultException(e.getMessage(), e, 
+            throw new CommandFaultException(e.getMessage(), e,
                                             ErrorMessage.NOSQL_5200,
                                             CommandResult.NO_CLEANUP_JOBS);
         }
@@ -411,11 +413,14 @@ public class DeployNewRN extends SingleJobTask {
         @Override
         public void run(){
             boolean done = false;
-            int numAttempts = 0;
+            final Admin admin = plan.getAdmin();
+            final Parameters params = admin.getCurrentParameters();
+            final long maxRetryTime = ParameterUtils.getDurationMillis(
+                params.getPolicies(), ParameterState.AP_NEW_RN_RETRY_TIME);
+            final long startTime = System.currentTimeMillis();
             while (!done && !plan.cleanupInterrupted()) {
                 try {
                     done = cleanupAllocation();
-                    numAttempts++;
                 } catch (Exception e) {
                     plan.getLogger().log
                         (Level.SEVERE,
@@ -430,11 +435,8 @@ public class DeployNewRN extends SingleJobTask {
                 }
 
                 if (!done) {
-                    /*
-                     * Arbitrarily limit number of tries to 5. TODO: would be
-                     * nicer if this was based on time.
-                     */
-                    if (numAttempts > 5) {
+                    if (System.currentTimeMillis() - startTime
+                            > maxRetryTime) {
                         return;
                     }
 
@@ -465,18 +467,18 @@ public class DeployNewRN extends SingleJobTask {
             return true;
         }
 
-        // TODO, get rid of cast
         Admin admin = plan.getAdmin();
         TopologyCheck checker =
             new TopologyCheck(logger,
                               admin.getCurrentTopology(),
                               admin.getCurrentParameters());
 
-        Remedy remedy = checker.checkRNLocation(admin, snId, displayRNId,
-                                                true /* calledByDeployNewRN */,
-                                                true /* makeRNEnabled */,
-                                                null /* oldSNId */,
-                                                null /* newMountPoint */);
+        Remedy remedy =
+            checker.checkLocation(admin, snId, displayRNId,
+                                  true /* calledByDeployNewRN */,
+                                  true /* makeRNEnabled */,
+                                  null /* oldSNId */,
+                                  null /* newMountPoint */);
         logger.info("DeployNewRN cleanup: " + remedy);
 
         return checker.applyRemedy(remedy, plan);

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -63,6 +63,7 @@ import oracle.kv.EntryStream;
 import oracle.kv.FaultException;
 import oracle.kv.Key;
 import oracle.kv.KeyRange;
+import oracle.kv.KeyValueVersion;
 import oracle.kv.Operation;
 import oracle.kv.OperationExecutionException;
 import oracle.kv.OperationFactory;
@@ -74,15 +75,20 @@ import oracle.kv.Version;
 import oracle.kv.impl.api.KVStoreImpl;
 import oracle.kv.impl.api.Request;
 import oracle.kv.impl.api.bulk.BulkPut;
+import oracle.kv.impl.api.ops.Execute.OperationImpl;
+import oracle.kv.impl.api.ops.InternalOperation;
 import oracle.kv.impl.api.ops.MultiDeleteTable;
 import oracle.kv.impl.api.ops.MultiGetTable;
 import oracle.kv.impl.api.ops.MultiGetTableKeys;
+import oracle.kv.impl.api.ops.Put;
 import oracle.kv.impl.api.ops.Result;
 import oracle.kv.impl.api.ops.ResultKeyValueVersion;
+import oracle.kv.impl.api.ops.ResultKey;
 import oracle.kv.impl.client.admin.DdlFuture;
 import oracle.kv.impl.metadata.Metadata.MetadataType;
 import oracle.kv.impl.rep.admin.RepNodeAdminAPI;
 import oracle.kv.impl.topo.PartitionId;
+import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.util.registry.RegistryUtils;
 import oracle.kv.table.FieldRange;
@@ -101,6 +107,7 @@ import oracle.kv.table.TableOpExecutionException;
 import oracle.kv.table.TableOperation;
 import oracle.kv.table.TableOperationFactory;
 import oracle.kv.table.TableOperationResult;
+import oracle.kv.table.TimeToLive;
 import oracle.kv.table.WriteOptions;
 
 /**
@@ -217,15 +224,26 @@ public class TableAPIImpl implements TableAPI {
 
         PrimaryKeyImpl rowKey = (PrimaryKeyImpl) rowKeyArg;
         Key key = rowKey.getPrimaryKey(false);
-        ValueVersion vv = store.getInternal(key,
-                                            rowKey.getTableImpl().getId(),
-                                            getConsistency(readOptions),
-                                            getTimeout(readOptions),
-                                            getTimeoutUnit(readOptions));
-        if (vv == null) {
+        Result result = store.getInternalResult(key,
+                                                rowKey.getTableImpl().getId(),
+                                                getConsistency(readOptions),
+                                                getTimeout(readOptions),
+                                                getTimeoutUnit(readOptions));
+
+        final Value value = result.getPreviousValue();
+        if (value == null) {
+            assert !result.getSuccess();
             return null;
         }
-        return getRowFromValueVersion(vv, rowKey, true);
+        assert result.getSuccess();
+        final ValueVersion vv = new ValueVersion();
+        vv.setValue(value);
+        vv.setVersion(result.getPreviousVersion());
+        RowImpl ret = getRowFromValueVersion(vv,
+                                             rowKey,
+                                             result.getPreviousExpirationTime(),
+                                             true);
+        return ret;
     }
 
     @Override
@@ -238,12 +256,20 @@ public class TableAPIImpl implements TableAPI {
         ReturnValueVersion rvv = makeRVV(prevRowArg);
         Key key = row.getPrimaryKey(false);
         Value value = row.createValue();
-        Version version = store.putInternal(key, value, rvv,
-                                            row.getTableImpl().getId(),
-                                            getDurability(writeOptions),
-                                            getTimeout(writeOptions),
-                                            getTimeoutUnit(writeOptions));
-        initReturnRow(prevRowArg, row, rvv);
+        Table table = row.getTable();
+        Result result = store.putInternalResult(key, value, rvv,
+                                                row.getTableImpl().getId(),
+                                                getDurability(writeOptions),
+                                                getTimeout(writeOptions),
+                                                getTimeoutUnit(writeOptions),
+                                                getTTL(row, table),
+                                                getUpdateTTL(writeOptions));
+
+        Version version = result.getNewVersion();
+        if (result.getSuccess()) {
+            row.setExpirationTime(result.getNewExpirationTime());
+        }
+        initReturnRow(prevRowArg, row, rvv, result.getPreviousExpirationTime());
         return version;
     }
 
@@ -257,13 +283,22 @@ public class TableAPIImpl implements TableAPI {
         ReturnValueVersion rvv = makeRVV(prevRowArg);
         Key key = row.getPrimaryKey(false);
         Value value = row.createValue();
-        Version version =
-            store.putIfAbsentInternal(key, value, rvv,
-                                      row.getTableImpl().getId(),
-                                      getDurability(writeOptions),
-                                      getTimeout(writeOptions),
-                                      getTimeoutUnit(writeOptions));
-        initReturnRow(prevRowArg, row, rvv);
+        Table table = row.getTable();
+
+        Result result = store.putIfAbsentInternalResult(
+            key, value, rvv,
+            row.getTableImpl().getId(),
+            getDurability(writeOptions),
+            getTimeout(writeOptions),
+            getTimeoutUnit(writeOptions),
+            getTTL(row, table),
+            getUpdateTTL(writeOptions));
+
+        Version version = result.getNewVersion();
+        if (result.getSuccess()) {
+            row.setExpirationTime(result.getNewExpirationTime());
+        }
+        initReturnRow(prevRowArg, row, rvv, result.getPreviousExpirationTime());
         return version;
     }
 
@@ -277,13 +312,24 @@ public class TableAPIImpl implements TableAPI {
         ReturnValueVersion rvv = makeRVV(prevRowArg);
         Key key = row.getPrimaryKey(false);
         Value value = row.createValue();
-        Version version =
-            store.putIfPresentInternal(key, value, rvv,
-                                       row.getTableImpl().getId(),
-                                       getDurability(writeOptions),
-                                       getTimeout(writeOptions),
-                                       getTimeoutUnit(writeOptions));
-        initReturnRow(prevRowArg, row, rvv);
+        Table table = row.getTable();
+
+        Result result = store.putIfPresentInternalResult(
+            key,
+            value,
+            rvv,
+            row.getTableImpl().getId(),
+            getDurability(writeOptions),
+            getTimeout(writeOptions),
+            getTimeoutUnit(writeOptions),
+            getTTL(row, table),
+            getUpdateTTL(writeOptions));
+
+        Version version = result.getNewVersion();
+        if (result.getSuccess()) {
+            row.setExpirationTime(result.getNewExpirationTime());
+        }
+        initReturnRow(prevRowArg, row, rvv, result.getPreviousExpirationTime());
         return version;
     }
 
@@ -298,14 +344,25 @@ public class TableAPIImpl implements TableAPI {
         ReturnValueVersion rvv = makeRVV(prevRowArg);
         Key key = row.getPrimaryKey(false);
         Value value = row.createValue();
-        Version version =
-            store.putIfVersionInternal(key, value,
-                                       matchVersion, rvv,
-                                       row.getTableImpl().getId(),
-                                       getDurability(writeOptions),
-                                       getTimeout(writeOptions),
-                                       getTimeoutUnit(writeOptions));
-        initReturnRow(prevRowArg, row, rvv);
+        Table table = row.getTable();
+
+        Result result = store.putIfVersionInternalResult(
+            key,
+            value,
+            matchVersion,
+            rvv,
+            row.getTableImpl().getId(),
+            getDurability(writeOptions),
+            getTimeout(writeOptions),
+            getTimeoutUnit(writeOptions),
+            getTTL(row, table),
+            getUpdateTTL(writeOptions));
+
+        Version version = result.getNewVersion();
+        if (result.getSuccess()) {
+            row.setExpirationTime(result.getNewExpirationTime());
+        }
+        initReturnRow(prevRowArg, row, rvv, result.getPreviousExpirationTime());
         return version;
     }
 
@@ -349,6 +406,12 @@ public class TableAPIImpl implements TableAPI {
                         @Override
                         protected long getTableId(Row row) {
                             return ((TableImpl)row.getTable()).getId();
+                        }
+
+                        @Override
+                        protected TimeToLive getTTL(Row row) {
+                            return TableAPIImpl.getTTL((RowImpl)row,
+                                                       row.getTable());
                         }
                     };
                 }
@@ -508,7 +571,7 @@ public class TableAPIImpl implements TableAPI {
         /*
          * Convert byte[] keys to Key objects.
          */
-        final List<byte[]> byteKeyResults = result.getKeyList();
+        final List<ResultKey> byteKeyResults = result.getKeyList();
         assert result.getSuccess() == (!byteKeyResults.isEmpty());
         return processMultiResults(table, byteKeyResults, hasAncestorTables);
     }
@@ -536,6 +599,7 @@ public class TableAPIImpl implements TableAPI {
 
 
         if (getOptions != null) {
+
             validateMultiRowOptions(getOptions, table, false);
         }
         return TableScan.createTableIterator(this, key, getOptions,
@@ -570,12 +634,17 @@ public class TableAPIImpl implements TableAPI {
         PrimaryKeyImpl rowKey = (PrimaryKeyImpl) rowKeyArg;
         ReturnValueVersion rvv = makeRVV(prevRowArg);
         Key key = rowKey.getPrimaryKey(false);
-        boolean retval = store.deleteInternal(key, rvv,
-                                              getDurability(writeOptions),
-                                              getTimeout(writeOptions),
-                                              getTimeoutUnit(writeOptions),
-                                              rowKey.getTableImpl().getId());
-        initReturnRow(prevRowArg, rowKey, rvv);
+        Result result = store.deleteInternalResult(
+            key,
+            rvv,
+            getDurability(writeOptions),
+            getTimeout(writeOptions),
+            getTimeoutUnit(writeOptions),
+            rowKey.getTableImpl().getId());
+
+        boolean retval = result.getSuccess();
+        initReturnRow(prevRowArg, rowKey,
+                      rvv, result.getPreviousExpirationTime());
         return retval;
     }
 
@@ -589,14 +658,19 @@ public class TableAPIImpl implements TableAPI {
         PrimaryKeyImpl rowKey = (PrimaryKeyImpl) rowKeyArg;
         ReturnValueVersion rvv = makeRVV(prevRowArg);
         Key key = rowKey.getPrimaryKey(false);
-        boolean retval = store.deleteIfVersionInternal
-            (key, matchVersion, rvv,
-             getDurability(writeOptions),
-             getTimeout(writeOptions),
-             getTimeoutUnit(writeOptions),
-             rowKey.getTableImpl().getId());
 
-        initReturnRow(prevRowArg, rowKey, rvv);
+        Result result = store.deleteIfVersionInternalResult(
+            key,
+            matchVersion,
+            rvv,
+            getDurability(writeOptions),
+            getTimeout(writeOptions),
+            getTimeoutUnit(writeOptions),
+            rowKey.getTableImpl().getId());
+
+        boolean retval = result.getSuccess();
+        initReturnRow(prevRowArg, rowKey,
+                      rvv, result.getPreviousExpirationTime());
         return retval;
     }
 
@@ -642,9 +716,19 @@ public class TableAPIImpl implements TableAPI {
      * Index iterator operations
      */
     @Override
-    public TableIterator<Row> tableIterator(IndexKey indexKeyArg,
-                                            MultiRowOptions getOptions,
-                                            TableIteratorOptions iterateOptions)
+    public TableIterator<Row> tableIterator(
+                                  IndexKey indexKeyArg,
+                                  MultiRowOptions getOptions,
+                                  TableIteratorOptions iterateOptions)
+        throws FaultException {
+        return tableIterator(indexKeyArg, getOptions, iterateOptions, null);
+    }
+
+    public TableIterator<Row> tableIterator(
+                                  IndexKey indexKeyArg,
+                                  MultiRowOptions getOptions,
+                                  TableIteratorOptions iterateOptions,
+                                  Set<RepGroupId> shardSet)
         throws FaultException {
         final  IndexKeyImpl indexKey = (IndexKeyImpl)indexKeyArg;
         if (getOptions != null) {
@@ -653,7 +737,8 @@ public class TableAPIImpl implements TableAPI {
         return IndexScan.createTableIterator(this,
                                              indexKey,
                                              getOptions,
-                                             iterateOptions);
+                                             iterateOptions,
+                                             shardSet);
     }
 
     @Override
@@ -757,6 +842,53 @@ public class TableAPIImpl implements TableAPI {
     }
 
     /**
+     * @hidden
+     */
+    public TableIterator<KeyValueVersion>
+        tableKVIterator(PrimaryKey rowKeyArg,
+                        MultiRowOptions getOptions,
+                        TableIteratorOptions iterateOptions)
+        throws FaultException {
+
+        return tableKVIterator(rowKeyArg, getOptions, iterateOptions, null);
+    }
+
+    /**
+     * @hidden
+     */
+    public TableIterator<KeyValueVersion>
+        tableKVIterator(PrimaryKey rowKeyArg,
+                        MultiRowOptions getOptions,
+                        TableIteratorOptions iterateOptions,
+                        Set<Integer> partitions)
+        throws FaultException {
+
+        final PrimaryKeyImpl rowKey = (PrimaryKeyImpl) rowKeyArg;
+        final Table table = rowKey.getTable();
+        final TableKey key = TableKey.createKey(table, rowKey, true);
+
+
+        if (getOptions != null) {
+            throw new IllegalArgumentException("MultiRowOption currently " +
+                "not supported by tableKVIterator");
+        }
+
+        return TableScan.createTableKVIterator(this, key, getOptions,
+                                               iterateOptions, partitions);
+    }
+
+    /**
+     * Returns an instance of Put (including PutIf*) if the internal operation
+     * is a put.
+     *
+     * @return null if the operation is not a variant of Put.
+     */
+    private Put unwrapPut(Operation op) {
+        InternalOperation iop = ((OperationImpl)op).getInternalOp();
+        return (iop instanceof Put ? (Put) iop : null);
+    }
+
+    /**
      * All of the TableOperations can be directly mapped to simple KV operations
      * so do that.
      */
@@ -767,18 +899,31 @@ public class TableAPIImpl implements TableAPI {
                DurabilityException,
                FaultException {
 
+        if (operations == null || operations.isEmpty()) {
+            throw new IllegalArgumentException
+                ("operations must be non-null and non-empty");
+        }
+
         ArrayList<Operation> opList =
-            new ArrayList<Operation>(operations.size());
+                new ArrayList<Operation>(operations.size());
+        Table table = operations.get(0).getPrimaryKey().getTable();
         for (TableOperation op : operations) {
-            opList.add(((OpWrapper)op).getOperation());
+            Operation operation = ((OpWrapper)op).getOperation();
+            opList.add(operation);
+
+            Put putOp = unwrapPut(operation) ;
+            if (putOp != null) {
+                putOp.setTTLOptions(getTTL((RowImpl)op.getRow(), table),
+                                    getUpdateTTL(writeOptions));
+            }
         }
         List<OperationResult> results;
 
         try {
             results = store.execute(opList,
-                          getDurability(writeOptions),
-                          getTimeout(writeOptions),
-                          getTimeoutUnit(writeOptions));
+                                    getDurability(writeOptions),
+                                    getTimeout(writeOptions),
+                                    getTimeoutUnit(writeOptions));
             List<TableOperationResult> tableResults =
                     new ArrayList<TableOperationResult>(results.size());
             int index = 0;
@@ -806,11 +951,23 @@ public class TableAPIImpl implements TableAPI {
      * Creates a Row from the Value with a retry in the case of a
      * TableVersionException.
      */
-    RowImpl getRowFromValueVersion(ValueVersion vv, RowImpl row,
+    RowImpl getRowFromValueVersion(ValueVersion vv,
+                                   RowImpl row,
+                                   long expirationTime,
                                    boolean keyOnly) {
         int requiredVersion = 0;
         try {
-            return row.rowFromValueVersion(vv, keyOnly);
+            RowImpl retRow = row.rowFromValueVersion(vv, keyOnly);
+            /*
+             * There is a corner case that can happen when a non-table
+             * key exactly matches a table key that can cause
+             * rowFromValueVersion to fail to deserialize. TableCompatTest
+             * exercises this case.
+             */
+            if (retRow != null) {
+                retRow.setExpirationTime(expirationTime);
+            }
+            return retRow;
         } catch (TableVersionException tve) {
             requiredVersion = tve.getRequiredVersion();
             assert requiredVersion > row.getTable().getTableVersion();
@@ -832,6 +989,7 @@ public class TableAPIImpl implements TableAPI {
         newTable =
             (TableImpl) newTable.getVersion(row.getTable().getTableVersion());
         RowImpl newRow = newTable.createRow(row);
+        newRow.setExpirationTime(expirationTime);
         return newRow.rowFromValueVersion(vv, keyOnly);
     }
 
@@ -931,9 +1089,14 @@ public class TableAPIImpl implements TableAPI {
         @Override
         public Row getPreviousRow() {
             Value value = opRes.getPreviousValue();
-            if (value != null && key != null) {
-                return impl.getRowFromValueVersion
-                    (new ValueVersion(value, null), (RowImpl) key, true);
+            Version version = opRes.getPreviousVersion();
+            if ((value != null || version != null) && key != null) {
+                RowImpl row = impl.getRowFromValueVersion
+                    (new ValueVersion(value, version),
+                     (RowImpl) key,
+                     opRes.getPreviousExpirationTime(),
+                     true);
+                return row;
             }
             return null;
         }
@@ -1118,10 +1281,19 @@ public class TableAPIImpl implements TableAPI {
         return null;
     }
 
-    private void initReturnRow(ReturnRow rr, RowImpl key,
-                               ReturnValueVersion rvv) {
+    /**
+     * Add expiration time to current and prior row
+     * @param rr prior row
+     * @param row current row
+     * @param rvv version of prior row
+     * @param prevExpirationTime the expiration time of the previous row
+     */
+    private void initReturnRow(ReturnRow rr,
+                               RowImpl row,
+                               ReturnValueVersion rvv,
+                               long prevExpirationTime) {
         if (rr != null) {
-            ((ReturnRowImpl)rr).init(this, rvv, key);
+            ((ReturnRowImpl)rr).init(this, rvv, row, prevExpirationTime);
         }
     }
 
@@ -1143,7 +1315,7 @@ public class TableAPIImpl implements TableAPI {
         return null;
     }
 
-    static KeyRange createKeyRange(FieldRange range) {
+    public static KeyRange createKeyRange(FieldRange range) {
         if (range == null) {
             return null;
         }
@@ -1154,32 +1326,31 @@ public class TableAPIImpl implements TableAPI {
         boolean endInclusive = true;
         if (range.getStart() != null) {
             start = ((FieldValueImpl)range.getStart()).
-                formatForKey(range.getDefinition());
+                formatForKey(range.getDefinition(), range.getStorageSize());
             startInclusive = range.getStartInclusive();
         }
         if (range.getEnd() != null) {
             end = ((FieldValueImpl)range.getEnd()).
-                formatForKey(range.getDefinition());
+                formatForKey(range.getDefinition(), range.getStorageSize());
             endInclusive = range.getEndInclusive();
         }
         return new KeyRange(start, startInclusive, end, endInclusive);
     }
 
     /**
-     * Turn a List<byte[]> of keys into List<PrimaryKey>
+     * Turn a List<ResultKey> of keys into List<PrimaryKey>
      */
     private List<PrimaryKey>
         processMultiResults(Table table,
-                            List<byte[]> keys,
+                            List<ResultKey> keys,
                             boolean hasAncestorTables) {
         List<PrimaryKey> list = new ArrayList<PrimaryKey>(keys.size());
         TableImpl t = (TableImpl) table;
         if (hasAncestorTables) {
             t = t.getTopLevelTable();
         }
-        for (byte[] key : keys) {
-            PrimaryKeyImpl pk =
-                t.createPrimaryKeyFromKeyBytes(key);
+        for (ResultKey key : keys) {
+            PrimaryKeyImpl pk = t.createPrimaryKeyFromResultKey(key);
             if (pk != null) {
                 list.add(pk);
             }
@@ -1207,7 +1378,10 @@ public class TableAPIImpl implements TableAPI {
             if (row != null) {
                 ValueVersion vv = new ValueVersion(rkvv.getValue(),
                                                    rkvv.getVersion());
-                list.add(getRowFromValueVersion(vv, row, false));
+                list.add(getRowFromValueVersion(vv,
+                                                row,
+                                                rkvv.getExpirationTime(),
+                                                false));
             }
         }
         return list;
@@ -1284,6 +1458,15 @@ public class TableAPIImpl implements TableAPI {
 
     static TimeUnit getTimeoutUnit(WriteOptions opts) {
         return (opts != null ? opts.getTimeoutUnit() : null);
+    }
+
+    static TimeToLive getTTL(RowImpl row, Table table) {
+        TimeToLive ttl = row.getTTLAndClearExpiration();
+        return ttl != null ? ttl : table.getDefaultTTL();
+    }
+
+    static boolean getUpdateTTL(WriteOptions opts) {
+        return opts != null ? opts.getUpdateTTL() : false;
     }
 
     static TargetTables makeTargetTables(Table target,

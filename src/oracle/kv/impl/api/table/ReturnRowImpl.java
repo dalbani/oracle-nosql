@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,7 +44,7 @@
 package oracle.kv.impl.api.table;
 
 import oracle.kv.ReturnValueVersion;
-
+import oracle.kv.Version;
 import oracle.kv.table.RecordDef;
 import oracle.kv.table.ReturnRow;
 
@@ -127,7 +127,8 @@ public class ReturnRowImpl extends RowImpl implements ReturnRow {
      * caller.  The other alternative is to make the TableImpl in RowImpl
      * settable, and reset it. TBD.
      */
-    void init(TableAPIImpl impl, ReturnValueVersion rvv, RowImpl key) {
+    void init(TableAPIImpl impl, ReturnValueVersion rvv,
+              RowImpl key, long prevExpirationTime) {
         if (returnChoice == Choice.VALUE || returnChoice == Choice.ALL) {
             if (rvv.getValue() != null) {
                 copyKeyFields(key);
@@ -135,7 +136,10 @@ public class ReturnRowImpl extends RowImpl implements ReturnRow {
                     table.rowFromValueVersion(rvv, this);
                 } catch (TableVersionException tve) {
                     RowImpl newRow =
-                        impl.getRowFromValueVersion(rvv, this, false);
+                        impl.getRowFromValueVersion(rvv,
+                                                    this,
+                                                    prevExpirationTime,
+                                                    false);
 
                     /*
                      * Copy the fields appropriate to this row and set the
@@ -148,11 +152,22 @@ public class ReturnRowImpl extends RowImpl implements ReturnRow {
         }
 
         /*
-         * Version is either null or not so just set it.
+         * Version and expiration time are either set or not. Setting
+         * expiration may be redundant with respect to code above, although
+         * that code is extremely rare (table version problem). An unconditional
+         * set is simpler than a complex conditional.
          */
+        setExpirationTime(prevExpirationTime);
         setVersion(rvv.getVersion());
+     }
+
+    /**
+     * Set version to null if choice is VALUE because a dummy version is
+     * used to transmit expiration time and dummy version must not leak to
+     * user code.
+     */
+    @Override
+    public void setVersion(Version version) {
+        super.setVersion(returnChoice == Choice.VALUE ? null : version);
     }
 }
-
-
-

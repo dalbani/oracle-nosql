@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,25 +48,33 @@ import java.util.concurrent.TimeUnit;
 import oracle.kv.table.WriteOptions;
 
 /**
- * For internal use only.
- * @hidden
- *
  * BulkWriteOptions is used to configure bulk write operations.
  *
- * TODO:
+ * The default values, documented in the setter methods, should be a good
+ * choice for a wide range of conditions. If you should wish to fine tune the
+ * bulk load operation further, you can use these values as a starting point
+ * for a benchmark using your own application data and actual hardware.
  *
- * 1) Allow for passing in (stream and shard) thread pools, so they can be
- * reused across batch loads?
- *
- * 2) Can such pools be shared across concurrent putBatch operations? The
- * current prototype relies on pool shutdown which requires exclusive use of
- * pools.
+ * @since 4.0
  */
 public class BulkWriteOptions extends WriteOptions {
+   /*
+    * TODO:
+    *
+    * 1) Allow for passing in (stream and shard) thread pools, so they can be
+    * reused across batch loads?
+    *
+    * 2) Can such pools be shared across concurrent putBatch operations? The
+    * current prototype relies on pool shutdown which requires exclusive use of
+    * pools.
+    */
+    private final static int MIN_REQUEST_SIZE = 64 * 1024;
 
-    private int bulkHeapPercent = 70;
+    private int bulkHeapPercent = 40;
 
-    private int perShardParallelism = 2;
+    private int maxRequestSize = 512 * 1024;
+
+    private int perShardParallelism = 3;
 
     private int streamParallelism = 1;
 
@@ -99,8 +107,9 @@ public class BulkWriteOptions extends WriteOptions {
      * The percentage of Runtime.maxMemory() that can be used for the
      * operation. This heap is used to assemble batches of entries
      * associated with specific shards and partitions.
-     *
-     * The default is 70%.
+     * <p>
+     * The default is 40%.
+     * </p>
      */
     public void setBulkHeapPercent(int bulkHeapPercent) {
 
@@ -117,6 +126,30 @@ public class BulkWriteOptions extends WriteOptions {
     }
 
     /**
+     * Returns the max number of bytes of records in a single bulk put request.
+     */
+    public int getMaxRequestSize() {
+        return maxRequestSize;
+    }
+
+    /**
+     * The max request size is used to limit the total number of bytes of
+     * records in a single bulk put request.
+     * <p>
+     * The default is 512K.
+     * </p>
+     */
+    public void setMaxRequestSize(int maxRequestSize) {
+
+        if (maxRequestSize < MIN_REQUEST_SIZE) {
+            throw new IllegalArgumentException
+                ("Max request size:" + maxRequestSize + " cannot be less " +
+                 "than " + MIN_REQUEST_SIZE);
+        }
+        this.maxRequestSize = maxRequestSize;
+    }
+
+    /**
      * The maximum number of threads that can concurrently write a batch
      * of entries to a single shard in the store.
      */
@@ -127,11 +160,12 @@ public class BulkWriteOptions extends WriteOptions {
     /**
      * Sets the maximum number of threads that can concurrently write it's
      * batch of entries to a single shard in the store.
-     *
-     * The default value is 2 and allows for overlapping the reading of the
+     * <p>
+     * The default value is 3 and allows for overlapping the reading of the
      * next batch with processing of the current batch at a server node.
      * Higher capacity networks and and storage nodes can allow for
      * higher parallelism.
+     * </p>
      */
     public void setPerShardParallelism(int perShardParallelism) {
         if (perShardParallelism < 1 ) {
@@ -157,11 +191,12 @@ public class BulkWriteOptions extends WriteOptions {
      * Each stream is read by a dedicated thread from a thread pool. This
      * setting determines the size of the thread pool used for reading
      * streams.
-     *
+     * <p>
      * The default parallelism is 1. For streams with high overheads, say
      * because the I/O device underlying the stream is slow and there are
      * different I/O devices underlying each stream, a higher value would
      * be appropriate.
+     * </p>
      */
     public void setStreamParallelism(int streamParallelism) {
         if (streamParallelism < 1 ) {

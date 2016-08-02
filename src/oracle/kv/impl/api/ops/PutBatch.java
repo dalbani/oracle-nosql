@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,23 +43,15 @@
 
 package oracle.kv.impl.api.ops;
 
+import static oracle.kv.impl.util.SerialVersion.TTL_SERIAL_VERSION;
+
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
-import oracle.kv.UnauthorizedException;
 import oracle.kv.impl.api.bulk.BulkPut.KVPair;
-import oracle.kv.impl.api.ops.OperationHandler.KVAuthorizer;
-import oracle.kv.impl.api.ops.Result.PutBatchResult;
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.security.SystemPrivilege;
-import oracle.kv.impl.security.TablePrivilege;
-import oracle.kv.impl.topo.PartitionId;
-
-import com.sleepycat.je.Transaction;
 
 /**
  * A put-batch operation.
@@ -75,12 +67,12 @@ public class PutBatch extends MultiKeyOperation {
         this.tableIds = tableIds;
     }
 
-    PutBatch(ObjectInput in, short serialVersion) throws IOException {
+    PutBatch(DataInput in, short serialVersion) throws IOException {
 
         super(OpCode.PUT_BATCH, in, serialVersion);
         final int kvPairCount = in.readInt();
 
-        kvPairs = new ArrayList<KVPair>();
+        kvPairs = new ArrayList<KVPair>(kvPairCount);
 
         for (int i = 0; i < kvPairCount; i++) {
 
@@ -94,7 +86,15 @@ public class PutBatch extends MultiKeyOperation {
             final byte[] value = new byte[valueSize];
             in.readFully(value);
 
-            kvPairs.add(new KVPair(key, value));
+            final KVPair kv;
+            if (serialVersion >= TTL_SERIAL_VERSION) {
+                final int ttlVal = in.readInt();
+                final byte ttlUnitOrdinal = (ttlVal != 0) ? in.readByte() : 0;
+                kv = new KVPair(key, value, ttlVal, ttlUnitOrdinal);
+            } else {
+                kv = new KVPair(key, value);
+            }
+            kvPairs.add(kv);
         }
 
         final int tableIdCount = in.readInt();
@@ -109,7 +109,7 @@ public class PutBatch extends MultiKeyOperation {
     }
 
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
@@ -126,6 +126,20 @@ public class PutBatch extends MultiKeyOperation {
             final byte[] value = e.getValue();
             out.writeInt(value.length);
             out.write(value);
+
+            int ttlVal = e.getTTLVal();
+            if (serialVersion >= TTL_SERIAL_VERSION) {
+                out.writeInt(ttlVal);
+                if (ttlVal != 0) {
+                    out.writeByte(e.getTTLUnitOrdinal());
+                }
+            } else if (ttlVal != 0) {
+                /*
+                 * Throw an exception so that TTL information is not
+                 * transparently dropped when writing to older servers.
+                 */
+                throwVersionRequired(serialVersion, TTL_SERIAL_VERSION);
+            }
         }
 
         if (tableIds != null) {
@@ -138,55 +152,11 @@ public class PutBatch extends MultiKeyOperation {
         }
     }
 
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          OperationHandler operationHandler)
-        throws UnauthorizedException {
-
-        checkTableExists(operationHandler);
-
-        final KVAuthorizer kvAuth = checkPermission(operationHandler);
-
-        final List<Integer> keysPresent =
-            operationHandler.putIfAbsentBatch(txn, partitionId,
-                                              kvPairs, kvAuth);
-
-        return new PutBatchResult(keysPresent);
+    List<KVPair> getKvPairs() {
+        return kvPairs;
     }
 
-    @Override
-    public List<? extends KVStorePrivilege> getRequiredPrivileges() {
-        /*
-         * Checks the basic privilege for authentication here, and leave the
-         * keyspace checking and the table access checking in
-         * {@code operationHandler.putIfAbsentBatch()}.
-         */
-        return SystemPrivilege.usrviewPrivList;
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> schemaAccessPrivileges() {
-        return SystemPrivilege.schemaWritePrivList;
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> generalAccessPrivileges() {
-        return SystemPrivilege.writeOnlyPrivList;
-    }
-
-    @Override
-    public
-    List<? extends KVStorePrivilege> tableAccessPrivileges(long tableId) {
-        return Collections.singletonList(
-                   new TablePrivilege.InsertTable(tableId));
-    }
-
-    private void checkTableExists(OperationHandler operationHandler) {
-        if (tableIds != null) {
-            for (long id : tableIds) {
-                TableOperationHandler.getAndCheckTable(operationHandler, id);
-            }
-        }
+    long[] getTableIds() {
+        return tableIds;
     }
 }

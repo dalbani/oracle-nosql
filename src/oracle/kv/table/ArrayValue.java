@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -54,10 +54,27 @@ import java.util.List;
 public interface ArrayValue extends FieldValue {
 
     /**
+     * @return a deep copy of this object.
+     */
+    @Override
+    public ArrayValue clone();
+
+    /**
+     * Returns a String representation of the value.  The value is returned
+     * is a JSON string, and is the same as that returned by
+     * {@link FieldValue#toJsonString}.
+     *
+     * @return a String representation of the value
+     */
+    @Override
+    public String toString();
+
+    /**
      * Returns the ArrayDef that defines the content of this array.
      *
      * @return an ArrayDef
      */
+    @Override
     ArrayDef getDefinition();
 
     /**
@@ -846,20 +863,4 @@ public interface ArrayValue extends FieldValue {
      * @return an empty ArrayValue
      */
     ArrayValue addArray(int index);
-
-    /**
-     * @return a deep copy of this object.
-     */
-    @Override
-    public ArrayValue clone();
-
-    /**
-     * Returns a String representation of the value.  The value is returned
-     * is a JSON string, and is the same as that returned by
-     * {@link FieldValue#toJsonString}.
-     *
-     * @return a String representation of the value
-     */
-    @Override
-    public String toString();
 }

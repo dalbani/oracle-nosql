@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,15 +45,16 @@ package oracle.kv.impl.admin;
 
 import java.util.logging.Logger;
 
+import com.sleepycat.je.DatabaseException;
+
 import oracle.kv.impl.fault.ClientAccessException;
 import oracle.kv.impl.fault.CommandFaultException;
 import oracle.kv.impl.fault.InternalFaultException;
 import oracle.kv.impl.fault.ProcessExitCode;
 import oracle.kv.impl.fault.ProcessFaultHandler;
+import oracle.kv.impl.fault.WrappedClientException;
 import oracle.kv.impl.util.server.LoggerUtils;
 import oracle.kv.util.ErrorMessage;
-
-import com.sleepycat.je.DatabaseException;
 
 /**
  * The fault handler for the AdminService.
@@ -115,9 +116,11 @@ public class AdminServiceFaultHandler extends ProcessFaultHandler {
 
     /**
      * Wrap it inside an AdminFaultException, if it isn't already an
-     * InternalFaultException or ClientAccessException. The fault is an
-     * InternalFaultException when it originated at a different service,
-     * and is just passed through.
+     * InternalFaultException or ClientAccessException or a
+     * WrappedClientException of some sort.
+     *
+     * The fault is an InternalFaultException when it originated at a different
+     * service, and is just passed through.
      */
     @Override
     protected RuntimeException getThrowException(RuntimeException fault) {
@@ -131,6 +134,13 @@ public class AdminServiceFaultHandler extends ProcessFaultHandler {
              * Unwrap it so that the client sees it in its original form.
              */
             return ((ClientAccessException) fault).getCause();
+        }
+
+        if (fault instanceof WrappedClientException) {
+            /*
+             * Client exceptions are are passed through to the client.
+             */
+            return fault;
         }
 
         return getAdminFaultException(fault);
@@ -171,6 +181,11 @@ public class AdminServiceFaultHandler extends ProcessFaultHandler {
 
         /* This is a pass-through exception, which was logged elsewhere */
         if (fault instanceof InternalFaultException) {
+            return null;
+        }
+
+        /* This is a pass-through exception, which was logged elsewhere */
+        if (fault instanceof WrappedClientException) {
             return null;
         }
 

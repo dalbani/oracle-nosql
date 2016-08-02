@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -169,7 +169,7 @@ public interface Table {
      * @return a map of indexes
      */
     Map<String, Index> getIndexes();
-    
+
     /**
      * Returns an unmodifiable map of all of the indexes of the given type on
      * this table.  If there are no such indexes defined, an empty map is
@@ -444,4 +444,16 @@ public interface Table {
      * @return a deep copy of the table
      */
     Table clone();
+
+    /**
+     * Gets the default TimeToLive for the table or null if not set.  This
+     * default TTL is applied when a row is put without an explicit TTL value.
+     * If the default is not set and a row is put without an explicit TTL
+     * the row does not expire.
+     *
+     * @return the default TimeToLive or null
+     *
+     * @since 4.0
+     */
+    TimeToLive getDefaultTTL();
 }

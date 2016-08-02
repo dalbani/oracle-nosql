@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -52,6 +52,11 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.channels.FileChannel;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 
 /**
  * Collection of utilities for file operations
@@ -109,5 +114,39 @@ public class FileUtils {
             }
         }
     }
-}
 
+    /**
+     * Recursively delete a directory and its contents.  Makes use of features
+     * introduced in Java 7.  Does NOT follow symlinks.
+     */
+    public static boolean deleteDirectory(File d) {
+        try {
+            Files.walkFileTree(d.toPath(), new SimpleFileVisitor<Path>() {
+                @Override
+                public FileVisitResult visitFile(Path path,
+                                                 BasicFileAttributes attrs)
+                    throws IOException {
+
+                    Files.delete(path);
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(Path path,
+                                                          IOException ioe)
+                    throws IOException {
+
+                    if (ioe != null) {
+                        throw ioe;
+                    }
+
+                    Files.delete(path);
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (Exception e) {
+            return false;
+        }
+        return true;
+    }
+}

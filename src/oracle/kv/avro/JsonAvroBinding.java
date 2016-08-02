@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,11 +43,11 @@
 
 package oracle.kv.avro;
 
+import oracle.kv.Value;
+
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.codehaus.jackson.JsonNode;
-
-import oracle.kv.Value;
 
 /**
  * The {@code JsonAvroBinding} interface has the same methods as {@link
@@ -221,7 +221,10 @@ import oracle.kv.Value;
  * }</pre>
  *
  * @since 2.0
+ *
+ * @deprecated as of 4.0, use the table API instead.
  */
+@Deprecated
 public interface JsonAvroBinding extends AvroBinding<JsonRecord> {
 
     /**
@@ -267,4 +270,12 @@ public interface JsonAvroBinding extends AvroBinding<JsonRecord> {
     public Value toValue(JsonRecord object)
         throws SchemaNotAllowedException, UndefinedSchemaException,
                IllegalArgumentException;
+
+    /**
+     * Deserialization to JsonRecord using RawBinding, BinaryDecoder and
+     * JsonDatumReader used by import utility. The schema needed for
+     * deserialization is provided by the export package.
+     */
+    JsonRecord toObjectForImport(Value value, Schema schema)
+        throws SchemaNotAllowedException, IllegalArgumentException;
 }

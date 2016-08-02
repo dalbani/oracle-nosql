@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -54,8 +54,10 @@ import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.BinaryNode;
 
 @Persistent(version=1)
-class BinaryValueImpl extends FieldValueImpl implements BinaryValue {
+public class BinaryValueImpl extends FieldValueImpl implements BinaryValue {
+
     private static final long serialVersionUID = 1L;
+
     final private byte[] value;
 
     BinaryValueImpl(byte[] value) {
@@ -72,23 +74,18 @@ class BinaryValueImpl extends FieldValueImpl implements BinaryValue {
         value = null;
     }
 
-    public static BinaryValueImpl create(byte[] value) {
-        return new BinaryValueImpl(value);
-    }
-
-    @Override
-    public byte[] get() {
-        return value;
-    }
-
-    @Override
-    public FieldDef.Type getType() {
-        return FieldDef.Type.BINARY;
-    }
+    /*
+     * Public api methods from Object and FieldValue
+     */
 
     @Override
     public BinaryValueImpl clone() {
         return new BinaryValueImpl(value);
+    }
+
+    @Override
+    public int hashCode() {
+        return Arrays.hashCode(value);
     }
 
     @Override
@@ -97,11 +94,6 @@ class BinaryValueImpl extends FieldValueImpl implements BinaryValue {
             return Arrays.equals(value, ((BinaryValueImpl)other).get());
         }
         return false;
-    }
-
-    @Override
-    public int hashCode() {
-        return Arrays.hashCode(value);
     }
 
     /**
@@ -113,14 +105,19 @@ class BinaryValueImpl extends FieldValueImpl implements BinaryValue {
         return (equals(otherValue) ? 0 : -1);
     }
 
-    @Override
-    public JsonNode toJsonNode() {
-        return new BinaryNode(value);
+   @Override
+    public String toString() {
+        return Base64Variants.getDefaultVariant().encode(value, false);
     }
 
     @Override
-    public void toStringBuilder(StringBuilder sb) {
-        sb.append(Base64Variants.getDefaultVariant().encode(value, true));
+    public FieldDef.Type getType() {
+        return FieldDef.Type.BINARY;
+    }
+
+    @Override
+    public BinaryDefImpl getDefinition() {
+        return FieldDefImpl.binaryDef;
     }
 
     @Override
@@ -134,9 +131,41 @@ class BinaryValueImpl extends FieldValueImpl implements BinaryValue {
     }
 
     @Override
-    public String toString() {
-        return Base64Variants.getDefaultVariant().encode(value, false);
+    public boolean isAtomic() {
+        return true;
     }
+
+    /*
+     * Public api methods from BinaryValue
+     */
+
+    @Override
+    public byte[] get() {
+        return value;
+    }
+
+    @Override
+    public JsonNode toJsonNode() {
+        return new BinaryNode(value);
+    }
+
+    @Override
+    public void toStringBuilder(StringBuilder sb) {
+        sb.append(Base64Variants.getDefaultVariant().encode(value, true));
+    }
+
+    /*
+     * Methods from FieldValueImpl
+     */
+
+    @Override
+    public byte[] getBytes() {
+        return value;
+    }
+
+    /*
+     * local methods
+     */
 
     /**
      * This is directly from JE's com.sleepycat.je.tree.Key class and is the
@@ -166,5 +195,9 @@ class BinaryValueImpl extends FieldValueImpl implements BinaryValue {
         }
 
         return (len1 - len2);
+    }
+
+    public static BinaryValueImpl create(byte[] value) {
+        return new BinaryValueImpl(value);
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -58,7 +58,10 @@ import oracle.kv.impl.topo.RepNodeId;
  */
 public class TransferProtocol {
 
-    static final int VERSION = 1;
+    /*
+     * Version 2 as of release 4.0, with the introduction of TTL
+     */
+    static final int VERSION = 2;
 
     /* Constant used to indicate a transfer only request */
     static final RepNodeId TRANSFER_ONLY_TARGET = new RepNodeId(0, 0);

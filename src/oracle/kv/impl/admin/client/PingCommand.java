@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -77,7 +77,7 @@ class PingCommand extends ShellCommand {
             Parameters params = cs.getParameters();
             ByteArrayOutputStream os = new ByteArrayOutputStream();
             PrintStream ps = new PrintStream(os);
-            Ping.pingTopology(topo, params, false /* verbose */,
+            Ping.pingTopology(topo, params, false /* showHidden */,
                               shell.getJson(), ps, cmd.getLoginManager());
             return os.toString();
         } catch (RemoteException re) {

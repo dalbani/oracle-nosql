@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -78,6 +78,7 @@ import oracle.kv.impl.api.rgstate.RepNodeState;
 import oracle.kv.impl.fault.ProcessFaultHandler;
 import oracle.kv.impl.fault.RNUnavailableException;
 import oracle.kv.impl.fault.SystemFaultException;
+import oracle.kv.impl.fault.WrappedClientException;
 import oracle.kv.impl.rep.EnvironmentFailureRetryException;
 import oracle.kv.impl.rep.IncorrectRoutingException;
 import oracle.kv.impl.rep.OperationsStatsTracker;
@@ -127,7 +128,6 @@ import com.sleepycat.je.rep.DatabasePreemptedException;
 import com.sleepycat.je.rep.InsufficientAcksException;
 import com.sleepycat.je.rep.InsufficientReplicasException;
 import com.sleepycat.je.rep.LockPreemptedException;
-import com.sleepycat.je.rep.MasterReplicaTransitionException;
 import com.sleepycat.je.rep.NodeType;
 import com.sleepycat.je.rep.RepInternal;
 import com.sleepycat.je.rep.ReplicaConsistencyException;
@@ -524,8 +524,8 @@ public class RequestHandlerImpl
                 DbInternal.getTxn(txn).setTxnTimeout(request.getTimeout());
                 streamHandle = MigrationStreamHandle.initialize
                     (repNode, request.getPartitionId(), txn);
-                final Result result = request.getOperation().execute
-                    (txn, request.getPartitionId(), operationHandler);
+                final Result result = operationHandler.execute(
+                    request.getOperation(), txn, request.getPartitionId());
                 final OpCode opCode = request.getOperation().getOpCode();
                 if (txn.isValid()) {
                     streamHandle.prepare();
@@ -592,17 +592,6 @@ public class RequestHandlerImpl
                  */
                 exception = lockConflict;
                 sleepNs = LOCK_CONFLICT_RETRY_NS;
-            } catch (MasterReplicaTransitionException rre) {
-                /*
-                 * As of JE 5.0.92.KV3 (NoSQL R2.1.24),
-                 * MasterReplicatTransitionException is deprecated and no
-                 * longer thrown. However, keep this catch to maintain backward
-                 * compatibility with older JE versions, for a while.
-                 */
-
-                /* Re-establish handles. */
-                repNode.asyncEnvRestart(repEnv, rre);
-                sleepNs = ENV_RESTART_RETRY_NS;
             } catch (RollbackException rre) {
                 /* Re-establish handles. */
                 repNode.asyncEnvRestart(repEnv, rre);
@@ -659,6 +648,11 @@ public class RequestHandlerImpl
                  * Security exceptions are returned to the client.
                  */
                 throw kvse;
+            } catch (WrappedClientException wce) {
+                /*
+                 * These are returned to the client.
+                 */
+                throw wce;
             } catch (RNUnavailableException rnue) {
                 logger.info(rnue.getMessage());
                 /* Propagate it back to the client. */
@@ -826,7 +820,8 @@ public class RequestHandlerImpl
                  null,
                  true /*isRemote*/);
         }
-        final Result result = request.getOperation().execute(null, null, null);
+        final Result result =
+            operationHandler.execute(request.getOperation(), null, null);
         return createResponse(repEnv, request, result);
     }
 
@@ -1409,11 +1404,15 @@ public class RequestHandlerImpl
     /**
      * Provides an implementation of OperationContext for access checking.
      */
-    private class RequestContext implements OperationContext {
+    public class RequestContext implements OperationContext {
         private final Request request;
 
         private RequestContext(Request request) {
             this.request = request;
+        }
+
+        public Request getRequest() {
+            return request;
         }
 
         @Override
@@ -1430,7 +1429,8 @@ public class RequestHandlerImpl
                 return emptyPrivilegeList;
             }
 
-            return request.getOperation().getRequiredPrivileges();
+            return operationHandler.getRequiredPrivileges(
+                request.getOperation());
         }
     }
 }

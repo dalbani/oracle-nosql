@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -50,14 +50,14 @@ import com.sleepycat.je.rep.InsufficientLogException;
 
 import oracle.kv.impl.fault.ClientAccessException;
 import oracle.kv.impl.fault.ProcessExitCode;
+import oracle.kv.impl.fault.ServiceFaultHandler;
 import oracle.kv.impl.rep.RepNodeService;
-import oracle.kv.impl.rep.RepNodeServiceFaultHandler;
 
 /**
  * Specializes the RepNodeServiceFaultHandler so that all thrown exceptions are
  * wrapped inside a RepNodeAdminFaultException.
  */
-public class RepNodeAdminFaultHandler extends RepNodeServiceFaultHandler {
+public class RepNodeAdminFaultHandler extends ServiceFaultHandler {
 
     /**
      * Tracks the number of requests that are currently active.

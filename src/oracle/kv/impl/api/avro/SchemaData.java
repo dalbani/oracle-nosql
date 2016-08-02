@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,21 +48,21 @@ import org.apache.avro.Schema;
 /**
  * Holds the stored data for a schema, and includes schema plus metadata.
  */
-class SchemaData {
+public class SchemaData {
 
     private final AvroSchemaMetadata metadata;
     private final Schema schema;
 
-    SchemaData(AvroSchemaMetadata metadata, Schema schema) {
+    public SchemaData(AvroSchemaMetadata metadata, Schema schema) {
         this.metadata = metadata;
         this.schema = schema;
     }
-    
-    AvroSchemaMetadata getMetadata() {
+
+    public AvroSchemaMetadata getMetadata() {
         return metadata;
     }
-    
-    Schema getSchema() {
+
+    public Schema getSchema() {
         return schema;
     }
 }

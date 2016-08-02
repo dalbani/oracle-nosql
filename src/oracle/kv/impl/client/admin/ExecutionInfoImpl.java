@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -105,11 +105,11 @@ public class ExecutionInfoImpl implements ExecutionInfo, Serializable {
      * Lets the client check that it knows how to parse this ExecutionInfo.
      */
     @Override
-        public int getVersion() {
+    public int getVersion() {
         return CURRENT_VERSION;
     }
 
-   @Override
+    @Override
     public int getPlanId() {
         return planId;
     }
@@ -137,8 +137,8 @@ public class ExecutionInfoImpl implements ExecutionInfo, Serializable {
     @Override
     public String toString() {
         return "ExecutionInfoImpl [planId=" + planId + ", isTerminated="
-                + isTerminated + ", info=" + info
-                + ", infoAsJson=" + infoAsJson + "]";
+            + isTerminated + ", info=" + info
+            + ", infoAsJson=" + infoAsJson + "]";
     }
 
     @Override

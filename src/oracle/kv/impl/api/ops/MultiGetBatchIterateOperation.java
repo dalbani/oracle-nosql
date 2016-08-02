@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,29 +44,20 @@
 package oracle.kv.impl.api.ops;
 
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
-
-import com.sleepycat.je.Transaction;
 
 import oracle.kv.Depth;
 import oracle.kv.KeyRange;
 
-import oracle.kv.impl.api.ops.MultiGetBatchExecutor.MultiGetBatchHandler;
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.security.SystemPrivilege;
-import oracle.kv.impl.security.TablePrivilege;
-import oracle.kv.impl.topo.PartitionId;
 import oracle.kv.impl.util.UserDataControl;
 
 /**
  * This is an intermediate class for multi-get-batch iterate operation.
  */
-abstract class MultiGetBatchIterateOperation<V>
-    extends MultiKeyOperation implements MultiGetBatchHandler<V> {
+abstract class MultiGetBatchIterateOperation extends MultiKeyOperation {
 
     private final List<byte[]> parentKeys;
     private final int batchSize;
@@ -91,7 +82,7 @@ abstract class MultiGetBatchIterateOperation<V>
      * to read common elements.
      */
     protected MultiGetBatchIterateOperation(OpCode opCode,
-                                            ObjectInput in,
+                                            DataInput in,
                                             short serialVersion)
         throws IOException {
 
@@ -135,7 +126,7 @@ abstract class MultiGetBatchIterateOperation<V>
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
@@ -155,36 +146,6 @@ abstract class MultiGetBatchIterateOperation<V>
             out.writeShort(-1);
         }
         out.writeInt(batchSize);
-    }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          final OperationHandler operationHandler) {
-
-        final MultiGetBatchExecutor<V> executor =
-            new MultiGetBatchExecutor<V>(this);
-        return executor.execute(txn, partitionId, operationHandler,
-                                getParentKeys(), getResumeKey(),
-                                getBatchSize());
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> schemaAccessPrivileges() {
-        return SystemPrivilege.schemaReadPrivList;
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> generalAccessPrivileges() {
-        return SystemPrivilege.readOnlyPrivList;
-    }
-
-    @Override
-    public List<? extends KVStorePrivilege>
-        tableAccessPrivileges(long tableId) {
-
-        return Collections.singletonList(
-            new TablePrivilege.ReadTable(tableId));
     }
 
     @Override

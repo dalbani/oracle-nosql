@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -55,6 +55,7 @@ import java.util.Set;
 import java.util.Map.Entry;
 import java.util.TreeMap;
 
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import org.codehaus.jackson.node.ArrayNode;
 import org.codehaus.jackson.node.ObjectNode;
 
@@ -65,6 +66,8 @@ import oracle.kv.impl.admin.topo.TopologyCandidate;
 import oracle.kv.impl.measurement.LatencyInfo;
 import oracle.kv.impl.monitor.views.PerfEvent;
 import oracle.kv.impl.monitor.views.ServiceChange;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.Partition;
@@ -83,11 +86,11 @@ import oracle.kv.impl.topo.Topology;
  */
 public final class TopologyPrinter {
 
-    public enum Filter { STORE, DC, RN, SN, SHARD, STATUS, PERF }
+    public enum Filter { STORE, DC, RN, SN, SHARD, STATUS, PERF, AN }
     public static final EnumSet<Filter> all =
         EnumSet.allOf(Filter.class);
     public static final EnumSet<Filter> components =
-        EnumSet.of(Filter.STORE, Filter.DC, Filter.RN, Filter.SN, Filter.SHARD);
+        EnumSet.of(Filter.STORE, Filter.DC, Filter.RN, Filter.SN, Filter.SHARD, Filter.AN);
     /**
      * Private constructor to satisfy CheckStyle and to prevent
      * instantiation of this utility class.
@@ -290,6 +293,29 @@ public final class TopologyPrinter {
                     out.println(makeWhiteSpace(indent) + s);
                 }
             }
+
+            /* List all the ANs on a given SN */
+            if (filter.contains(Filter.AN)) {
+                for (ArbNodeId anId : t.getHostedArbNodeIds(snId)) {
+                    String oneAN = "[" + anId + "]";
+
+                    if (showStatus) {
+                        oneAN += " " + getStatus(statusMap, anId, params);
+                    }
+
+                    if (!verbose) {
+                        out.println(makeWhiteSpace(indent) + oneAN);
+                    } else {
+                        out.print(makeWhiteSpace(indent) + oneAN);
+                        if (snp == null) {
+                            out.println();
+                        } else {
+                            out.println("  " + snp.getRootDirPath());
+                        }
+                    }
+                }
+            }
+
             if (filter.contains(Filter.SN)) {
                 indent -= indentAmount;
             }
@@ -311,8 +337,12 @@ public final class TopologyPrinter {
                 out.println(makeWhiteSpace(indent) + "shard=" + rg +
                             " num partitions=" + partIds.size());
 
-                if (filter.contains(Filter.RN)) {
+                if (filter.contains(Filter.RN) ||
+                    filter.contains(Filter.AN)) {
                     indent += indentAmount;
+                }
+
+                if (filter.contains(Filter.RN)) {
                     final List<RepNode> rns =
                         new ArrayList<RepNode>(rg.getRepNodes());
                     Collections.sort(rns);
@@ -329,11 +359,29 @@ public final class TopologyPrinter {
                     }
                 }
 
+                if (filter.contains(Filter.AN)) {
+                    final List<ArbNode> ans =
+                        new ArrayList<ArbNode>(rg.getArbNodes());
+                    Collections.sort(ans);
+                    for (ArbNode an: ans) {
+                        out.print(makeWhiteSpace(indent) + an);
+                        if (verbose && params != null) {
+                            final ArbNodeParams anp =
+                                params.get(an.getResourceId());
+                            if (anp != null) {
+                                out.print(" haPort=" + anp.getJENodeHostPort());
+                            }
+                        }
+                        out.println();
+                    }
+                }
+
                 if (verbose) {
                     out.println(makeWhiteSpace(indent) + "partitions=" +
                                 listPartitions(partIds));
                 }
-                if (filter.contains(Filter.RN)) {
+                if (filter.contains(Filter.RN) ||
+                    filter.contains(Filter.AN)) {
                     indent -= indentAmount;
                 }
             }
@@ -361,6 +409,7 @@ public final class TopologyPrinter {
      *        "port" : <port>,
      *        "capacity" : <capacity>,
      *        "rns" : [<rn1_id>, <rn2_id>,...]
+     *        "ans" : [<an1_id>,...]
      *      },
      *      ...
      *    ],
@@ -369,6 +418,7 @@ public final class TopologyPrinter {
      *        "id" : <shard_id>,
      *        "numPartitions" : <partitions>,
      *        "rns" : [<rn1_id>, <rn2_id>,...]
+     *        "ans" : [<an1_id>,...]
      *      },
      *    ...
      *    ]
@@ -413,6 +463,11 @@ public final class TopologyPrinter {
             for (RepNodeId rnId : rnIds) {
                 rnNodes.add(rnId.toString());
             }
+            final Set<ArbNodeId> anIds = topo.getHostedArbNodeIds(snId);
+            final ArrayNode anNodes = snNode.putArray("ans");
+            for (ArbNodeId anId : anIds) {
+                anNodes.add(anId.toString());
+            }
             snNodes.add(snNode);
         }
         final ArrayNode rgNodes = json.putArray("shards");
@@ -432,6 +487,12 @@ public final class TopologyPrinter {
             final ArrayNode rnNodes = rgNode.putArray("rns");
             for (RepNode rn : rns) {
                 rnNodes.add(rn.getResourceId().toString());
+            }
+            final List<ArbNode> ans = new ArrayList<>(rg.getArbNodes());
+            Collections.sort(ans);
+            final ArrayNode anNodes = rgNode.putArray("ans");
+            for (ArbNode an : ans) {
+                anNodes.add(an.getResourceId().toString());
             }
             rgNodes.add(rgNode);
         }
@@ -460,6 +521,25 @@ public final class TopologyPrinter {
             final RepNodeParams rnp = params.get(rnId);
             if (rnp != null) {
                 if (rnp.isDisabled()) {
+                    return "Stopped/" + status;
+                }
+            }
+        }
+
+        return status;
+    }
+
+
+    private static String getStatus(Map<ResourceId, ServiceChange> statusMap,
+                                    ArbNodeId anId,
+                                    Parameters params) {
+        final String status = getStatus(statusMap, anId);
+
+        /* ANs may be disabled by a stop-service plan */
+        if (params != null) {
+            final ArbNodeParams anp = params.get(anId);
+            if (anp != null) {
+                if (anp.isDisabled()) {
                     return "Stopped/" + status;
                 }
             }

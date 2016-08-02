@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,18 +43,13 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
-import java.util.Collections;
-import java.util.List;
 
 import oracle.kv.Depth;
 import oracle.kv.Direction;
 import oracle.kv.KeyRange;
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.security.SystemPrivilege;
-import oracle.kv.impl.security.TablePrivilege;
 
 /**
  * A multi-key iterate operation.
@@ -85,7 +80,7 @@ abstract public class MultiKeyIterate extends MultiKeyOperation {
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    MultiKeyIterate(OpCode opCode, ObjectInput in, short serialVersion)
+    MultiKeyIterate(OpCode opCode, DataInput in, short serialVersion)
         throws IOException {
 
         super(opCode, in, serialVersion);
@@ -107,7 +102,7 @@ abstract public class MultiKeyIterate extends MultiKeyOperation {
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
@@ -133,22 +128,5 @@ abstract public class MultiKeyIterate extends MultiKeyOperation {
 
     byte[] getResumeKey() {
         return resumeKey;
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> schemaAccessPrivileges() {
-        return SystemPrivilege.schemaReadPrivList;
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> generalAccessPrivileges() {
-        return SystemPrivilege.readOnlyPrivList;
-    }
-
-    @Override
-    public List<? extends KVStorePrivilege>
-        tableAccessPrivileges(long tableId) {
-        return Collections.singletonList(
-            new TablePrivilege.ReadTable(tableId));
     }
 }

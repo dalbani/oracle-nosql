@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,6 +44,7 @@
 package oracle.kv.impl.api.bulk;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -84,6 +85,7 @@ import oracle.kv.impl.api.ops.MultiGetBatchIterate;
 import oracle.kv.impl.api.ops.MultiGetBatchKeysIterate;
 import oracle.kv.impl.api.ops.Result;
 import oracle.kv.impl.api.ops.ResultKeyValueVersion;
+import oracle.kv.impl.api.ops.ResultKey;
 import oracle.kv.impl.api.parallelscan.BaseParallelScanIteratorImpl;
 import oracle.kv.impl.api.parallelscan.DetailedMetricsImpl;
 import oracle.kv.impl.topo.PartitionId;
@@ -92,6 +94,7 @@ import oracle.kv.impl.topo.Topology;
 import oracle.kv.impl.topo.TopologyUtil;
 import oracle.kv.impl.util.KVThreadFactory;
 import oracle.kv.stats.DetailedMetrics;
+import oracle.kv.table.TableIterator;
 
 /**
  * Implementation of a bulk get storeIterator and storeKeysIterator.
@@ -166,21 +169,13 @@ public class BulkMultiGet {
                     final byte[] keyBytes = entry.getKeyBytes();
                     final Key key = keySerializer.fromByteArray(keyBytes);
                     final KeyValueVersion value =
-                        new KeyValueVersion(key, entry.getValue(),
-                                            entry.getVersion());
+                        KVStoreImpl.createKeyValueVersion(
+                            key,
+                            entry.getValue(),
+                            entry.getVersion(),
+                            entry.getExpirationTime());
                     elementList.add(value);
                 }
-            }
-
-            @Override
-            protected byte[] extractResumeKey
-                (Result result, List<KeyValueVersion> elementList) {
-
-                int cnt = elementList.size();
-                if (cnt == 0) {
-                    return null;
-                }
-                return elementList.get(cnt - 1).getKey().toByteArray();
             }
         };
     }
@@ -238,7 +233,7 @@ public class BulkMultiGet {
 
             @Override
             protected void convertResult(Result result, List<Key> elementList) {
-                final List<byte[]> byteKeyResults = result.getKeyList();
+                final List<ResultKey> byteKeyResults = result.getKeyList();
 
                 int cnt = byteKeyResults.size();
                 if (cnt == 0) {
@@ -246,19 +241,9 @@ public class BulkMultiGet {
                     return;
                 }
                 for (int i = 0; i < cnt; i += 1) {
-                    final byte[] entry = byteKeyResults.get(i);
+                    final byte[] entry = byteKeyResults.get(i).getKeyBytes();
                     elementList.add(keySerializer.fromByteArray(entry));
                 }
-            }
-
-            @Override
-            protected byte[] extractResumeKey(Result result,
-                                              List<Key> elementList) {
-                int cnt = elementList.size();
-                if (cnt == 0) {
-                    return null;
-                }
-                return elementList.get(cnt - 1).toByteArray();
             }
         };
     }
@@ -311,7 +296,8 @@ public class BulkMultiGet {
      *
      */
     public static abstract class BulkGetIterator<K, V>
-        extends BaseParallelScanIteratorImpl<V> {
+        extends BaseParallelScanIteratorImpl<V>
+        implements TableIterator<V> {
 
         /**
          * The Key comparator used to group keys associated with a partition,
@@ -447,12 +433,6 @@ public class BulkMultiGet {
         protected abstract Key getKey(K key);
 
         /**
-         * Abstract method to extract resume key from elementList
-         */
-        protected abstract byte[] extractResumeKey(Result result,
-                                                   List<V> elementList);
-
-        /**
          * Abstract method to create bulk get operation.
          */
         protected abstract InternalOperation generateBulkGetOp
@@ -536,13 +516,23 @@ public class BulkMultiGet {
          */
         private void startShardExecutor(int maxShardTasks) {
             final String fmt = "startShardExecutor #ShardTasks:%d, " +
-                "#Shards:%d, parallelism per shard:%d";
+                "#Shards:%d, base parallelism per shard:%d, " +
+                "residual parallelism per shard:%d";
+
             final int nShards = topology.getRepGroupMap().size();
-            final int perShardParallelism =
-                (maxShardTasks < nShards) ? 1 : maxShardTasks / nShards;
+            int basePerShardParallelism;
+            int residualPerShardParallelism;
+            if (maxShardTasks > nShards) {
+                basePerShardParallelism = maxShardTasks / nShards;
+                residualPerShardParallelism = maxShardTasks % nShards;
+            } else {
+                basePerShardParallelism = 1;
+                residualPerShardParallelism = 0;
+            }
 
             logger.info(String.format(fmt, maxShardTasks, nShards,
-                perShardParallelism));
+                                      basePerShardParallelism,
+                                      residualPerShardParallelism));
 
             final Map<RepGroupId, List<PartitionId>> map =
                 TopologyUtil.getRGIdPartMap(topology);
@@ -553,25 +543,38 @@ public class BulkMultiGet {
             for (RepGroupId rgId : topology.getRepGroupIds()) {
                 final List<PartitionId> list = map.get(rgId);
                 final int nParts = list.size();
+                int perShardParallelism = basePerShardParallelism;
+                if (residualPerShardParallelism > 0) {
+                    residualPerShardParallelism--;
+                    perShardParallelism++;
+                }
+
                 /* Divide up the partitions amongst the tasks. */
-                int perTaskPartitions =
-                    (nParts + perShardParallelism - 1) /
-                     perShardParallelism;
+                final int basePerTaskPartitions = nParts / perShardParallelism;
+                int residualPerTaskPartitions = nParts % perShardParallelism;
 
                 doneWithShard:
-                for (int i = 0; i < perShardParallelism; i++) {
-                    final int from = i * perTaskPartitions;
-                    if (from >= nParts) {
-                        /* Excess threads */
+                for (int i = 0; i < nParts;  ) {
+                    int perTaskPartitions = basePerTaskPartitions;
+                    if (residualPerTaskPartitions > 0) {
+                        perTaskPartitions++;
+                        residualPerTaskPartitions--;
+                    }
+
+                    if (perTaskPartitions == 0) {
+                        /* More parallelism than partitions in shard. */
                         break doneWithShard;
                     }
 
                     final List<PartitionId> taskPartitions =
-                        list.subList(from, Math.min((i + 1) * perTaskPartitions,
-                                     nParts));
-                    final int nSubParts = taskPartitions.size();
+                        list.subList(i, i + perTaskPartitions);
+
+                    logger.info("Partitions:" +
+                        Arrays.toString(taskPartitions.toArray()) +
+                        " assigned to RG task");
+
                     final ShardGetStream task =
-                        new ShardGetStream(rgId, nSubParts);
+                        new ShardGetStream(rgId, taskPartitions.size());
                     for (PartitionId pid : taskPartitions) {
                         PartitionValues pv = pMap[pid.getPartitionId()];
                         pv.setShardTask(task);
@@ -579,6 +582,8 @@ public class BulkMultiGet {
                     streams.add(task);
                     getStreams.add(task);
                     task.submit();
+
+                    i += perTaskPartitions;
                 }
             }
         }
@@ -866,14 +871,14 @@ public class BulkMultiGet {
             }
 
             @Override
-            protected void setResumeKey(Result result, List<V> elementList) {
+            protected void setResumeKey(Result result) {
                 if (result.hasMoreElements()) {
                     if (resumeParentKeyIndex == -1) {
                         resumeParentKeyIndex = result.getResumeParentKeyIndex();
                     } else {
                         resumeParentKeyIndex +=result.getResumeParentKeyIndex();
                     }
-                    resumeKey = extractResumeKey(result, elementList);
+                    resumeKey = result.getPrimaryResumeKey();
                 } else {
                     resetResumeKey();
                 }

@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <title>Chapter 1. The SQL for Oracle NoSQL Database Data Model</title>
+    <link rel="stylesheet" href="gettingStarted.css" type="text/css" />
+    <meta name="generator" content="DocBook XSL Stylesheets V1.73.2" />
+    <link rel="start" href="index.html" title="Getting Started with SQL for Oracle NoSQL Database" />
+    <link rel="up" href="index.html" title="Getting Started with SQL for Oracle NoSQL Database" />
+    <link rel="prev" href="preface.html" title="Preface" />
+    <link rel="next" href="sfw_expression.html" title="Chapter 2. SQL for Oracle NoSQL Database Queries" />
+  </head>
+  <body>
+    <div xmlns="" class="navheader">
+      <div class="libver">
+        <p>Library Version 12.1.4.0</p>
+      </div>
+      <table width="100%" summary="Navigation header">
+        <tr>
+          <th colspan="3" align="center">Chapter 1. The SQL for Oracle NoSQL Database Data Model</th>
+        </tr>
+        <tr>
+          <td width="20%" align="left"><a accesskey="p" href="preface.html">Prev</a> </td>
+          <th width="60%" align="center"> </th>
+          <td width="20%" align="right"> <a accesskey="n" href="sfw_expression.html">Next</a></td>
+        </tr>
+      </table>
+      <hr />
+    </div>
+    <div class="chapter" lang="en" xml:lang="en">
+      <div class="titlepage">
+        <div>
+          <div>
+            <h2 class="title"><a id="introduction_sql"></a>Chapter 1. The SQL for Oracle NoSQL Database Data Model</h2>
+          </div>
+        </div>
+      </div>
+      <p>
+        This chapter gives an overview of the data model. For a more detailed
+        description of the data model see the
+        <em class="citetitle">SQL for Oracle NoSQL Database Specification</em>.
+    </p>
+      <p>
+        In SQL for Oracle NoSQL Database data is modeled as typed items. A typed item (or simply item) is a
+        value and an associated type that contains the value. A type is a definition
+        of a set of values that are said to belong to (or be instances of) that type.
+    </p>
+      <p>
+        Values can be atomic or complex. An atomic value is a single, indivisible unit
+        of data. A complex value is a value that contains or consists of other values
+        and provides access to its nested values. Similarly, the types supported by SQL for Oracle NoSQL Database
+        can be characterized as atomic types (containing atomic values only) or complex
+        types (containing complex values only).
+    </p>
+      <p>
+        The data model supports the following kinds of atomic values and associated
+        data types: integer, long, float, double, string, boolean, binaries, and enums. 
+        SQL for Oracle NoSQL Database also supports the following complex types:
+    </p>
+      <div class="itemizedlist">
+        <ul type="disc">
+          <li>
+            <p>
+        Array
+    </p>
+            <p>
+        An array is an ordered collection of zero or more items, all of which have the same type.
+    </p>
+          </li>
+          <li>
+            <p>
+        Map
+    </p>
+            <p>
+        Is an unordered collection of zero or more key-item pairs, where all keys are strings 
+        and all the items have the same type.
+    </p>
+          </li>
+          <li>
+            <p>
+        Record
+    </p>
+            <p>
+        Is an ordered collection of one or more key-item pairs, where all keys are strings
+        and the items associated with different keys may have different types.
+    </p>
+          </li>
+        </ul>
+      </div>
+      <p>
+        Another difference between records and maps is that the keys in records are fixed
+        and known in advance (they are part of the record type definition), whereas
+        maps can contain arbitrary keys (the map keys are not part of the map type).
+    </p>
+    </div>
+    <div class="navfooter">
+      <hr />
+      <table width="100%" summary="Navigation footer">
+        <tr>
+          <td width="40%" align="left"><a accesskey="p" href="preface.html">Prev</a> </td>
+          <td width="20%" align="center"> </td>
+          <td width="40%" align="right"> <a accesskey="n" href="sfw_expression.html">Next</a></td>
+        </tr>
+        <tr>
+          <td width="40%" align="left" valign="top">Preface </td>
+          <td width="20%" align="center">
+            <a accesskey="h" href="index.html">Home</a>
+          </td>
+          <td width="40%" align="right" valign="top"> Chapter 2. SQL for Oracle NoSQL Database Queries</td>
+        </tr>
+      </table>
+    </div>
+  </body>
+</html>

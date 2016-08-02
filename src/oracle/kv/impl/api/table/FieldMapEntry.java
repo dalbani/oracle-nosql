@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -65,15 +65,22 @@ import com.sleepycat.persist.model.Persistent;
 class FieldMapEntry implements Cloneable, Serializable {
 
     private static final long serialVersionUID = 1L;
+
     private final FieldDefImpl field;
+
     private final boolean nullable;
+
     private final FieldValueImpl defaultValue;
 
-    FieldMapEntry(FieldDefImpl field, boolean nullable,
-                  FieldValueImpl defaultValue) {
+    FieldMapEntry(
+        FieldDefImpl field,
+        boolean nullable,
+        FieldValueImpl defaultValue) {
+
         this.field = field;
         this.nullable = nullable;
         this.defaultValue = defaultValue;
+
         if (!nullable && defaultValue == null) {
             throw new IllegalArgumentException
                 ("Not nullable fields require a default value");
@@ -108,6 +115,10 @@ class FieldMapEntry implements Cloneable, Serializable {
                 NullValueImpl.getInstance());
     }
 
+    boolean hasDefaultValue() {
+        return defaultValue != null;
+    }
+
     /**
      * Compare equality.
      */
@@ -119,6 +130,21 @@ class FieldMapEntry implements Cloneable, Serializable {
                 defaultsEqual(other);
         }
         return false;
+    }
+
+    boolean isPrecise() {
+        return field.isPrecise();
+    }
+
+    boolean isSubtype(FieldMapEntry sup) {
+
+        if (nullable != sup.nullable) {
+            if (nullable) {
+                return false;
+            }
+        }
+
+        return field.isSubtype(sup.field);
     }
 
     @Override
@@ -180,4 +206,3 @@ class FieldMapEntry implements Cloneable, Serializable {
         return getDefaultValue().equals(other.getDefaultValue());
     }
 }
-

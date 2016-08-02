@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -124,7 +124,16 @@ public enum PerfStatType {
         INDEX_KEYS_ITERATOR_INT (1001, true, "IndexKeysIterator"),
 
         INDEX_ITERATOR_CUM      (1020, false, "IndexIterator"),
-        INDEX_KEYS_ITERATOR_CUM (1021, false, "IndexKeysIterator");
+        INDEX_KEYS_ITERATOR_CUM (1021, false, "IndexKeysIterator"),
+
+        /* query types */
+        QUERY_SINGLE_PARTITION_INT (1100, true, "QuerySinglePartition"),
+        QUERY_MULTI_PARTITION_INT (1101, true, "QueryMultiPartition"),
+        QUERY_MULTI_SHARD_INT (1202, true, "QueryMultiShard"),
+
+        QUERY_SINGLE_PARTITION_CUM (1120, false, "QuerySinglePartition"),
+        QUERY_MULTI_PARTITION_CUM (1121, false, "QueryMultiPartition"),
+        QUERY_MULTI_SHARD_CUM (1122, false, "QueryMultiShard");
 
 
     /** Catalog of all perf stat types. */
@@ -176,11 +185,21 @@ public enum PerfStatType {
         EXECUTE_INT.setParent(USER_MULTI_OP_INT);
         EXECUTE_CUM.setParent(USER_MULTI_OP_CUM);
 
+        /* index iteration */
         INDEX_ITERATOR_INT.setParent(USER_MULTI_OP_INT);
         INDEX_KEYS_ITERATOR_INT.setParent(USER_MULTI_OP_INT);
 
         INDEX_ITERATOR_CUM.setParent(USER_MULTI_OP_CUM);
         INDEX_KEYS_ITERATOR_CUM.setParent(USER_MULTI_OP_CUM);
+
+        /* queries */
+        QUERY_SINGLE_PARTITION_INT.setParent(USER_MULTI_OP_INT);
+        QUERY_MULTI_PARTITION_INT.setParent(USER_MULTI_OP_INT);
+        QUERY_MULTI_SHARD_INT.setParent(USER_MULTI_OP_INT);
+
+        QUERY_SINGLE_PARTITION_CUM.setParent(USER_MULTI_OP_CUM);
+        QUERY_MULTI_PARTITION_CUM.setParent(USER_MULTI_OP_CUM);
+        QUERY_MULTI_SHARD_CUM.setParent(USER_MULTI_OP_CUM);
 
         for (PerfStatType t : EnumSet.allOf(PerfStatType.class)) {
             idMap.put(t.getId(), t);
@@ -214,7 +233,10 @@ public enum PerfStatType {
             MULTI_DELETE_INT,
             EXECUTE_INT,
             INDEX_ITERATOR_INT,
-            INDEX_KEYS_ITERATOR_INT
+            INDEX_KEYS_ITERATOR_INT,
+            QUERY_SINGLE_PARTITION_INT,
+            QUERY_MULTI_PARTITION_INT,
+            QUERY_MULTI_SHARD_INT
         };
     }
 

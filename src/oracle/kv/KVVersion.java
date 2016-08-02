@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -98,6 +98,9 @@ public class KVVersion implements Comparable<KVVersion>, Serializable {
     /** @hidden */
     public static final KVVersion R3_5 =
         new KVVersion(12, 1, 3, 5, 2, null);    /* R3.5 11/2015 */
+    /** @hidden */
+    public static final KVVersion R4_0 =
+        new KVVersion(12, 1, 4, 0, 9, null);    /* R4.0 3/2016 */
 
     /**
      * The current software version.
@@ -107,13 +110,13 @@ public class KVVersion implements Comparable<KVVersion>, Serializable {
          * WHEN YOU BUMP THIS VERSION, BE SURE TO BUMP THE VERSIONS IN
          * misc/rpm/*.spec and release-compat.xml.
          */
-        new KVVersion(12, 1, 3, 5, 2, null);
+        R4_0;
 
    /**
     * The current prerequisite version.  Nodes can only join the cluster if
     * they are running at least this version of the software.
     */
-    public static final KVVersion PREREQUISITE_VERSION = R2_0_23;
+    public static final KVVersion PREREQUISITE_VERSION = R3_0;
 
     private final int oracleMajor;
     private final int oracleMinor;

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -77,8 +77,10 @@ import com.sleepycat.je.DatabaseEntry;
 import com.sleepycat.je.DatabaseException;
 import com.sleepycat.je.DatabaseNotFoundException;
 import com.sleepycat.je.Durability;
+import com.sleepycat.je.Put;
 import com.sleepycat.je.Transaction;
 import com.sleepycat.je.TransactionConfig;
+import com.sleepycat.je.WriteOptions;
 import com.sleepycat.je.rep.NoConsistencyRequiredPolicy;
 import com.sleepycat.je.rep.ReplicaWriteException;
 import com.sleepycat.je.rep.ReplicatedEnvironment;
@@ -177,6 +179,9 @@ class MigrationTarget implements Callable<MigrationTarget> {
                setDurability(new Durability(Durability.SyncPolicy.NO_SYNC,
                                             Durability.SyncPolicy.NO_SYNC,
                                             Durability.ReplicaAckPolicy.NONE));
+
+    /* Write options for TTL to avoid creating a new instance on each op */
+    private final WriteOptions writeOptions;
 
     /* The partition this target is going to get */
     private final PartitionId partitionId;
@@ -288,6 +293,7 @@ class MigrationTarget implements Callable<MigrationTarget> {
         waitAfterError = repNodeParams.getWaitAfterError();
         readerFactory = new ReaderFactory();
         requestTime = System.currentTimeMillis();
+        writeOptions = new WriteOptions().setUpdateTTL(true);
     }
 
     /**
@@ -789,7 +795,7 @@ class MigrationTarget implements Callable<MigrationTarget> {
         }
         PingCollector collector = new PingCollector(topo);
         RNNameHAPort rnNameAndPort = collector.getMasterNamePort(sourceRGId);
-        
+
         if (rnNameAndPort == null) {
             throw new IOException("Unable to get mastership status for " +
                                    sourceRGId.getGroupName());
@@ -1091,13 +1097,16 @@ class MigrationTarget implements Callable<MigrationTarget> {
                 switch (op) {
                     case COPY : {
                         copyOps++;
-                        insert(new CopyOp(readDbEntry(), readDbEntry()));
+                        insert(new CopyOp(readDbEntry(),
+                                          readDbEntry(),
+                                          readExpirationTime()));
                         break;
                     }
                     case PUT : {
                         insert(new PutOp(readTxnId(),
                                          readDbEntry(),
-                                         readDbEntry()));
+                                         readDbEntry(),
+                                         readExpirationTime()));
                         break;
                     }
                     case DELETE : {
@@ -1167,6 +1176,13 @@ class MigrationTarget implements Callable<MigrationTarget> {
          * Reads a transaction ID from the migration stream.
          */
         private long readTxnId() throws IOException {
+            return stream.readLong();
+        }
+
+        /**
+         * Reads expiration time from the migration stream.
+         */
+        private long readExpirationTime() throws IOException {
             return stream.readLong();
         }
 
@@ -1318,17 +1334,20 @@ class MigrationTarget implements Callable<MigrationTarget> {
         private class CopyOp extends Op {
             final byte[] key;
             final byte[] value;
+            final long expirationTime;
 
-            CopyOp(byte[] key, byte[] value) {
+            CopyOp(byte[] key, byte[] value, long expirationTime) {
                 this.key = key;
                 this.value = value;
+                this.expirationTime = expirationTime;
             }
 
             @Override
             void execute() {
                 keyEntry.setData(key);
                 valueEntry.setData(value);
-                partitionDb.put(getBatchTxn(), keyEntry, valueEntry);
+                partitionDb.put(getBatchTxn(), keyEntry, valueEntry,
+                                Put.OVERWRITE, getWriteOptions(expirationTime));
                 copyBytes += value.length;
             }
 
@@ -1373,18 +1392,22 @@ class MigrationTarget implements Callable<MigrationTarget> {
         private class PutOp extends TxnOp {
             final byte[] key;
             final byte[] value;
+            final long expirationTime;
 
-            PutOp(long txnId, byte[] key, byte[] value) {
+            PutOp(long txnId, byte[] key, byte[] value,
+                  long expirationTime) {
                 super(txnId);
                 this.key = key;
                 this.value = value;
+                this.expirationTime = expirationTime;
             }
 
             @Override
             void execute() {
                 keyEntry.setData(key);
                 valueEntry.setData(value);
-                partitionDb.put(getTransaction(), keyEntry, valueEntry);
+                partitionDb.put(getTransaction(), keyEntry, valueEntry,
+                                Put.OVERWRITE, getWriteOptions(expirationTime));
             }
 
             @Override
@@ -1582,5 +1605,17 @@ class MigrationTarget implements Callable<MigrationTarget> {
             newThread(reader).start();
             return reader;
         }
+    }
+
+    /**
+     * Returns a JE WriteOptions object initialized with a TTL
+     * if expirationTime is non-zero, otherwise null. If non-null
+     * the instance returned is a singleton in this class.
+     */
+    private WriteOptions getWriteOptions(long expirationTime) {
+        if (expirationTime == 0) {
+            return null;
+        }
+        return writeOptions.setExpirationTime(expirationTime, null);
     }
 }

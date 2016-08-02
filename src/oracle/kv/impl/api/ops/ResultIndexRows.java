@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,12 +43,13 @@
 
 package oracle.kv.impl.api.ops;
 
+import static oracle.kv.impl.util.SerialVersion.RESULT_INDEX_ITERATE_VERSION;
+
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 
 import oracle.kv.Version;
-import oracle.kv.impl.util.SerialVersion;
 
 /**
  * This class holds results of an index row iteration over a table.  It extends
@@ -66,21 +67,15 @@ import oracle.kv.impl.util.SerialVersion;
  */
 public class ResultIndexRows extends ResultKeyValueVersion {
 
-    /*
-     * Clients and servers with this serial version are prepared for the index
-     * key in addition to the ResultKeyValueVersion.  This code was introduced
-     * in SerialVersion.V6.
-     */
-    private static final short RESULT_INDEX_ITERATE_VERSION = SerialVersion.V6;
-
     /* this class adds the index key to ResultKeyValueVersion */
     private final byte[] indexKeyBytes;
 
     public ResultIndexRows(byte[] indexKeyBytes,
                            byte[] primaryKeyBytes,
                            byte[] valueBytes,
-                           Version version) {
-        super(primaryKeyBytes, valueBytes, version);
+                           Version version,
+                           long expirationTime) {
+        super(primaryKeyBytes, valueBytes, version, expirationTime);
         this.indexKeyBytes = indexKeyBytes;
     }
 
@@ -88,7 +83,7 @@ public class ResultIndexRows extends ResultKeyValueVersion {
      * FastExternalizable constructor.  Must call superclass constructor
      * first to read common elements.
      */
-    public ResultIndexRows(ObjectInput in, short serialVersion)
+    public ResultIndexRows(DataInput in, short serialVersion)
         throws IOException {
         super(in, serialVersion);
         if (serialVersion >= RESULT_INDEX_ITERATE_VERSION) {
@@ -105,7 +100,7 @@ public class ResultIndexRows extends ResultKeyValueVersion {
      * write common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
         super.writeFastExternal(out, serialVersion);
         if (serialVersion >= RESULT_INDEX_ITERATE_VERSION) {

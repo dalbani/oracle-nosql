@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -46,7 +46,6 @@ package oracle.kv.impl.admin.plan.task;
 import oracle.kv.impl.admin.CommandResult;
 import oracle.kv.impl.admin.CommandResult.CommandFails;
 import oracle.kv.impl.admin.plan.AbstractPlan;
-import oracle.kv.impl.fault.CommandFaultException;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.util.ConfigurableService.ServiceStatus;
 import oracle.kv.util.ErrorMessage;
@@ -60,6 +59,7 @@ import com.sleepycat.persist.model.Persistent;
  * version 0: original.
  * version 1: Changed inheritance chain.
  */
+@Deprecated
 @Persistent(version=1)
 public class WaitForRepNodeState extends SingleJobTask {
 
@@ -96,10 +96,8 @@ public class WaitForRepNodeState extends SingleJobTask {
     @Override
     public State doWork()
         throws Exception {
-
-        try {
-            State state = Utils.waitForRepNodeState(plan, targetNodeId,
-                                                    targetState);
+        State state =
+            Utils.waitForNodeState(plan, targetNodeId, targetState);
             if (state == State.ERROR) {
                 final String msg = "RepNode " + targetNodeId +
                     " failed to reach " + targetState;
@@ -108,11 +106,6 @@ public class WaitForRepNodeState extends SingleJobTask {
                 setTaskResult(taskResult);
             }
             return state;
-        } catch (Exception e) {
-            throw new CommandFaultException(
-                e.getMessage(), e, ErrorMessage.NOSQL_5400,
-                CommandResult.PLAN_CANCEL); 
-        }
     }
 
     @Override

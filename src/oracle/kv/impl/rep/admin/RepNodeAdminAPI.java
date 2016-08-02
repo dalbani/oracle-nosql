@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -82,6 +82,12 @@ public class RepNodeAdminAPI extends RemoteAPI {
      */
     private static final short KERBEROS_AUTHENTICATION_SERIAL_VERSION =
         SerialVersion.V9;
+
+    /**
+     * deleteMember support was added.
+     */
+    private static final short DELETE_MEMBER_VERSION = SerialVersion.V10;
+
 
     private final RepNodeAdmin proxyRemote;
 
@@ -263,6 +269,40 @@ public class RepNodeAdminAPI extends RemoteAPI {
                                                  newNodeHostPort,
                                                  NULL_CTX,
                                                  getSerialVersion());
+    }
+
+
+    /**
+     * @param groupName
+     * @param targetNodeName
+     * @param targetHelperHosts
+     * @return true if the node was deleted from the JE group database, false
+     * if there is no current master, and we need to retry.
+     * @throws RemoteException
+     */
+    public boolean deleteMember(String groupName,
+                                String targetNodeName,
+                                String targetHelperHosts)
+        throws RemoteException{
+
+        /*
+         * This method was added at version 10.  We do
+         * not expect cross-version interoperation using this method,
+         * so we simply prohibit it.
+         */
+        if (getSerialVersion() < DELETE_MEMBER_VERSION) {
+            throw new UnsupportedOperationException
+                ("There was an attempt to delete JE HA node for a RepNode " +
+                 "that is running an earlier, incompatible release.  Please " +
+                 "upgrade all components of the store before attempting " +
+                 "to change the store's configuration.");
+        }
+
+        return proxyRemote.deleteMember(groupName,
+                                        targetNodeName,
+                                        targetHelperHosts,
+                                        NULL_CTX,
+                                        getSerialVersion());
     }
 
     /**

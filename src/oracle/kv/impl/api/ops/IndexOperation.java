@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,33 +43,12 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
-import java.util.Collections;
-import java.util.List;
 
-import oracle.kv.FaultException;
-import oracle.kv.MetadataNotFoundException;
-import oracle.kv.UnauthorizedException;
-import oracle.kv.impl.api.ops.InternalOperation.PrivilegedTableAccessor;
-import oracle.kv.impl.api.ops.MultiTableOperation.TargetTableAccessChecker;
-import oracle.kv.impl.api.table.IndexImpl;
 import oracle.kv.impl.api.table.IndexRange;
 import oracle.kv.impl.api.table.TargetTables;
-import oracle.kv.impl.rep.RepNode;
-import oracle.kv.impl.security.ExecutionContext;
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.security.SystemPrivilege;
-import oracle.kv.impl.security.TablePrivilege;
-import oracle.kv.table.Index;
-import oracle.kv.table.Table;
-
-import com.sleepycat.je.DatabaseEntry;
-import com.sleepycat.je.LockMode;
-import com.sleepycat.je.OperationStatus;
-import com.sleepycat.je.SecondaryCursor;
-import com.sleepycat.je.SecondaryDatabase;
 
 /**
  * An index operation identifies the index by name and table and includes
@@ -87,8 +66,7 @@ import com.sleepycat.je.SecondaryDatabase;
  *
  * This class is public to make it available to tests.
  */
-public abstract class IndexOperation extends InternalOperation
-    implements PrivilegedTableAccessor {
+public class IndexOperation extends InternalOperation {
 
     /*
      * These members represent the serialized state of the class in the
@@ -96,28 +74,23 @@ public abstract class IndexOperation extends InternalOperation
      */
     private final String indexName;
     protected final TargetTables targetTables;
-    private final IndexRange range;
+    protected final IndexRange range;
     private final byte[] resumeSecondaryKey;
     private final byte[] resumePrimaryKey;
     private final int batchSize;
-
-    /*
-     * This is initialized post-construction and only used on the server.
-     */
-    private String tableName;
 
     /**
      * Constructs an index operation.
      *
      * For subclasses, allows passing OpCode.
      */
-    IndexOperation(OpCode opCode,
-                   String indexName,
-                   TargetTables targetTables,
-                   IndexRange range,
-                   byte[] resumeSecondaryKey,
-                   byte[] resumePrimaryKey,
-                   int batchSize) {
+    public IndexOperation(OpCode opCode,
+                          String indexName,
+                          TargetTables targetTables,
+                          IndexRange range,
+                          byte[] resumeSecondaryKey,
+                          byte[] resumePrimaryKey,
+                          int batchSize) {
         super(opCode);
         this.indexName = indexName;
         this.targetTables = targetTables;
@@ -133,7 +106,7 @@ public abstract class IndexOperation extends InternalOperation
      *
      * For subclasses, allows passing OpCode.
      */
-    IndexOperation(OpCode opCode, ObjectInput in, short serialVersion)
+    IndexOperation(OpCode opCode, DataInput in, short serialVersion)
         throws IOException {
 
         super(opCode, in, serialVersion);
@@ -171,7 +144,7 @@ public abstract class IndexOperation extends InternalOperation
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
@@ -213,124 +186,12 @@ public abstract class IndexOperation extends InternalOperation
         return indexName;
     }
 
-    private String getTableName(OperationHandler operationHandler) {
-
-        /*
-         * Initialize table name if necessary
-         */
-        if (tableName == null) {
-            long id = targetTables.getTargetTableId();
-            Table table = operationHandler.getRepNode().getTable(id);
-            if (table == null) {
-                throw new MetadataNotFoundException
-                    ("Cannot access table.  It may not exist, id: " + id);
-            }
-            tableName = table.getFullName();
-        }
-        return tableName;
-    }
-
-    IndexImpl getIndex(OperationHandler operationHandler) {
-        RepNode repNode = operationHandler.getRepNode();
-        getTableName(operationHandler);
-        Index index = repNode.getIndex(getIndexName(), tableName);
-        if (index == null) {
-            throw new MetadataNotFoundException
-                ("Cannot find index " + getIndexName() + " in table "
-                 + tableName);
-        }
-        return (IndexImpl) index;
-    }
-
-    SecondaryDatabase getSecondaryDatabase(OperationHandler operationHandler) {
-        RepNode repNode = operationHandler.getRepNode();
-        getTableName(operationHandler);
-        final SecondaryDatabase db = repNode.getIndexDB(getIndexName(),
-                                                        tableName);
-        if (db == null) {
-            throw new MetadataNotFoundException("Cannot find index database: " +
-                                                getIndexName() + ", " +
-                                                tableName);
-        }
-        return db;
-    }
-
-    /**
-     * This method allows this class and its subclasses to control index
-     * iteration.  If the operation is an exact match (which happens when
-     * the index key is fully specified without any range) records must
-     * match exactly and should only scan duplicates.  Otherwise it does a
-     * normal scan.
-     */
-    OperationStatus getNextRecord(SecondaryCursor cursor,
-                                  DatabaseEntry indexKeyEntry,
-                                  DatabaseEntry primaryKeyEntry,
-                                  DatabaseEntry dataEntry) {
-        if (range.getExactMatch()) {
-            return cursor.getNextDup(indexKeyEntry,
-                                     primaryKeyEntry,
-                                     dataEntry,
-                                     LockMode.DEFAULT);
-        }
-        return cursor.getNext(indexKeyEntry,
-                              primaryKeyEntry,
-                              dataEntry,
-                              LockMode.DEFAULT);
-    }
-
-    /*
-     * Reverse iteration.  See comment above on getNextRecord() regarding
-     * exact match and duplicates.
-     */
-    OperationStatus getPreviousRecord(SecondaryCursor cursor,
-                                      DatabaseEntry indexKeyEntry,
-                                      DatabaseEntry primaryKeyEntry,
-                                      DatabaseEntry dataEntry) {
-        if (range.getExactMatch()) {
-            return cursor.getPrevDup(indexKeyEntry,
-                                     primaryKeyEntry,
-                                     dataEntry,
-                                     LockMode.DEFAULT);
-        }
-        return cursor.getPrev(indexKeyEntry,
-                              primaryKeyEntry,
-                              dataEntry,
-                              LockMode.DEFAULT);
+    TargetTables getTargetTables() {
+        return targetTables;
     }
 
     @Override
     public String toString() {
         return super.toString(); //TODO
-    }
-
-    boolean inRange(byte[] checkKey) {
-        return range.inRange(checkKey);
-    }
-
-    protected void verifyTableAccess(OperationHandler operationHandler)
-        throws UnauthorizedException, FaultException {
-
-        if (ExecutionContext.getCurrent() == null) {
-            return;
-        }
-
-        new TargetTableAccessChecker(operationHandler, this, targetTables).
-            checkAccess();
-    }
-
-    @Override
-    public List<? extends KVStorePrivilege> getRequiredPrivileges() {
-        /*
-         * Checks the basic privilege for authentication here, and leave the
-         * the table access checking in {@code verifyTableAccess()}.
-         */
-        return SystemPrivilege.usrviewPrivList;
-    }
-
-    @Override
-    public List<? extends KVStorePrivilege>
-        tableAccessPrivileges(long tableId1) {
-        return Collections.singletonList(
-            new TablePrivilege.ReadTable(tableId1));
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -274,6 +274,11 @@ public class Topology implements Metadata<TopologyInfo>, Serializable {
         return (rg == null) ? null : rg.get(repNodeId);
     }
 
+    public ArbNode get(ArbNodeId arbNodeId) {
+        RepGroup rg = repGroupMap.get(new RepGroupId(arbNodeId.getGroupId()));
+        return (rg == null) ? null : rg.get(arbNodeId);
+    }
+
     /**
      * Returns the datacenter associated with the SN
      */
@@ -307,6 +312,13 @@ public class Topology implements Metadata<TopologyInfo>, Serializable {
      */
     public DatacenterId getDatacenterId(RepNode repNode) {
         return getDatacenterId(repNode.getStorageNodeId());
+    }
+
+    /**
+     * Returns the datacenter associated with the AN
+     */
+    public DatacenterId getDatacenterId(ArbNodeId arbNodeId) {
+        return getDatacenterId(get(arbNodeId).getStorageNodeId());
     }
 
     /**
@@ -360,6 +372,19 @@ public class Topology implements Metadata<TopologyInfo>, Serializable {
      */
     public StorageNodeMap getStorageNodeMap() {
         return storageNodeMap;
+    }
+
+    /**
+     * Return the list of all RepGroupIds contained in this topology sorted
+     * by RepGroupId.
+     */
+    public List<RepGroupId> getSortedRepGroupIds() {
+        List<RepGroupId> rgIdList = new ArrayList<RepGroupId>();
+        for (RepGroup rg : repGroupMap.getAll()) {
+            rgIdList.add(rg.getResourceId());
+        }
+        Collections.sort(rgIdList);
+        return rgIdList;
     }
 
     /**
@@ -478,6 +503,80 @@ public class Topology implements Metadata<TopologyInfo>, Serializable {
             }
         }
         return snRNIds;
+    }
+
+
+    /**
+     * Returns a set of ArbNodeIds for all ArbNodes in the Topology.
+     */
+    public Set<ArbNodeId> getArbNodeIds() {
+        return getArbNodeIds((DatacenterId)null);
+    }
+
+    /**
+     * Returns a set of ArbNodeIds for all ArbNodes in the Topology that are
+     * deployed to the given datacenter; or all ArbNodes in the Topology if
+     * <code>null</code> is input.
+     */
+    public Set<ArbNodeId> getArbNodeIds(DatacenterId dcid) {
+        final Set<ArbNodeId> allARBIds = new HashSet<ArbNodeId>();
+        for (RepGroup rg : repGroupMap.getAll()) {
+            for (ArbNode arb : rg.getArbNodes()) {
+                final ArbNodeId arbid = arb.getResourceId();
+                if (dcid == null) {
+                    /* Return all RepNodeIds from all datacenters. */
+                    allARBIds.add(arbid);
+                } else {
+                    if (dcid.equals(getDatacenterId(arbid))) {
+                        /* Return RepNodeId only if it belongs to the dc. */
+                        allARBIds.add(arbid);
+                    }
+                }
+            }
+        }
+        return allARBIds;
+    }
+
+    /**
+     * Returns the set of ArbNodeIds for all ArbNodes hosted on this SN
+     */
+    public Set<ArbNodeId> getHostedArbNodeIds(StorageNodeId snId) {
+        Set<ArbNodeId> snARBIds = new HashSet<ArbNodeId>();
+        for (RepGroup rg : repGroupMap.getAll()) {
+            for (ArbNode arb : rg.getArbNodes()) {
+                if (arb.getStorageNodeId().equals(snId)) {
+                    snARBIds.add(arb.getResourceId());
+                }
+            }
+        }
+        return snARBIds;
+    }
+
+    /**
+     * Returns all ArbNodes sorted by id.  The sort is by ArbGroup id, then by
+     * node number, lowest first.
+     */
+    public List<ArbNode> getSortedArbNodes() {
+        List<ArbNode> san = new ArrayList<ArbNode>();
+        for (RepGroup rg: repGroupMap.getAll()) {
+            for (ArbNode an: rg.getArbNodes()) {
+                san.add(an);
+            }
+        }
+        Collections.sort(san);
+        return san;
+    }
+
+    /**
+     * Returns all ArbNodeIds for a given shard, sorted by id.
+     */
+    public List<ArbNodeId> getSortedArbNodeIds(RepGroupId rgId) {
+        List<ArbNodeId> san = new ArrayList<ArbNodeId>();
+        for (ArbNode an: repGroupMap.get(rgId).getArbNodes()) {
+            san.add(an.getResourceId());
+        }
+        Collections.sort(san);
+        return san;
     }
 
     /**
@@ -613,9 +712,14 @@ public class Topology implements Metadata<TopologyInfo>, Serializable {
                 RepGroup rg =
                     repGroupMap.get(new RepGroupId(rnId.getGroupId()));
                 rg.apply(change);
-                continue;
+            } else if (rtype == ResourceType.ARB_NODE) {
+                ArbNodeId anid = (ArbNodeId)change.getResourceId();
+                RepGroup rg =
+                    repGroupMap.get(new RepGroupId(anid.getGroupId()));
+                rg.applyArbChange(change);
+            } else {
+                typeToComponentMaps.get(rtype).apply(change);
             }
-            typeToComponentMaps.get(rtype).apply(change);
         }
         return changeCount > 0;
     }
@@ -744,6 +848,16 @@ public class Topology implements Metadata<TopologyInfo>, Serializable {
                  " is not in the topology");
         }
         return rg.remove(repNodeId);
+    }
+
+    public ArbNode remove(ArbNodeId anid) {
+        RepGroup rg = repGroupMap.get(new RepGroupId(anid.getGroupId()));
+        if (rg == null) {
+            throw new IllegalArgumentException
+                ("Rep Group: " + anid.getGroupId() +
+                 " is not in the topology");
+        }
+        return rg.remove(anid);
     }
 
     public byte[] getSignature() {

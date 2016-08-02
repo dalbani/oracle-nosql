@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,11 +43,13 @@
 
 package oracle.kv.impl.admin.plan;
 
-import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import oracle.kv.KVVersion;
+import oracle.kv.impl.admin.Admin;
 import oracle.kv.impl.admin.IllegalCommandException;
+import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.plan.DeployTableMetadataPlan.AddIndexPlan;
 import oracle.kv.impl.admin.plan.DeployTableMetadataPlan.AddTablePlan;
 import oracle.kv.impl.admin.plan.DeployTableMetadataPlan.EvolveTablePlan;
@@ -69,8 +71,17 @@ import oracle.kv.impl.api.table.FieldMap;
 import oracle.kv.impl.api.table.IndexImpl.AnnotatedField;
 import oracle.kv.impl.api.table.TableImpl;
 import oracle.kv.impl.api.table.TableMetadata;
+import oracle.kv.impl.param.ParameterMap;
+import oracle.kv.impl.param.ParameterState;
+import oracle.kv.impl.tif.ElasticsearchHandler;
+import oracle.kv.impl.tif.TextIndexFeeder;
 import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.Topology;
+import oracle.kv.table.Index;
+import oracle.kv.table.TimeToLive;
+
+import org.elasticsearch.cluster.ClusterState;
+import org.elasticsearch.node.Node;
 
 /**
  * Static utility class for generating plans for secondary indexes.
@@ -94,21 +105,10 @@ public class TablePlanGenerator {
         createAddTablePlan(AtomicInteger idGen,
                            String planName,
                            Planner planner,
-                           String tableName,
-                           String parentName,
-                           FieldMap fieldMap,
-                           List<String> primaryKey,
-                           List<String> majorKey,
-                           boolean r2compat,
-                           int schemaId,
-                           String description) {
+                           TableImpl table,
+                           String parentName) {
 
-        if (tableName == null) {
-            throw new IllegalCommandException("Table name cannot be null");
-        }
-        if (fieldMap == null || fieldMap.isEmpty()) {
-            throw new IllegalCommandException("Table has no defined fields");
-        }
+        String tableName = table.getName();
 
         final String fullPlanName = makeName(planName, tableName, null);
         final DeployTableMetadataPlan plan =
@@ -117,14 +117,8 @@ public class TablePlanGenerator {
         tableName = plan.getRealTableName(tableName);
         try {
             plan.addTask(new AddTable(plan,
-                                      tableName,
-                                      parentName,
-                                      fieldMap,
-                                      primaryKey,
-                                      majorKey,
-                                      r2compat,
-                                      schemaId,
-                                      description));
+                                      table,
+                                      parentName));
         } catch (IllegalArgumentException iae) {
             throw new IllegalCommandException
                 ("Failed to add table: " + iae.getMessage(), iae);
@@ -145,7 +139,8 @@ public class TablePlanGenerator {
                               Planner planner,
                               String tableName,
                               int tableVersion,
-                              FieldMap fieldMap) {
+                              FieldMap fieldMap,
+                              TimeToLive ttl) {
         checkTable(tableName);
         if (fieldMap == null || fieldMap.isEmpty()) {
             throw new IllegalCommandException("Fields cannot be null or empty");
@@ -164,7 +159,8 @@ public class TablePlanGenerator {
             plan.addTask(new EvolveTable(plan,
                                          tableName,
                                          tableVersion,
-                                         fieldMap));
+                                         fieldMap,
+                                         ttl));
         } catch (IllegalArgumentException iae) {
             throw new IllegalCommandException
                 ("Failed to evolve table: " + iae.getMessage(), iae);
@@ -335,6 +331,41 @@ public class TablePlanGenerator {
             plan = new DeployTableMetadataPlan(idGen, fullPlanName, planner);
         }
 
+        /*
+         * if drop a text index, ensure ES cluster is registered and
+         * accessible before generating a plan
+         */
+        final TableMetadata md = plan.getMetadata();
+        final TableImpl tbl =
+            (md != null) ? md.getTable(tableName, true) : null;
+        final Index idx = (tbl != null) ? tbl.getIndex(indexName) : null;
+        if (idx != null && idx.getType().equals(Index.IndexType.TEXT)) {
+             /* es cluster must be registered */
+            final Admin admin = planner.getAdmin();
+            final Parameters p = admin.getCurrentParameters();
+            final ParameterMap pm = Utils.verifyAndGetSearchParams(p);
+            final String esClusterName = pm.getOrDefault
+                (ParameterState.SN_SEARCH_CLUSTER_NAME).asString();
+            if (esClusterName.isEmpty()) {
+                throw new IllegalStateException(
+                    "DROP INDEX failed, index: " + tableName +
+                    ":" + indexName + ", no ES cluster registered.");
+            }
+
+            /* es cluster must be accessible */
+            final String hostName =
+                admin.getParams().getStorageNodeParams().getHostname();
+            final String esMembers = pm.getOrDefault
+                (ParameterState.SN_SEARCH_CLUSTER_MEMBERS).asString();
+            if (!isESClusterReachable(esClusterName, esMembers, hostName)) {
+                throw new IllegalStateException(
+                    "DROP INDEX failed, index: " + tableName +
+                    ":" + indexName +
+                    ", reason: time out in connecting " +
+                    "ES cluster " + esClusterName);
+            }
+        }
+
         tableName = plan.getRealTableName(tableName);
         try {
             plan.addTask(new RemoveIndex(plan, indexName, tableName));
@@ -347,6 +378,34 @@ public class TablePlanGenerator {
     }
 
     /**
+     * Ensures ES cluster is registered and accessible
+     */
+    static boolean isESClusterReachable(final String esClusterName,
+                                        final String esMembers,
+                                        final String hostName) {
+
+        try (final Node clientNode =
+                 ElasticsearchHandler.buildESClientNode(esClusterName,
+                                                        esMembers,
+                                                        hostName)) {
+
+            /* Checks the state of ES cluster, timeout if not reachable */
+            ClusterState state =
+                ElasticsearchHandler.esClusterState(clientNode.client()
+                                                              .admin());
+
+            //TODO: probably should have better check here, e.g, check if
+            //status of ES cluster is healthy?
+            assert (state != null);
+
+            return true;
+        } catch (Exception e) {
+            /* unable to access ES cluster */
+            return false;
+        }
+    }
+
+    /**
      * Creates a plan to add a text index.
      */
     static DeployTableMetadataPlan
@@ -356,6 +415,7 @@ public class TablePlanGenerator {
                                String indexName,
                                String tableName,
                                AnnotatedField[] ftsFields,
+                               Map<String,String> properties,
                                String description) {
 
         checkTable(tableName);
@@ -365,15 +425,54 @@ public class TablePlanGenerator {
                 ("The set of text-indexed fields cannot be null or empty");
         }
 
-// TODO: uncomment this section when SearchNode is implemented.
-//        Admin admin = planner.getAdmin();
-//        Parameters parameters = admin.getCurrentParameters();
-//        if (parameters.getSearchNodeCount() < 1) {
-//            throw new IllegalCommandException
-//                ("At least one SearchNode must be deployed before " +
-//                 "a text index can be created.");
-//        }
+        final Admin admin = planner.getAdmin();
+        final Parameters p = admin.getCurrentParameters();
 
+        ParameterMap pm = Utils.verifyAndGetSearchParams(p);
+        final String esClusterName = pm.getOrDefault
+            (ParameterState.SN_SEARCH_CLUSTER_NAME).asString();
+        final String esMembers = pm.getOrDefault
+            (ParameterState.SN_SEARCH_CLUSTER_MEMBERS).asString();
+
+        if ("".equals(esClusterName)) {
+            throw new IllegalCommandException
+                ("An Elasticsearch cluster must be registered with the store " +
+                 " before a text index can be created.");
+        }
+
+        /* This is the hostname of this Admin's host, where this code is
+         * running now.
+         */
+        final String hostName =
+            admin.getParams().getStorageNodeParams().getHostname();
+
+        /*
+         * If a stale ES index with the target index's name exists,
+         * remove it straightaway.  We already know that the Admin's
+         * table metadata does not know about it.
+         */
+        final String esIndexName =
+            TextIndexFeeder.deriveESIndexName(p.getGlobalParams()
+                                               .getKVStoreName(),
+                                              tableName,
+                                              indexName);
+        try (final Node clientNode =
+                 ElasticsearchHandler.buildESClientNode(esClusterName,
+                                                        esMembers,
+                                                        hostName)) {
+            /* delete existent ES index if any */
+            ElasticsearchHandler.deleteESIndex(esIndexName,
+                                               clientNode.client().admin());
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot ensure deletion of " +
+                                            "existing ES index before text " +
+                                            "index " + indexName +
+                                            " on table " + tableName +
+                                            " can be created, reason: " +
+                                            e.getMessage());
+        }
+
+        /* now ready to deploy the plan to create text index */
         final DeployTableMetadataPlan plan =
             new DeployTableMetadataPlan(idGen,
                                         makeName(planName, tableName, indexName),
@@ -385,10 +484,11 @@ public class TablePlanGenerator {
          */
         try {
             plan.addTask(new StartAddTextIndex(plan,
-                                           indexName,
-                                           tableName,
-                                           ftsFields,
-                                           description));
+                                               indexName,
+                                               tableName,
+                                               ftsFields,
+                                               properties,
+                                               description));
 
              /* TODO: do we want to wait for the index to be ready? */
              plan.addTask(new CompleteAddIndex(plan,
@@ -408,7 +508,7 @@ public class TablePlanGenerator {
         final DeployTableMetadataPlan plan =
             new DeployTableMetadataPlan(idGen, "Broadcast Table MD", planner);
 
-        plan.addTask(new UpdateMetadata<TableMetadata>(plan));
+        plan.addTask(new UpdateMetadata<>(plan));
         return plan;
     }
 
@@ -425,10 +525,19 @@ public class TablePlanGenerator {
     }
 
     /**
-     * Create a plan name that puts more information in the log stream.
+     * Create a plan or task name that puts more information in the log stream.
      */
     public static String makeName(String name, String tableName,
                                   String indexName) {
+        return makeName(name, tableName, indexName, null);
+
+    }
+
+    /**
+     * Create a task name that puts more information in the log stream.
+     */
+    public static String makeName(String name, String tableName,
+                                  String indexName, String targetName) {
         StringBuilder sb = new StringBuilder();
         sb.append(name);
         sb.append(":");
@@ -436,6 +545,10 @@ public class TablePlanGenerator {
         if (indexName != null) {
             sb.append(":");
             sb.append(indexName);
+        }
+        if (targetName != null) {
+            sb.append(" on ");
+            sb.append(targetName);
         }
         return sb.toString();
     }

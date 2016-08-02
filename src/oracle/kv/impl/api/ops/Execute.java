@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,16 +43,11 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 import oracle.kv.Key;
 import oracle.kv.Operation;
@@ -61,12 +56,7 @@ import oracle.kv.ReturnValueVersion;
 import oracle.kv.Value;
 import oracle.kv.Version;
 import oracle.kv.impl.api.KeySerializer;
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.topo.PartitionId;
 import oracle.kv.impl.util.FastExternalizable;
-import oracle.kv.impl.util.TxnUtil;
-
-import com.sleepycat.je.Transaction;
 
 /**
  * An Execute operation performs a sequence of put and delete operations.
@@ -90,7 +80,7 @@ public class Execute extends InternalOperation {
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    Execute(ObjectInput in, short serialVersion)
+    Execute(DataInput in, short serialVersion)
         throws IOException {
 
         super(OpCode.EXECUTE, in, serialVersion);
@@ -106,7 +96,7 @@ public class Execute extends InternalOperation {
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
@@ -118,56 +108,6 @@ public class Execute extends InternalOperation {
 
     public List<OperationImpl> getOperations() {
         return ops;
-    }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          OperationHandler operationHandler) {
-
-        /*
-         * Sort operation indices by operation key, to avoid deadlocks when two
-         * txns access records in a different order.
-         */
-        final int listSize = ops.size();
-        final Integer[] sortedIndices = new Integer[listSize];
-        for (int i = 0; i < listSize; i += 1) {
-            sortedIndices[i] = i;
-        }
-        Arrays.sort(sortedIndices, new Comparator<Integer>() {
-            @Override
-            public int compare(Integer i1, Integer i2) {
-                return OperationHandler.KEY_BYTES_COMPARATOR.compare
-                    (ops.get(i1).getInternalOp().getKeyBytes(),
-                     ops.get(i2).getInternalOp().getKeyBytes());
-            }
-        });
-
-        /* Initialize result list with nulls, so we can call List.set below. */
-        final List<Result> results = new ArrayList<Result>(listSize);
-        for (int i = 0; i < listSize; i += 1) {
-            results.add(null);
-        }
-
-        /* Process operations in key order. */
-        for (final int i : sortedIndices) {
-
-            final OperationImpl op = ops.get(i);
-            final SingleKeyOperation internalOp = op.getInternalOp();
-            final Result result =
-                internalOp.execute(txn, partitionId, operationHandler);
-
-            /* Abort if operation fails and user requests abort-on-failure. */
-            if (op.getAbortIfUnsuccessful() && !result.getSuccess()) {
-                TxnUtil.abort(txn);
-                return new Result.ExecuteResult(getOpCode(), i, result);
-            }
-
-            results.set(i, result);
-        }
-
-        /* All operations succeeded, or failed without causing an abort. */
-        return new Result.ExecuteResult(getOpCode(), results);
     }
 
     @Override
@@ -198,7 +138,7 @@ public class Execute extends InternalOperation {
          * FastExternalizable constructor.  Must call superclass constructor
          * first to read common elements.
          */
-        OperationImpl(ObjectInput in, short serialVersion)
+        OperationImpl(DataInput in, short serialVersion)
             throws IOException {
 
             key = null;
@@ -212,7 +152,7 @@ public class Execute extends InternalOperation {
          * write common elements.
          */
         @Override
-        public void writeFastExternal(ObjectOutput out, short serialVersion)
+        public void writeFastExternal(DataOutput out, short serialVersion)
             throws IOException {
 
             out.writeBoolean(abortIfUnsuccessful);
@@ -378,20 +318,5 @@ public class Execute extends InternalOperation {
                                      ReturnValueVersion.Choice.NONE,
                                      version));
         }
-    }
-
-    @Override
-    public List<? extends KVStorePrivilege> getRequiredPrivileges() {
-        /*
-         * Check all privileges required by all single operations in list. The
-         * execute operation will be performed if and only if all the
-         * privileges are met.
-         */
-        final Set<KVStorePrivilege> privSet = new HashSet<KVStorePrivilege>();
-        for (final OperationImpl op : ops) {
-            privSet.addAll(op.getInternalOp().getRequiredPrivileges());
-        }
-        return Collections.unmodifiableList(
-            new ArrayList<KVStorePrivilege>(privSet));
     }
 }

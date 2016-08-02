@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -91,7 +91,7 @@ import oracle.kv.Value;
  * For example, the generated Avro specific classes for the example schemas
  * are:
  * <pre class="code">
- *  package com.example;  
+ *  package com.example;
  *
  *  import org.apache.avro.Schema;
  *  import org.apache.avro.specific.SpecificRecord;
@@ -179,7 +179,10 @@ import oracle.kv.Value;
  * itself.
  *
  * @since 2.0
+ *
+ * @deprecated as of 4.0, use the table API instead.
  */
+@Deprecated
 public interface SpecificAvroBinding<T extends SpecificRecord>
     extends AvroBinding<T> {
 

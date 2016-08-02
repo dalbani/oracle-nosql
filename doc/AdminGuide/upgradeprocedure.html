@@ -9,12 +9,12 @@
     <link rel="start" href="index.html" title="Oracle NoSQL Database Administrator's Guide" />
     <link rel="up" href="deploymentupdate.html" title="Chapter 5. Upgrading an Existing Oracle NoSQL Database Deployment" />
     <link rel="prev" href="deploymentupdate.html" title="Chapter 5. Upgrading an Existing Oracle NoSQL Database Deployment" />
-    <link rel="next" href="upgrade_release_2_to_2.1.html" title="Upgrade from Release 2.0 to Release 3.0" />
+    <link rel="next" href="upgrade_release_3_to_current.html" title="Upgrade to This Release from Release 3.0 or Later" />
   </head>
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
@@ -23,7 +23,7 @@
         <tr>
           <td width="20%" align="left"><a accesskey="p" href="deploymentupdate.html">Prev</a> </td>
           <th width="60%" align="center">Chapter 5. Upgrading an Existing Oracle NoSQL Database Deployment</th>
-          <td width="20%" align="right"> <a accesskey="n" href="upgrade_release_2_to_2.1.html">Next</a></td>
+          <td width="20%" align="right"> <a accesskey="n" href="upgrade_release_3_to_current.html">Next</a></td>
         </tr>
       </table>
       <hr />
@@ -64,7 +64,7 @@
       </div>
       <p>
               Installing new software requires that each node be
-              restarted.  Oracle NoSQL Database is a replicated system, so to
+              restarted. Oracle NoSQL Database is a replicated system, so to
               avoid excessive failover events it is recommended
               that any node that is running as a MASTER be
               restarted after all those marked REPLICA. This
@@ -89,40 +89,40 @@
 -jar KVHOME/lib/kvstore.jar ping -port 5000 -host node01
 Pinging components of store mystore based upon topology sequence #315
 300 partitions and 6 storage nodes
-Time: 2015-06-11 04:49:17 UTC   Version: 12.1.3.4.0
+Time: 2016-03-09 04:37:46 UTC   Version: 12.1.3.5.2
 Shard Status: healthy:2 writable-degraded:0 read-only:0 offline:0
 Admin Status: healthy
 Zone [name=Boston id=zn1 type=PRIMARY]   
 RN Status: online:6 offline:0 maxDelayMillis:1 maxCatchupTimeSecs:0
 Storage Node [sn1] on node01:5000    
 Zone: [name=Boston id=zn1 type=PRIMARY]    Status: RUNNING   
-Ver: 12cR1.3.4.0 2015-05-29 12:09:04 UTC  Build id: db9ec397225c
+Ver: 12cR1.3.5.2 2016-03-09 04:37:46 UTC  Build id: 0c693aa1a5a0
     Admin [admin1]          Status: RUNNING,MASTER
     Rep Node [rg1-rn1]      Status: RUNNING,MASTER 
       sequenceNumber:327 haPort:5011
 Storage Node [sn2] on node02:6000    
 Zone: [name=Boston id=zn1 type=PRIMARY]    Status: RUNNING   
-Ver: 12cR1.3.4.0 2015-05-29 12:09:04 UTC  Build id: db9ec397225c
+Ver: 12cR1.3.5.2 2016-03-09 04:37:46 UTC  Build id: 0c693aa1a5a0
     Rep Node [rg1-rn2]      Status: RUNNING,REPLICA 
       sequenceNumber:327 haPort:6010 delayMillis:1 catchupTimeSecs:0
 Storage Node [sn3] on node03:7000    
 Zone: [name=Boston id=zn1 type=PRIMARY]    Status: RUNNING   
-Ver: 12cR1.3.4.0 2015-05-29 12:09:04 UTC  Build id: db9ec397225c
+Ver: 12cR1.3.5.2 2016-03-09 04:37:46 UTC  Build id: 0c693aa1a5a0
     Rep Node [rg1-rn3]      Status: RUNNING,REPLICA 
       sequenceNumber:327 haPort:7010 delayMillis:1 catchupTimeSecs:0
 Storage Node [sn4] on node04:8000    
 Zone: [name=Boston id=zn1 type=PRIMARY]    Status: RUNNING   
-Ver: 12cR1.3.4.0 2015-05-29 12:09:04 UTC  Build id: db9ec397225c
+Ver: 12cR1.3.5.2 2016-03-09 04:37:46 UTC  Build id: 0c693aa1a5a0
     Rep Node [rg2-rn1]      Status: RUNNING,MASTER 
       sequenceNumber:327 haPort:8010
 Storage Node [sn5] on node05:9000    
 Zone: [name=Boston id=zn1 type=PRIMARY]    Status: RUNNING   
-Ver: 12cR1.3.4.0 2015-05-29 12:09:04 UTC  Build id: db9ec397225c
+Ver: 12cR1.3.5.2 2016-03-09 04:37:46 UTC  Build id: 0c693aa1a5a0
     Rep Node [rg2-rn2]      Status: RUNNING,REPLICA 
       sequenceNumber:327 haPort:9010 delayMillis:1 catchupTimeSecs:0
 Storage Node [sn6] on node06:10000    
 Zone: [name=Boston id=zn1 type=PRIMARY]    Status: RUNNING   
-Ver: 12cR1.3.4.0 2015-05-29 12:09:04 UTC  Build id: db9ec397225c
+Ver: 12cR1.3.5.2 2016-03-09 04:37:46 UTC  Build id: 0c693aa1a5a0
     Rep Node [rg2-rn3]      Status: RUNNING,REPLICA 
       sequenceNumber:327 haPort:10010 delayMillis:1 catchupTimeSecs:0
 </pre>
@@ -153,14 +153,14 @@ Ver: 12cR1.3.4.0 2015-05-29 12:09:04 UTC  Build id: db9ec397225c
           <td width="20%" align="center">
             <a accesskey="u" href="deploymentupdate.html">Up</a>
           </td>
-          <td width="40%" align="right"> <a accesskey="n" href="upgrade_release_2_to_2.1.html">Next</a></td>
+          <td width="40%" align="right"> <a accesskey="n" href="upgrade_release_3_to_current.html">Next</a></td>
         </tr>
         <tr>
           <td width="40%" align="left" valign="top">Chapter 5. Upgrading an Existing Oracle NoSQL Database Deployment </td>
           <td width="20%" align="center">
             <a accesskey="h" href="index.html">Home</a>
           </td>
-          <td width="40%" align="right" valign="top"> Upgrade from Release 2.0 to Release 3.0</td>
+          <td width="40%" align="right" valign="top"> Upgrade to This Release from Release 3.0 or Later</td>
         </tr>
       </table>
     </div>

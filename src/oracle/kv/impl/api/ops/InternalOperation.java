@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,42 +43,27 @@
 
 package oracle.kv.impl.api.ops;
 
+import static oracle.kv.impl.util.SerialVersion.BATCH_GET_VERSION;
+import static oracle.kv.impl.util.SerialVersion.BATCH_PUT_VERSION;
+import static oracle.kv.impl.util.SerialVersion.QUERY_VERSION;
+import static oracle.kv.impl.util.SerialVersion.TABLE_API_VERSION;
+
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
-import java.util.Collections;
 import java.util.EnumSet;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
 
 import oracle.kv.Operation;
-import oracle.kv.UnauthorizedException;
-import oracle.kv.impl.api.ops.InternalOperation.Keyspace.KeyAccessChecker;
-import oracle.kv.impl.api.table.TableImpl;
 import oracle.kv.impl.measurement.PerfStatType;
-import oracle.kv.impl.security.AccessCheckUtils;
-import oracle.kv.impl.security.ExecutionContext;
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.security.SystemPrivilege;
-import oracle.kv.impl.security.TablePrivilege;
-import oracle.kv.impl.topo.PartitionId;
 import oracle.kv.impl.util.FastExternalizable;
 import oracle.kv.impl.util.SerialVersion;
 
-import com.sleepycat.je.Transaction;
-
 /**
- * Represents an operation that may be performed on the store.
+ * Represents an operation that may be performed on the store.  Each operation
+ * should define a new {@link OpCode} constant below and register a handler in
+ * the {@link OperationHandler} class.
  */
 public abstract class InternalOperation implements FastExternalizable {
-
-    /**
-     * An empty, immutable privilege list, used when an operation is requested
-     * that does not require authentication.
-     */
-    static final List<KVStorePrivilege> emptyPrivilegeList =
-        Collections.emptyList();
 
     /**
      * An enumeration listing all available OpCodes of Operations for the
@@ -92,15 +77,14 @@ public abstract class InternalOperation implements FastExternalizable {
         NOP() {
 
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new NOP(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
                 return new Result.NOPResult(in, serialVersion);
             }
@@ -128,15 +112,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         GET() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Get(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.GetResult(this, in, serialVersion);
@@ -165,15 +148,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         MULTI_GET() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new MultiGet(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.IterateResult(this, in, serialVersion);
@@ -202,15 +184,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         MULTI_GET_KEYS() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new MultiGetKeys(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.KeysIterateResult(this, in, serialVersion);
@@ -239,15 +220,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         MULTI_GET_ITERATE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new MultiGetIterate(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.IterateResult(this, in, serialVersion);
@@ -276,15 +256,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         MULTI_GET_KEYS_ITERATE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new MultiGetKeysIterate(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.KeysIterateResult(this, in, serialVersion);
@@ -313,15 +292,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         STORE_ITERATE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new StoreIterate(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.IterateResult(this, in, serialVersion);
@@ -350,15 +328,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         STORE_KEYS_ITERATE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new StoreKeysIterate(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.KeysIterateResult(this, in, serialVersion);
@@ -387,15 +364,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         PUT() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Put(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.PutResult(this, in, serialVersion);
@@ -424,15 +400,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         PUT_IF_ABSENT() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new PutIfAbsent(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.PutResult(this, in, serialVersion);
@@ -461,15 +436,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         PUT_IF_PRESENT() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new PutIfPresent(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.PutResult(this, in, serialVersion);
@@ -498,15 +472,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         PUT_IF_VERSION() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new PutIfVersion(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.PutResult(this, in, serialVersion);
@@ -535,15 +508,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         DELETE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Delete(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.DeleteResult(this, in, serialVersion);
@@ -572,15 +544,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         DELETE_IF_VERSION() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new DeleteIfVersion(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.DeleteResult(this, in, serialVersion);
@@ -609,15 +580,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         MULTI_DELETE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new MultiDelete(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.MultiDeleteResult(this, in, serialVersion);
@@ -646,15 +616,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         EXECUTE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Execute(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.ExecuteResult(this, in, serialVersion);
@@ -683,15 +652,14 @@ public abstract class InternalOperation implements FastExternalizable {
 
         MULTI_GET_TABLE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new MultiGetTable(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.IterateResult(this, in, serialVersion);
@@ -719,21 +687,20 @@ public abstract class InternalOperation implements FastExternalizable {
 
             @Override
             public short requiredVersion() {
-                return SerialVersion.V4;
+                return TABLE_API_VERSION;
             }
         },
 
         MULTI_GET_TABLE_KEYS() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new MultiGetTableKeys(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.KeysIterateResult(this, in, serialVersion);
@@ -761,21 +728,20 @@ public abstract class InternalOperation implements FastExternalizable {
 
             @Override
             public short requiredVersion() {
-                return SerialVersion.V4;
+                return TABLE_API_VERSION;
             }
         },
 
         TABLE_ITERATE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new TableIterate(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.IterateResult(this, in, serialVersion);
@@ -803,21 +769,20 @@ public abstract class InternalOperation implements FastExternalizable {
 
             @Override
             public short requiredVersion() {
-                return SerialVersion.V4;
+                return TABLE_API_VERSION;
             }
         },
 
         TABLE_KEYS_ITERATE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new TableKeysIterate(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.KeysIterateResult(this, in, serialVersion);
@@ -845,21 +810,20 @@ public abstract class InternalOperation implements FastExternalizable {
 
             @Override
             public short requiredVersion() {
-                return SerialVersion.V4;
+                return TABLE_API_VERSION;
             }
         },
 
         INDEX_ITERATE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new IndexIterate(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.IndexRowsIterateResult
@@ -888,21 +852,20 @@ public abstract class InternalOperation implements FastExternalizable {
 
             @Override
             public short requiredVersion() {
-                return SerialVersion.V4;
+                return TABLE_API_VERSION;
             }
         },
 
         INDEX_KEYS_ITERATE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new IndexKeysIterate(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.IndexKeysIterateResult
@@ -931,21 +894,20 @@ public abstract class InternalOperation implements FastExternalizable {
 
             @Override
             public short requiredVersion() {
-                return SerialVersion.V4;
+                return TABLE_API_VERSION;
             }
         },
 
         MULTI_DELETE_TABLE() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new MultiDeleteTable(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.MultiDeleteResult(this, in, serialVersion);
@@ -973,20 +935,20 @@ public abstract class InternalOperation implements FastExternalizable {
 
             @Override
             public short requiredVersion() {
-                return SerialVersion.V4;
+                return TABLE_API_VERSION;
             }
         },
 
         MULTI_GET_BATCH() {
             @Override
-            InternalOperation readOperation(ObjectInput in, short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new MultiGetBatchIterate(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.BulkGetIterateResult(this, in, serialVersion);
@@ -1014,20 +976,20 @@ public abstract class InternalOperation implements FastExternalizable {
 
             @Override
             public short requiredVersion() {
-                return SerialVersion.V8;
+                return BATCH_GET_VERSION;
             }
         },
 
         MULTI_GET_BATCH_KEYS() {
             @Override
-            InternalOperation readOperation(ObjectInput in, short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new MultiGetBatchKeysIterate(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.BulkGetKeysIterateResult(this, in,
@@ -1056,20 +1018,20 @@ public abstract class InternalOperation implements FastExternalizable {
 
             @Override
             public short requiredVersion() {
-                return SerialVersion.V8;
+                return BATCH_GET_VERSION;
             }
         },
 
         MULTI_GET_BATCH_TABLE() {
             @Override
-            InternalOperation readOperation(ObjectInput in, short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new MultiGetBatchTable(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.BulkGetIterateResult(this, in, serialVersion);
@@ -1097,20 +1059,20 @@ public abstract class InternalOperation implements FastExternalizable {
 
             @Override
             public short requiredVersion() {
-                return SerialVersion.V8;
+                return BATCH_GET_VERSION;
             }
         },
 
         MULTI_GET_BATCH_TABLE_KEYS() {
             @Override
-            InternalOperation readOperation(ObjectInput in, short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new MultiGetBatchTableKeys(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.BulkGetKeysIterateResult(this, in,
@@ -1139,21 +1101,20 @@ public abstract class InternalOperation implements FastExternalizable {
 
             @Override
             public short requiredVersion() {
-                return SerialVersion.V8;
+                return BATCH_GET_VERSION;
             }
         },
 
         PUT_BATCH() {
             @Override
-            InternalOperation readOperation(ObjectInput in,
-                                            short serialVersion)
+            InternalOperation readOperation(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new PutBatch(in, serialVersion);
             }
 
             @Override
-            public Result readResult(ObjectInput in, short serialVersion)
+            public Result readResult(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new Result.PutBatchResult(this, in, serialVersion);
@@ -1183,15 +1144,147 @@ public abstract class InternalOperation implements FastExternalizable {
 
             @Override
             public short requiredVersion() {
-                return SerialVersion.V9;
+                return BATCH_PUT_VERSION;
+            }
+        },
+
+        /*
+         * Various query operations are separated in order to provide more
+         * informative statistics to users, separating operations in terms of
+         * 1. single-partition
+         * 2. multi (all) partitions
+         * 3. multi (all) shards
+         * When updating operations are implemented, additional stats and
+         * OpCodes will be added for those queries.
+         */
+        QUERY_SINGLE_PARTITION() {
+            @Override
+            InternalOperation readOperation(DataInput in, short serialVersion)
+                throws IOException {
+
+                return new TableQuery(this, in, serialVersion);
+            }
+
+            @Override
+            public Result readResult(DataInput in, short serialVersion)
+                throws IOException {
+
+                return new Result.QueryResult(this, in, serialVersion);
+            }
+
+            @Override
+            public boolean checkResultType(Result result) {
+                return (result instanceof Result.QueryResult);
+            }
+
+            @Override
+            public Operation.Type getExecuteType() {
+                throw new RuntimeException("Not an execute op: " + this);
+            }
+
+            @Override
+            public PerfStatType getIntervalMetric() {
+                return PerfStatType.QUERY_SINGLE_PARTITION_INT;
+            }
+
+            @Override
+            public PerfStatType getCumulativeMetric() {
+                return PerfStatType.QUERY_SINGLE_PARTITION_CUM;
+            }
+
+            @Override
+            public short requiredVersion() {
+                return QUERY_VERSION;
+            }
+        },
+
+        QUERY_MULTI_PARTITION() {
+            @Override
+            InternalOperation readOperation(DataInput in, short serialVersion)
+                throws IOException {
+
+                return new TableQuery(this, in, serialVersion);
+            }
+
+            @Override
+            public Result readResult(DataInput in, short serialVersion)
+                throws IOException {
+
+                return new Result.QueryResult(this, in, serialVersion);
+            }
+
+            @Override
+            public boolean checkResultType(Result result) {
+                return (result instanceof Result.QueryResult);
+            }
+
+            @Override
+            public Operation.Type getExecuteType() {
+                throw new RuntimeException("Not an execute op: " + this);
+            }
+
+            @Override
+            public PerfStatType getIntervalMetric() {
+                return PerfStatType.QUERY_MULTI_PARTITION_INT;
+            }
+
+            @Override
+            public PerfStatType getCumulativeMetric() {
+                return PerfStatType.QUERY_MULTI_PARTITION_CUM;
+            }
+
+            @Override
+            public short requiredVersion() {
+                return QUERY_VERSION;
+            }
+        },
+
+        QUERY_MULTI_SHARD() {
+            @Override
+            InternalOperation readOperation(DataInput in, short serialVersion)
+                throws IOException {
+
+                return new TableQuery(this, in, serialVersion);
+            }
+
+            @Override
+            public Result readResult(DataInput in, short serialVersion)
+                throws IOException {
+
+                return new Result.QueryResult(this, in, serialVersion);
+            }
+
+            @Override
+            public boolean checkResultType(Result result) {
+                return (result instanceof Result.QueryResult);
+            }
+
+            @Override
+            public Operation.Type getExecuteType() {
+                throw new RuntimeException("Not an execute op: " + this);
+            }
+
+            @Override
+            public PerfStatType getIntervalMetric() {
+                return PerfStatType.QUERY_MULTI_SHARD_INT;
+            }
+
+            @Override
+            public PerfStatType getCumulativeMetric() {
+                return PerfStatType.QUERY_MULTI_SHARD_CUM;
+            }
+
+            @Override
+            public short requiredVersion() {
+                return QUERY_VERSION;
             }
         };
 
-        abstract InternalOperation readOperation(ObjectInput in,
+        abstract InternalOperation readOperation(DataInput in,
                                                  short serialVersion)
             throws IOException;
 
-        public abstract Result readResult(ObjectInput in, short serialVersion)
+        public abstract Result readResult(DataInput in, short serialVersion)
             throws IOException;
 
         public abstract boolean checkResultType(Result result);
@@ -1246,7 +1339,7 @@ public abstract class InternalOperation implements FastExternalizable {
      * The OpCode was read by readFastExternal.
      */
     InternalOperation(OpCode opCode,
-                      @SuppressWarnings("unused") ObjectInput in,
+                      @SuppressWarnings("unused") DataInput in,
                       @SuppressWarnings("unused") short serialVersion) {
 
         this.opCode = opCode;
@@ -1255,7 +1348,7 @@ public abstract class InternalOperation implements FastExternalizable {
     /**
      * FastExternalizable factory for all InternalOperation subclasses.
      */
-    public static InternalOperation readFastExternal(ObjectInput in,
+    public static InternalOperation readFastExternal(DataInput in,
                                              short serialVersion)
         throws IOException {
 
@@ -1268,27 +1361,11 @@ public abstract class InternalOperation implements FastExternalizable {
      * writing additional elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out,
-                                  short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         out.writeByte(opCode.ordinal());
     }
-
-    /**
-     * Execute the operation on the given repNode.
-     *
-     * @param txn the transaction to use for the operation
-     * @param operationHandler the operation handler that implements the
-     * operation
-     * @return the result of execution
-     * @throw UnauthorizedException if an attempt is made to access restricted
-     * resources
-     */
-    public abstract Result execute(Transaction txn,
-                                   PartitionId partitionId,
-                                   OperationHandler operationHandler)
-        throws UnauthorizedException;
 
     /**
      * Get this operation's opCode.
@@ -1323,19 +1400,6 @@ public abstract class InternalOperation implements FastExternalizable {
     }
 
     /**
-     * Checks whether the input key has the server internal key prefix as
-     * a prefix.  That is, does the key reference something that is definitely
-     * within the server internal keyspace?
-     */
-    protected boolean isInternalRequestor() {
-        final ExecutionContext currentContext = ExecutionContext.getCurrent();
-        if (currentContext == null) {
-            return true;
-        }
-        return currentContext.hasPrivilege(SystemPrivilege.INTLOPER);
-    }
-
-    /**
      * Common code to throw UnsupportedOperationException when a newer client
      * attempts to perform an operation against a server that does not support
      * it.  There is other common code in Request.writeExternal that does the
@@ -1343,279 +1407,15 @@ public abstract class InternalOperation implements FastExternalizable {
      * operation has conditional parameters that were added in a later version.
      * For example, Get, Put, Delete and their variants added a table id in V4.
      */
-    protected void throwTablesRequired(short serialVersion) {
+    void throwVersionRequired(short serverVersion,
+                              short requiredVersion) {
         throw new UnsupportedOperationException
             ("Attempting an operation that is not supported by " +
-             "the server version.  Server version is " + serialVersion +
-             ", required version is " + SerialVersion.V4 +
+             "the server version.  Server version is " +
+             SerialVersion.getKVVersion(serverVersion).getNumericVersionString()
+             + ", required version is " +
+             SerialVersion.getKVVersion(
+                 requiredVersion).getNumericVersionString() +
              ", operation is " + opCode);
-    }
-
-    /**
-     * Returns an immutable list of privilege required to execute the
-     * operation.  The required privileges depend on the operation and the
-     * keyspace it accessing.
-     */
-    abstract public List<? extends KVStorePrivilege> getRequiredPrivileges();
-
-    /**
-     * An common interface for those operations need to access table keyspace,
-     * which defining the privileges needed.
-     */
-    interface PrivilegedTableAccessor {
-        /**
-         * Returns the needed privileges accessing the table specified by the
-         * id.
-         *
-         * @param tableId table id
-         * @return a list of required privileges
-         */
-        List<? extends KVStorePrivilege> tableAccessPrivileges(long tableId);
-    }
-
-    /**
-     * A class to help identify the keyspace which operation is accessing.
-     */
-    static class Keyspace {
-
-        /**
-         * The encoding of the prefix of the server-private keyspace(///),
-         * which is a subset of the "internal" keyspace (//) used by the client
-         * to store the Avro schema.
-         */
-        private static final byte[] PRIVATE_KEY_PREFIX =
-            //new byte[] { Key.BINARY_COMP_DELIM, Key.BINARY_COMP_DELIM };
-            new byte[] { 0, 0 };
-
-        /**
-         * The encoding of the prefix of the Avro schema keyspace(//sch/),
-         * which is used by the client to store the Avro schema.
-         */
-        private static final byte[] AVRO_SCHEMA_KEY_PREFIX =
-            new byte[] { 0, 0x73, 0x63, 0x68 }; /* Keybytes of "//sch" */
-
-        static interface KeyAccessChecker {
-            boolean allowAccess(byte[] key);
-        }
-
-        static final KeyAccessChecker privateKeyAccessChecker =
-            new KeyAccessChecker() {
-            @Override
-            public boolean allowAccess(byte[] key) {
-                return !Keyspace.isPrivateAccess(key);
-            }
-        };
-
-        static final KeyAccessChecker schemaKeyAccessChecker =
-            new KeyAccessChecker() {
-            @Override
-            public boolean allowAccess(byte[] key) {
-                return !Keyspace.isSchemaAccess(key);
-            }
-        };
-
-        enum KeyspaceType { PRIVATE, SCHEMA, GENERAL }
-
-        static KeyspaceType identifyKeyspace(byte[] key) {
-            if (key == null || key.length == 0) {
-                throw new IllegalArgumentException(
-                    "Key bytes may not be null or empty");
-            }
-
-            /* Quick return for non-internal keyspace */
-            if (key[0] == 0) {
-                if (isSchemaAccess(key)) {
-                    return KeyspaceType.SCHEMA;
-                }
-                if (isPrivateAccess(key)) {
-                    return KeyspaceType.PRIVATE;
-                }
-            }
-            /* Other cases are regarded as general keyspace */
-            return KeyspaceType.GENERAL;
-        }
-
-        /**
-         * Checks whether the input key has the Avro schema keyspace as a
-         * prefix. That is, does the key matches exactly the "//sch" or has the
-         * major component of "//sch"?
-         */
-        static boolean isSchemaAccess(byte[] key) {
-            if (key.length < AVRO_SCHEMA_KEY_PREFIX.length) {
-                return false;
-            }
-            for (int i = 0; i < AVRO_SCHEMA_KEY_PREFIX.length; i++) {
-                if (key[i] != AVRO_SCHEMA_KEY_PREFIX[i]) {
-                    return false;
-                }
-            }
-            /* Key is exactly the "//sch" */
-            if (key.length == AVRO_SCHEMA_KEY_PREFIX.length) {
-                return true;
-            }
-            /* Key has "//sch" as its partial or complete major component */
-            final byte endingByte = key[AVRO_SCHEMA_KEY_PREFIX.length];
-            return endingByte == (byte) 0xff /* Path delimiter */ ||
-                   endingByte == (byte) 0x00; /* Component delimiter */
-        }
-
-        /**
-         * Checks whether the input key is a prefix of the schema key space.
-         * That is, does the key reference something that is may be within the
-         * schema key space?
-         */
-        static boolean mayBeSchemaAccess(byte[] key) {
-            if (key.length < AVRO_SCHEMA_KEY_PREFIX.length) {
-                for (int i = 0; i < key.length; i++) {
-                    if (key[i] != AVRO_SCHEMA_KEY_PREFIX[i]) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-            for (int i = 0; i < AVRO_SCHEMA_KEY_PREFIX.length; i++) {
-                if (key[i] != AVRO_SCHEMA_KEY_PREFIX[i]) {
-                    return false;
-                }
-            }
-            /* Key is exactly the "//sch" */
-            if (key.length == AVRO_SCHEMA_KEY_PREFIX.length) {
-                return true;
-            }
-            /* Key has "//sch" as its partial or complete major component */
-            final byte endingByte = key[AVRO_SCHEMA_KEY_PREFIX.length];
-            return endingByte == (byte) 0xff /* Path delimiter */ ||
-                   endingByte == (byte) 0x00; /* Component delimiter */
-        }
-
-        /**
-         * Checks whether the input key has the server private keyspace as a
-         * prefix.  That is, does the key reference something that is
-         * definitely within the server private keyspace?
-         */
-        static boolean isPrivateAccess(byte[] key) {
-            if (key.length < PRIVATE_KEY_PREFIX.length) {
-                return false;
-            }
-            for (int i = 0; i < PRIVATE_KEY_PREFIX.length; i++) {
-                if (key[i] != PRIVATE_KEY_PREFIX[i]) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        /**
-         * Checks whether the input key is a prefix of the server private key
-         * space.  That is, does the key reference something that is may be
-         * within the server private keyspace?
-         */
-        static boolean mayBePrivateAccess(byte[] key) {
-            if (key.length < PRIVATE_KEY_PREFIX.length) {
-                for (byte element : key) {
-                    if (element != PRIVATE_KEY_PREFIX.length) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-            for (int i = 0; i < PRIVATE_KEY_PREFIX.length; i++) {
-                if (key[i] != PRIVATE_KEY_PREFIX.length) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        /**
-         * Checks whether the input key is outside both the server private
-         * keyspace and the schema keyspace.
-         */
-        static boolean isGeneralAccess(byte[] key) {
-            return !isPrivateAccess(key) && !isSchemaAccess(key);
-        }
-    }
-
-    /**
-     * A per-key access checker for possible table keyspaces.  Access to a key
-     * is allowed if and only if the key falls in a table's keyspace and the
-     * current user has access privileges on that table.
-     */
-    static class TableAccessChecker implements KeyAccessChecker {
-
-        private final PrivilegedTableAccessor tableAccessor;
-        final OperationHandler operationHandler;
-
-        /**
-         * A set caching the tables which have been verified to be accessible.
-         */
-        private final Set<Long> accessibleTables = new HashSet<Long>();
-
-        TableAccessChecker(OperationHandler operationHandler,
-                           PrivilegedTableAccessor tableAccessor) {
-            this.operationHandler = operationHandler;
-            this.tableAccessor = tableAccessor;
-        }
-
-        @Override
-        public boolean allowAccess(byte[] key) {
-            if (!Keyspace.isGeneralAccess(key)) {
-                return true;
-            }
-
-            final TableImpl possibleTable =
-                TableOperationHandler.findTableByKeyBytes(operationHandler,
-                                                          key);
-            /* Not accessing table, returns false */
-            if (possibleTable == null) {
-                return false;
-            }
-
-            return internalCheckTableAccess(possibleTable);
-        }
-
-        boolean internalCheckTableAccess(TableImpl table) {
-            final ExecutionContext exeCtx = ExecutionContext.getCurrent();
-            if (exeCtx == null) {
-                return true;
-            }
-
-            if (accessibleTables.contains(table.getId())) {
-                return true;
-            }
-
-            if (!AccessCheckUtils.currentUserOwnsResource(table)) {
-                if (!exeCtx.hasAllPrivileges(
-                        tableAccessor.tableAccessPrivileges(table.getId()))) {
-                    return false;
-                }
-
-                /* Ensure at least read privileges on all parent tables. */
-                TableImpl parent = (TableImpl) table.getParent();
-                while (parent != null) {
-                    final long pTableId = parent.getId();
-                    /*
-                     * One of the parent table is accessible, exits the loop
-                     * and returns true according to induction
-                     */
-                    if (accessibleTables.contains(pTableId)) {
-                        break;
-                    }
-
-                    final TablePrivilege parentReadPriv =
-                        new TablePrivilege.ReadTable(pTableId);
-                    if (!exeCtx.hasPrivilege(parentReadPriv) &&
-                        !exeCtx.hasAllPrivileges(
-                            tableAccessor.tableAccessPrivileges(pTableId))) {
-                        return false;
-                    }
-                    parent = (TableImpl) parent.getParent();
-                }
-            }
-
-            /* Caches the verified table */
-            accessibleTables.add(table.getId());
-            return true;
-        }
     }
 }

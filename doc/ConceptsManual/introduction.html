@@ -14,7 +14,7 @@
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
@@ -157,6 +157,11 @@
             <dl>
               <dt>
                 <span class="sect2">
+                  <a href="integration.html#dmsintegration">Oracle Database Mobile Server Integration</a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
                   <a href="integration.html#hadoopintegration">Hadoop Integration</a>
                 </span>
               </dt>
@@ -223,7 +228,7 @@
       <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
         <h3 class="title">Note</h3>
         <p>
-        Oracle NoSQL Database is tested using Java 7, and so Oracle NoSQL Database should be used
+        Oracle NoSQL Database is tested using Java 8, and so Oracle NoSQL Database should be used
             only with that version of Java.
         </p>
       </div>
@@ -232,6 +237,28 @@
         Java language driver. C, Node.js and Python drivers are available.
         For more information, see the specific driver's Quick Start Guide. 
     </p>
+      <p>
+	    Finally, Oracle NoSQL Database introduces a preview release of SQL for Oracle NoSQL Database. 
+	    SQL for Oracle NoSQL Database is an easy to use SQL-like language that supports read-only queries and
+	    data definition (DDL) statements. This language can be used to access data in tables
+	    in a read-only fashion. As a preview release its use and feedback is encouraged. 
+	    For more details on what it means for a feature to be a preview release feature, 
+	    please see the release notes.
+	</p>
+      <p>
+        To follow along query examples run with the
+        interactive shell, see 
+        <em class="citetitle">Getting Started with SQL for Oracle NoSQL Database</em>.   
+    </p>
+      <p> 
+        If you are interested in using the JAVA API to execute queries see
+            <em class="citetitle">Getting Started with the Table API</em>. 
+    </p>
+      <p>
+	   For a more detailed description of the SQL language (both DDL and query
+           statements) see the
+           <em class="citetitle">SQL for Oracle NoSQL Database Specification</em>. 
+	</p>
       <div class="sect1" lang="en" xml:lang="en">
         <div class="titlepage">
           <div>
@@ -269,6 +296,9 @@
                 </p>
               <div class="itemizedlist">
                 <ul type="disc">
+                  <li>
+                        Kerberos Authentication Service integration
+                    </li>
                   <li>
                         Oracle Database External Table integration
                     </li>

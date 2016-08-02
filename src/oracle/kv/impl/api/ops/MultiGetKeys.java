@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,22 +43,11 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 
 import oracle.kv.Depth;
-import oracle.kv.Direction;
 import oracle.kv.KeyRange;
-import oracle.kv.impl.api.ops.OperationHandler.KVAuthorizer;
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.security.SystemPrivilege;
-import oracle.kv.impl.security.TablePrivilege;
-import oracle.kv.impl.topo.PartitionId;
-
-import com.sleepycat.je.Transaction;
 
 /**
  * A multi-get-keys operation.
@@ -76,47 +65,9 @@ public class MultiGetKeys extends MultiKeyOperation {
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    MultiGetKeys(ObjectInput in, short serialVersion)
+    MultiGetKeys(DataInput in, short serialVersion)
         throws IOException {
 
         super(OpCode.MULTI_GET_KEYS, in, serialVersion);
-    }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          OperationHandler operationHandler) {
-
-        final KVAuthorizer kvAuth = checkPermission(operationHandler);
-
-        final List<byte[]> results = new ArrayList<byte[]>();
-
-        final boolean moreElements = operationHandler.iterateKeys
-            (txn, partitionId, getParentKey(), true /*majorPathComplete*/,
-             getSubRange(), getDepth(), Direction.FORWARD, 0 /*batchSize*/,
-             null /*resumeKey*/, OperationHandler.CURSOR_DEFAULT, results,
-             kvAuth);
-
-        assert (!moreElements);
-
-        return new Result.KeysIterateResult(getOpCode(), results,
-                                            moreElements);
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> schemaAccessPrivileges() {
-        return SystemPrivilege.schemaReadPrivList;
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> generalAccessPrivileges() {
-        return SystemPrivilege.readOnlyPrivList;
-    }
-
-    @Override
-    public List<? extends KVStorePrivilege>
-        tableAccessPrivileges(long tableId) {
-        return Collections.singletonList(
-            new TablePrivilege.ReadTable(tableId));
     }
 }

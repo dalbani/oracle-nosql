@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -54,6 +54,7 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.UnknownHostException;
 import java.util.StringTokenizer;
+
 import oracle.kv.impl.param.ParameterUtils;
 
 /**
@@ -373,7 +374,7 @@ public class ParametersValidator {
      * the expected number or not.
      *
      * @param parameterName associated name of the memory size
-     * @param memSize the expected memory size
+     * @param memSizeMB the expected memory size in MB
      * @param capacity the capacity of a SNA
      *
      * @return null when the memory size of computer is greater than or
@@ -381,33 +382,68 @@ public class ParametersValidator {
      * is less than the expected size
      */
     public static String checkMemorySize(String parameterName,
-                                         int memSize, int capacity) {
+                                         int memSizeMB, int capacity) {
         OperatingSystemMXBean bean =
                 ManagementFactory.getOperatingSystemMXBean();
         final Class<? extends OperatingSystemMXBean> beanClass =
                 bean.getClass();
-        long mem;
-        String intBitsString;
+        long physicalMemory;
+        String jvmDataModelString;
         try {
             final Method m = beanClass.getMethod("getTotalPhysicalMemorySize");
             m.setAccessible(true);
-            mem = (Long) m.invoke(bean);
+            physicalMemory = (Long) m.invoke(bean);
 
             /*
              * This call will work because, if the above worked, we are likely
              * using a Sun JVM.
              */
-            intBitsString = System.getProperty("sun.arch.data.model");
+            jvmDataModelString = System.getProperty("sun.arch.data.model");
         } catch (Exception e) {
-            mem = 0;
-            intBitsString = null;
+            physicalMemory = 0;
+            jvmDataModelString = null;
         }
-        final int availableMem =
-            computeAvailableMemoryMB(capacity, mem, intBitsString);
+        final int numJVMs = capacity == 0 ? 1 : capacity;
+        int jvmDataModel = 0;
+        if (jvmDataModelString != null) {
+            try {
+                jvmDataModel = Integer.parseInt(jvmDataModelString);
+            } catch (NumberFormatException e) {
+            }
+        }
+        return checkMemorySize(parameterName, memSizeMB, numJVMs,
+                               physicalMemory, jvmDataModel);
+    }
 
-        if (memSize > availableMem) {
-            return memSize + " is invalid; " + parameterName + " must be <= " +
-                   availableMem + "(the total available memory)";
+    /*
+     * Check the memory size.
+     *
+     * @param parameterName associated name of the memory size
+     * @param memSizeMB the expected memory size in MB
+     * @param numJVMs the number of JVMs using the memory
+     * @param physicalMemory available memory in bytes
+     * @param jvmDataModel 0 if unknown; otherwise 32 or 64 depending on the
+     * data model being used by the JVM
+     *
+     * @return an error message string or null if no error
+     */
+    static String checkMemorySize(String parameterName,
+                                  int memSizeMB,
+                                  int numJVMs,
+                                  long physicalMemory,
+                                  int jvmDataModel) {
+        final int availableMemMB =
+            computeAvailableMemoryMB(numJVMs, physicalMemory, jvmDataModel);
+
+        if (memSizeMB > availableMemMB) {
+            final String memorySizeWarning = (jvmDataModel == 32) ?
+                ", which may be limited because of using a 32-bit Java" +
+                " virtual machine" :
+                "";
+            return memSizeMB + " is invalid; " +
+                parameterName + " must be <= " +
+                availableMemMB + " (the total available memory in MB" +
+                memorySizeWarning + ")";
         }
 
         return null;
@@ -417,28 +453,33 @@ public class ParametersValidator {
      * Compute the amount of memory available in megabytes.
      *
      * @param capacity the number of virtual machines
-     * @param mem the total physical memory available in bytes, or 0 if not
-     * known
-     * @param intBitsString a string representing the number of bits used to
-     * represent ints, or null if not known
+     * @param physicalMemory the total physical memory available in bytes, or 0
+     * if not known
+     * @param jvmDataModel 0 if unknown; otherwise 32 or 64 depending on the
+     * data model being used by the jvm
+     *
+     * @return memory in MB that will actually be used for RN heap. It may be
+     * all the allocated physical memory, or adjusted downwards of the JVM
+     * being used is 32 bit and cannot address all of it.
      */
     static int computeAvailableMemoryMB(int capacity,
-                                        long mem,
-                                        String intBitsString) {
-        if (intBitsString != null) {
-            int intBits;
-            try {
-                intBits = Integer.parseInt(intBitsString);
-            } catch (NumberFormatException e) {
-                intBits = 0;
-            }
-            if (intBits == 32) {
-                final long maxInt = Integer.MAX_VALUE;
-                if ((mem / capacity) > maxInt) {
-                    mem = maxInt * capacity;
-                }
+                                        long physicalMemory,
+                                        int jvmDataModel) {
+        if (jvmDataModel == 32) {
+
+            /*
+             * Limit heap per RN to 2GB on a 32-bit JVM.  As a practical matter
+             * this number may be smaller yet due to memory used for other
+             * purposes by the JVM, because the underlying machine architecture
+             * itself is 32-bit, or due to other JVM limitations, but we don't
+             * care enough about 32-bit JVMs to worry about this.
+             */
+            final long max32bitHeap = Integer.MAX_VALUE;
+            final long heapPerRN = physicalMemory / capacity;
+            if (heapPerRN > max32bitHeap) {
+                physicalMemory = max32bitHeap * capacity;
             }
         }
-        return (int) (mem >> 20);
+        return (int) (physicalMemory >> 20);
     }
 }

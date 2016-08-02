@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -56,6 +56,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -67,6 +68,7 @@ import oracle.kv.impl.admin.AdminStatus;
 import oracle.kv.impl.admin.CommandServiceAPI;
 import oracle.kv.impl.admin.IllegalCommandException;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
@@ -75,11 +77,14 @@ import oracle.kv.impl.admin.param.StorageNodeParams.RNHeapAndCacheSize;
 import oracle.kv.impl.admin.plan.AbstractPlan;
 import oracle.kv.impl.api.TopologyInfo;
 import oracle.kv.impl.api.table.TableMetadata;
+import oracle.kv.impl.arb.ArbNodeStatus;
+import oracle.kv.impl.arb.admin.ArbNodeAdminAPI;
 import oracle.kv.impl.fault.OperationFaultException;
 import oracle.kv.impl.metadata.Metadata;
 import oracle.kv.impl.metadata.Metadata.MetadataType;
 import oracle.kv.impl.metadata.MetadataInfo;
 import oracle.kv.impl.param.ParameterMap;
+import oracle.kv.impl.param.ParameterState;
 import oracle.kv.impl.param.ParameterUtils;
 import oracle.kv.impl.rep.MasterRepNodeStats;
 import oracle.kv.impl.rep.RepNodeStatus;
@@ -89,8 +94,11 @@ import oracle.kv.impl.security.login.LoginManager;
 import oracle.kv.impl.security.metadata.KVStoreUser;
 import oracle.kv.impl.security.metadata.SecurityMetadata;
 import oracle.kv.impl.sna.StorageNodeAgentAPI;
+import oracle.kv.impl.tif.TextIndexFeederManager;
 import oracle.kv.impl.topo.AdminId;
 import oracle.kv.impl.topo.AdminType;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.DatacenterType;
@@ -98,6 +106,7 @@ import oracle.kv.impl.topo.RepGroup;
 import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.RepNode;
 import oracle.kv.impl.topo.RepNodeId;
+import oracle.kv.impl.topo.ResourceId;
 import oracle.kv.impl.topo.StorageNode;
 import oracle.kv.impl.topo.StorageNodeId;
 import oracle.kv.impl.topo.Topology;
@@ -108,6 +117,8 @@ import oracle.kv.impl.util.VersionUtil;
 import oracle.kv.impl.util.registry.RegistryUtils;
 import oracle.kv.util.PingCollector;
 
+import com.sleepycat.je.rep.NodeType;
+import com.sleepycat.je.rep.ReplicatedEnvironment;
 import com.sleepycat.je.rep.ReplicationGroup;
 import com.sleepycat.je.rep.ReplicationNode;
 import com.sleepycat.je.rep.util.ReplicationGroupAdmin;
@@ -116,6 +127,9 @@ import com.sleepycat.je.rep.util.ReplicationGroupAdmin;
  * Utility methods for tasks.
  */
 public class Utils {
+
+    private static final long VERIFY_SHARD_WAIT = 1000;
+    private static final int VERIFY_SHARD_RETRY = 10;
 
     /**
      * Returns the set of metadata required to configure a new RN.
@@ -424,7 +438,7 @@ public class Utils {
         RepNodeParams newRNP = new RepNodeParams(oldRNP);
 
         String updatedHelpers =
-            Utils.findRNHelpers(admin, rnId, topo.get(rgId));
+            Utils.findHelpers(admin, rnId, topo.get(rgId));
 
         /*
          * There are no other helpers available, probably because this is
@@ -447,18 +461,52 @@ public class Utils {
         sna.newRepNodeParameters(newRNP.getMap());
     }
 
+    static void updateHelperHost(Admin admin,
+                                 Topology topo,
+                                 RepGroupId rgId,
+                                 ArbNodeId anId,
+                                 Logger logger)
+        throws RemoteException, NotBoundException {
+
+        ArbNodeParams oldANP = admin.getArbNodeParams(anId);
+        ArbNodeParams newANP = new ArbNodeParams(oldANP);
+
+        String updatedHelpers =
+            Utils.findHelpers(admin, anId, topo.get(rgId));
+
+        /*
+         * There are no other helpers available, probably because this is
+         * a rep group of 1, so don't change the helper host.
+         */
+        if (updatedHelpers.length() == 0) {
+            return;
+        }
+
+        newANP.setJEHelperHosts(updatedHelpers);
+        admin.updateParams(newANP);
+        StorageNodeId snId = newANP.getStorageNodeId();
+        logger.info("Changing helperHost for " + anId + " on " + snId +
+                    " to " + updatedHelpers);
+
+        /* Ask the SNA to write a new configuration file. */
+        RegistryUtils registryUtils =
+            new RegistryUtils(topo, admin.getLoginManager());
+        StorageNodeAgentAPI sna = registryUtils.getStorageNodeAgent(snId);
+        sna.newArbNodeParameters(newANP.getMap());
+    }
+
     /**
      * Generate the most complete set of helper hosts possible by appending all
      * the nodeHostPort values for all other members of this HA repGroup.
      */
-    private static String findRNHelpers(Admin admin,
-                                        RepNodeId targetRNId,
-                                        RepGroup rg) {
+    private static String findHelpers(Admin admin,
+                                      ResourceId targetId,
+                                      RepGroup rg) {
 
         StringBuilder helperHosts = new StringBuilder();
         for (RepNode rn : rg.getRepNodes()) {
             RepNodeId rid = rn.getResourceId();
-            if (rid.equals(targetRNId)) {
+            if (rid.equals(targetId)) {
                 continue;
             }
 
@@ -469,6 +517,22 @@ public class Utils {
             helperHosts.append
                 (admin.getRepNodeParams(rid).getJENodeHostPort());
         }
+
+        for (ArbNode an : rg.getArbNodes()) {
+            ArbNodeId aid = an.getResourceId();
+
+            if (aid.equals(targetId)) {
+                continue;
+            }
+
+            if (helperHosts.length() != 0) {
+                helperHosts.append(ParameterUtils.HELPER_HOST_SEPARATOR);
+            }
+
+            helperHosts.append
+                (admin.getArbNodeParams(aid).getJENodeHostPort());
+        }
+
         return helperHosts.toString();
     }
 
@@ -499,15 +563,31 @@ public class Utils {
     static void changeHAAddress(Topology topo,
                                 Parameters parameters,
                                 AdminParams adminParams,
-                                RepNodeId rnId,
+                                ResourceId rId,
                                 StorageNodeId oldNode,
                                 StorageNodeId newNode,
                                 AbstractPlan plan,
                                 Logger logger)
         throws InterruptedException {
 
-        RepNode targetRN = topo.get(rnId);
-        RepGroup rg = topo.get(targetRN.getRepGroupId());
+        RepGroup rg;
+        String targetNodeHostPort;
+        String targetHelperHosts;
+        String groupName;
+
+        if (rId instanceof RepNodeId) {
+            RepNodeId rnId = (RepNodeId)rId;
+            rg = topo.get(topo.get(rnId).getRepGroupId());
+            targetNodeHostPort = parameters.get(rnId).getJENodeHostPort();
+            targetHelperHosts = parameters.get(rnId).getJEHelperHosts();
+            groupName = rnId.getGroupName();
+        } else {
+            ArbNodeId anId = (ArbNodeId)rId;
+            rg = topo.get(topo.get(anId).getRepGroupId());
+            targetNodeHostPort = parameters.get(anId).getJENodeHostPort();
+            targetHelperHosts = parameters.get(anId).getJEHelperHosts();
+            groupName = anId.getGroupName();
+        }
 
         /*
          * Only need to change the HA address if both the old and new SNs are
@@ -521,8 +601,6 @@ public class Utils {
             return;
         }
 
-        String targetNodeHostPort = parameters.get(rnId).getJENodeHostPort();
-
         /*
          * Find the first node that is not the target node, and ask it
          * to update addresses. If it can't, continue trying other
@@ -530,12 +608,12 @@ public class Utils {
          * continue trying for some time.
          */
         boolean done = false;
-        String targetHelperHosts = parameters.get(rnId).getJEHelperHosts();
+
         final long delay = adminParams.getBroadcastTopoRetryDelayMillis();
 
         logger.log(Level.INFO,
                    "Change haPort for {0} to relocate from {1} to {2}",
-                   new Object[]{rnId, oldNode, newNode});
+                   new Object[]{rId, oldNode, newNode});
         while (!done && !plan.isInterruptRequested()) {
 
             boolean groupHasNoMaster = false;
@@ -543,7 +621,7 @@ public class Utils {
             /* Try each RN in turn. Only one has to get the update out. */
             for (RepNode rn : rg.getRepNodes()) {
                 RepNodeId peerId = rn.getResourceId();
-                if (peerId.equals(rnId)) {
+                if (peerId.equals(rId)) {
                     continue;
                 }
 
@@ -552,12 +630,13 @@ public class Utils {
                     RegistryUtils registry =
                         new RegistryUtils(topo, plan.getLoginManager());
                     RepNodeAdminAPI rnAdmin = registry.getRepNodeAdmin(peerId);
-                    if (rnAdmin.updateMemberHAAddress(rnId.getGroupName(),
-                                                      rnId.getFullName(),
+                    if (rnAdmin.updateMemberHAAddress(groupName,
+                                                      rId.getFullName(),
                                                       targetHelperHosts,
                                                       targetNodeHostPort)) {
+
                         /*
-                         * One of the RN was able to get the update out
+                         * One of the RNs or ANs was able to get the update out
                          * successfully.
                          */
                         done = true;
@@ -568,7 +647,7 @@ public class Utils {
                         "{0} attempted to update HA address for {1} while " +
                         "relocating from {2} to {3}  but shard has no " +
                         "master.",
-                        new Object[]{peerId, rnId, oldNode, newNode});
+                        new Object[]{peerId, rId, oldNode, newNode});
                     groupHasNoMaster = true;
                 } catch (RepNodeAdminFaultException e) {
                     logger.log(
@@ -576,27 +655,27 @@ public class Utils {
                         "{0} experienced an exception when attempting to" +
                         " update HA address for {1} while relocating from" +
                         " {2} to {3}: {4}",
-                         new Object[] { peerId, rnId, oldNode, newNode, e });
+                         new Object[] { peerId, rId, oldNode, newNode, e });
                 } catch (NotBoundException e) {
                     logger.log(
                         Level.SEVERE,
                         "{0} could not be contacted, experienced an" +
                         " exception when attempting to update HA address" +
                         " for {1} while relocating from {2} to {3}: {4}",
-                        new Object[] { peerId, rnId, oldNode, newNode, e });
+                        new Object[] { peerId, rId, oldNode, newNode, e });
                 } catch (RemoteException e) {
                     logger.log(
                         Level.SEVERE,
                         "{0} could not be contacted, experienced an" +
                         " exception when attempting to update HA address" +
                         " for {1} while relocating from {2} to {3}: {4}",
-                        new Object[] { peerId, rnId, oldNode, newNode, e });
+                        new Object[] { peerId, rId, oldNode, newNode, e });
                 }
             }
 
             /* Someone was able to get the update out successfully */
             if (done) {
-                break;
+                return;
             }
 
             /*
@@ -619,7 +698,7 @@ public class Utils {
                 logger.log(Level.INFO,
                            "No master for shard while updating HA address " +
                            "for {0} from {1} to {2}. Wait and retry",
-                           new Object[]{rnId, oldNode, newNode});
+                           new Object[]{rId, oldNode, newNode});
                 Thread.sleep(delay);
             } else {
                 /*
@@ -630,17 +709,132 @@ public class Utils {
                            "Could not contact any member of the shard while " +
                            " updating HA address for {0} from {1} to {2}." +
                            " Give up.",
-                           new Object[]{rnId, oldNode, newNode});
+                           new Object[]{rId, oldNode, newNode});
                 break;
             }
         }
 
         if (!done) {
             throw new OperationFaultException
-                ("Couldn't change HA address for " + rnId + " to " +
+                ("Couldn't change HA address for " + rId + " to " +
                  targetNodeHostPort + " while migrating " + oldNode + " to " +
                  newNode);
         }
+    }
+
+    static void removeHAAddress(Topology topo,
+                                AdminParams adminParams,
+                                ResourceId rId,
+                                StorageNodeId oldNode,
+                                AbstractPlan plan,
+                                RepGroupId rgId,
+                                String targetHelperHosts,
+                                Logger logger)
+        throws InterruptedException {
+
+        RepGroup rg = topo.get(rgId);
+
+        /*
+         * Find the first node that is not the target node, and ask it
+         * to update addresses. If it can't, continue trying other
+         * members of the group. If the master is not available,
+         * continue trying for some time.
+         */
+        final long delay = adminParams.getBroadcastTopoRetryDelayMillis();
+
+        logger.log(Level.INFO,
+                   "Remove ha entry for {0} on SN {1}}",
+                   new Object[]{rId, oldNode});
+        while (!plan.isInterruptRequested()) {
+
+            boolean groupHasNoMaster = false;
+
+            /* Try each RN in turn. Only one has to get the update out. */
+            for (RepNode rn : rg.getRepNodes()) {
+                RepNodeId peerId = rn.getResourceId();
+                if (peerId.equals(rId)) {
+                    continue;
+                }
+
+                /* Found a peer repNode */
+                try {
+                    RegistryUtils registry =
+                        new RegistryUtils(topo, plan.getLoginManager());
+                    RepNodeAdminAPI rnAdmin = registry.getRepNodeAdmin(peerId);
+                    if (rnAdmin.deleteMember(rgId.getGroupName(),
+                                             rId.getFullName(),
+                                             targetHelperHosts)) {
+                        return;
+                    }
+                    logger.log(Level.INFO,
+                               "Attempting to remove HA address for {0} " +
+                               "from {1} but shard has no " +
+                               "master. Wait and retry",
+                                new Object[]{rId, oldNode});
+                    groupHasNoMaster = true;
+                } catch (RepNodeAdminFaultException e) {
+                    logger.log(
+                        Level.SEVERE,
+                        "{0} experienced an exception when attempting to" +
+                        " remove HA address for {1} from" +
+                        " {2}: {3}",
+                         new Object[] { peerId, rId, oldNode, e });
+                } catch (NotBoundException e) {
+                    logger.log(
+                        Level.SEVERE,
+                        "{0} could not be contacted, experienced an" +
+                        " exception when attempting to remove HA address" +
+                        " for {1} from {2}: {3}",
+                        new Object[] { peerId, rId, oldNode, e });
+                } catch (RemoteException e) {
+                    logger.log(
+                        Level.SEVERE,
+                        "{0} could not be contacted, experienced an" +
+                        " exception when attempting to remove HA address" +
+                        " for {1} from {2}: {3}",
+                        new Object[] { peerId, rId, oldNode, e });
+                }
+            }
+
+            /*
+             * No-one in the group was able to do the update. Retry only if the
+             * group has no master, and we are waiting for a new master to be
+             * elected. Wait before retrying. TODO: this uses the same pattern
+             * as broadcastTopoChangesToRNs, in that it sleeps and is
+             * susceptible to interrupt. Ideally, we make the plan interrupt
+             * flag available to implement a softer interrupt. Should also
+             * consider moving this retry loop to a higher level, so retries
+             * are implemented by the task, as multiple phases. Not strictly
+             * necessary if this is only called by serial tasks, because there
+             * is no concern with tying up a planner thread.
+             */
+            if (groupHasNoMaster) {
+                /*
+                 * We only retry if we have positive info that there was no
+                 * master and that a retry should work soon.
+                 */
+                logger.log(Level.INFO,
+                           "No master for shard while remove HA address " +
+                           "for {0} from {1}. Wait and retry",
+                           new Object[]{rId, oldNode});
+                Thread.sleep(delay);
+            } else {
+                /*
+                 * Unexpected problems, couldn't contact anyone in group,
+                 * give up.
+                 */
+                logger.log(Level.INFO,
+                           "Could not contact any member of the shard while " +
+                           " removing HA address for {0} from {1}." +
+                           " Give up.",
+                           new Object[]{rId, oldNode});
+                break;
+            }
+        }
+
+        throw new OperationFaultException
+            ("Couldn't remove HA address for " + rId +
+             "from " + oldNode);
     }
 
     /**
@@ -655,7 +849,7 @@ public class Utils {
      * The recommended wait behavior, when restarting, or relocating an RN:
      *
      *      Node Type
-     * Current      Future		Action
+     * Current      Future      Action
      * ---------    ---------   ---------------------------
      * Primary      -           Wait for quorum number of remaining RNs
      * Secondary    Secondary   Don't wait
@@ -677,8 +871,7 @@ public class Utils {
      * @param rnId the target RN to stop
      * @param awaitConsistent if true waits for relica(s) to catch up
      *
-     * @throws OperationFaultException on timeout or interrupt
-     *
+     * @throws OperationFaultException if the HA address could not be changed.
      */
     static void stopRN(AbstractPlan plan,
                        StorageNodeId snId,
@@ -727,6 +920,45 @@ public class Utils {
 
         /* Stop monitoring this node. */
         admin.getMonitor().unregisterAgent(rnId);
+
+        /*
+         * Ask the monitor to collect status now for this rep node, so that it
+         * will realize that it has been disabled, and this changed status
+         * will display sooner.
+         */
+        admin.getMonitor().collectNow(snId);
+    }
+
+    public static void stopAN(AbstractPlan plan,
+                              StorageNodeId snId,
+                              ArbNodeId anId)
+        throws RemoteException, NotBoundException {
+
+        plan.getLogger().log(Level.INFO, "Stopping {0} on {1}",
+                             new Object[]{anId, snId});
+
+        /*
+         * Update the arb node params to indicate that this node is now
+         * disabled, and save the changes.
+         */
+        Admin admin = plan.getAdmin();
+        ArbNodeParams anp =
+            new ArbNodeParams(admin.getArbNodeParams(anId));
+        anp.setDisabled(true);
+        admin.updateParams(anp);
+
+        // TODO: ideally, put a call in to force a collection of monitored
+        // data, to update monitoring before stopping this node.
+
+        /* Tell the SNA to stop the node. */
+        Topology topology = admin.getCurrentTopology();
+        RegistryUtils registryUtils =
+            new RegistryUtils(topology, admin.getLoginManager());
+        StorageNodeAgentAPI sna = registryUtils.getStorageNodeAgent(snId);
+        sna.stopArbNode(anId, false);
+
+        /* Stop monitoring this node. */
+        admin.getMonitor().unregisterAgent(anId);
 
         /*
          * Ask the monitor to collect status now for this rep node, so that it
@@ -800,6 +1032,69 @@ public class Utils {
 
     }
 
+    public static void startAN(AbstractPlan plan,
+                               StorageNodeId snId,
+                               ArbNodeId anId)
+        throws RemoteException, NotBoundException {
+
+        plan.getLogger().log(Level.INFO, "Starting {0} on {1}",
+                             new Object[]{anId, snId});
+
+        /*
+         * Check the topology to make sure that the RepNode exists, in
+         * case the topology was changed after the plan was constructed, and
+         * before it ran. TODO: this can't actually happen yet because we
+         * don't support the removal of RepNodes. Test when store contraction
+         * is supported in later releases.
+         */
+        Admin admin = plan.getAdmin();
+        Topology topology = admin.getCurrentTopology();
+        ArbNode an = topology.get(anId);
+        if (an == null) {
+            throw new IllegalCommandException
+                (anId +
+                 " was removed from the topology and can't be started");
+        }
+
+        /*
+         * Update the arb node params to indicate that this node is now enabled,
+         * and save the changes.
+         */
+        ArbNodeParams anp =
+            new ArbNodeParams(admin.getArbNodeParams(anId));
+        anp.setDisabled(false);
+        admin.updateParams(anp);
+
+        /* Tell the SNA to startup the node. */
+        AdminServiceParams asp = admin.getParams();
+        StorageNodeParams snp = admin.getStorageNodeParams(snId);
+        String storeName = asp.getGlobalParams().getKVStoreName();
+        StorageNodeAgentAPI sna =
+            RegistryUtils.getStorageNodeAgent
+            (storeName,
+             snp.getHostname(),
+             snp.getRegistryPort(),
+             snId,
+             admin.getLoginManager());
+        sna.startArbNode(anId);
+
+        /*
+         * Check if the AN experienced a problem directly at startup time.
+         */
+        RegistryUtils.checkForStartupProblem(storeName, snp.getHostname(),
+                                             snp.getRegistryPort(), anId, snId,
+                                             admin.getLoginManager());
+
+        /*
+         * Tell the Monitor to start monitoring this node. Registering
+         * an agent is idempotent
+         */
+        StorageNode sn = topology.get(snId);
+        plan.getAdmin().getMonitor().registerAgent(sn.getHostname(),
+                                                   sn.getRegistryPort(),
+                                                   anId);
+    }
+
     /**
      * Waits for specified RN to catch up to the master. If the target RN is
      * the master, the methods returns without waiting. Throws
@@ -837,7 +1132,7 @@ public class Utils {
         final long limitMillis = System.currentTimeMillis() + timeoutMillis;
         PingCollector collector = new PingCollector(topo);
         while (true) {
-            final Map<RepNodeId, RepNodeStatus> statusMap = 
+            final Map<RepNodeId, RepNodeStatus> statusMap =
                 collector.getRepNodeStatus(rgId);
 
             MasterRepNodeStats stats = null;
@@ -992,8 +1287,12 @@ public class Utils {
                     final String nodeName = e.getKey();
                     final Long msBehind = e.getValue();
 
-                    /* Don't count the target node or non-primary nodes */
+                    /*
+                     * Don't count the target node, TIF node, or non-primary
+                     * nodes
+                     */
                     if (targetName.equals(nodeName) ||
+                        TextIndexFeederManager.isTIFNode(nodeName) ||
                         !isPrimary(dbParams, RepNodeId.parse(nodeName))) {
                         continue;
                     }
@@ -1067,9 +1366,20 @@ public class Utils {
         return electableRF;
     }
 
-    static Task.State waitForRepNodeState(AbstractPlan plan,
-                                                 RepNodeId rnId,
-                                                 ServiceStatus targetState)
+
+    /**
+     *  Wait for RepNode or ArbNode to be in the target state.
+     *
+     * @param plan
+     * @param resId
+     * @param targetState
+     * @return STATE.ERROR if target state did not occur within the timeout,
+     * otherwise return STATE.SUCCEEDED
+     * @throws InterruptedException
+     */
+    public static Task.State waitForNodeState(AbstractPlan plan,
+                                              ResourceId resId,
+                                              ServiceStatus targetState)
         throws InterruptedException {
 
         AdminServiceParams asp = plan.getAdmin().getParams();
@@ -1077,41 +1387,67 @@ public class Utils {
         long waitSeconds =
             ap.getWaitTimeoutUnit().toSeconds(ap.getWaitTimeout());
 
-        String msg = "Waiting " + waitSeconds + " seconds for RepNode " +
-            rnId + " to reach " + targetState;
+        String msg = "Waiting " + waitSeconds + " seconds for Node " +
+            resId + " to reach " + targetState;
 
         plan.getLogger().fine(msg);
 
-        RepNodeParams rnp = plan.getAdmin().getRepNodeParams(rnId);
+        StorageNodeId snId;
+        if (resId instanceof RepNodeId) {
+            RepNodeParams rnp =
+                plan.getAdmin().getRepNodeParams((RepNodeId)resId);
 
-        /*
-         * Since other, earlier tasks may have failed, it's possible that we
-         * may be trying to wait for an nonexistent rep node.
-         */
-        if (rnp == null) {
-            throw new OperationFaultException
-                (msg + ", but that that RepNode doesn't exist in the store");
+            /*
+             * Since other, earlier tasks may have failed, it's possible that we
+             * may be trying to wait for an nonexistent rep node.
+             */
+            if (rnp == null) {
+                throw new OperationFaultException
+                    (msg + ", but that that RepNode " +
+                    "doesn't exist in the store");
+            }
+            snId = rnp.getStorageNodeId();
+        } else {
+            /* must be an arb node */
+            ArbNodeParams anp =
+                plan.getAdmin().getArbNodeParams((ArbNodeId)resId);
+            if (anp == null) {
+                throw new OperationFaultException
+                (msg + ", but that that Node " + resId +
+                " doesn't exist in the store");
+            }
+            snId = anp.getStorageNodeId();
         }
 
         StorageNodeParams snp =
-            plan.getAdmin().getStorageNodeParams(rnp.getStorageNodeId());
+            plan.getAdmin().getStorageNodeParams(snId);
 
         String storename = asp.getGlobalParams().getKVStoreName();
         String hostname = snp.getHostname();
         int regPort = snp.getRegistryPort();
-        StorageNodeId snId = snp.getStorageNodeId();
         LoginManager loginMgr = plan.getLoginManager();
 
         try {
             ServiceStatus[] target = {targetState};
-            ServiceUtils.waitForRepNodeAdmin(storename,
-                                             hostname,
-                                             regPort,
-                                             rnId,
-                                             snId,
-                                             loginMgr,
-                                             waitSeconds,
-                                             target);
+            if (resId instanceof RepNodeId) {
+                ServiceUtils.waitForRepNodeAdmin(storename,
+                                                 hostname,
+                                                 regPort,
+                                                 (RepNodeId)resId,
+                                                 snId,
+                                                 loginMgr,
+                                                 waitSeconds,
+                                                 target);
+            } else {
+                ServiceUtils.waitForArbNodeAdmin(storename,
+                                                 hostname,
+                                                 regPort,
+                                                 (ArbNodeId)resId,
+                                                 snId,
+                                                 loginMgr,
+                                                 waitSeconds,
+                                                 target);
+            }
         } catch (Exception e) {
             if (e instanceof InterruptedException) {
                 throw (InterruptedException) e;
@@ -1120,7 +1456,7 @@ public class Utils {
             RegistryUtils.checkForStartupProblem(storename,
                                                  hostname,
                                                  regPort,
-                                                 rnId,
+                                                 resId,
                                                  snId,
                                                  loginMgr);
 
@@ -1131,7 +1467,7 @@ public class Utils {
          * Ask the monitor to collect status now for this rep node,so a
          * new status will be available sooner
          */
-        plan.getAdmin().getMonitor().collectNow(rnId);
+        plan.getAdmin().getMonitor().collectNow(resId);
         return Task.State.SUCCEEDED;
 
     }
@@ -1474,19 +1810,24 @@ public class Utils {
     }
 
     /**
-     * For all members of this shard other than the skipRNId, write the new RN
-     * params to the owning SNA, and tell the RN to refresh its params. Try to
-     * be resilient; try all RNs, even in the face of a RMI failure from one.
+     * For all members of this shard other than the skipId, write the new RN/AN
+     * params to the owning SNA, and tell the RN/AN to refresh its params. Try
+     * to be resilient; try all RNs, even in the face of a RMI failure from one.
      * @throws RemoteException
      * @throws NotBoundException
      */
     public static void refreshParamsOnPeers(AbstractPlan plan,
-                                            RepNodeId skipRNId)
+                                            ResourceId skipId)
         throws RemoteException, NotBoundException {
 
         Admin admin = plan.getAdmin();
         Topology topo = admin.getCurrentTopology();
-        RepGroupId rgId = topo.get(skipRNId).getRepGroupId();
+        RepGroupId rgId;
+        if (skipId instanceof RepNodeId) {
+            rgId = topo.get((RepNodeId)skipId).getRepGroupId();
+        } else {
+            rgId = topo.get((ArbNodeId)skipId).getRepGroupId();
+        }
         RegistryUtils registry = new RegistryUtils(topo,
                                                    plan.getLoginManager());
         plan.getLogger().log(Level.INFO,
@@ -1495,9 +1836,10 @@ public class Utils {
 
         RemoteException remoteExSeen = null;
         NotBoundException notBoundSeen = null;
+
         for (RepNode peer : topo.get(rgId).getRepNodes()) {
             RepNodeId peerId = peer.getResourceId();
-            if (peerId.equals(skipRNId)) {
+            if (peerId.equals(skipId)) {
                 /* Skip the relocated RN, it is not yet deployed */
                 continue;
             }
@@ -1513,6 +1855,36 @@ public class Utils {
                 /* Have the RN notice its new params */
                 RepNodeAdminAPI rnAdmin = registry.getRepNodeAdmin(peerId);
                 rnAdmin.newParameters();
+            } catch (RemoteException e) {
+                /* Save the exception, carry on to all the others */
+                remoteExSeen = e;
+                plan.getLogger().info("Couldn't refresh params on " + peerId +
+                                      e);
+            } catch (NotBoundException e) {
+                notBoundSeen = e;
+                plan.getLogger().info("Couldn't refresh params on " + peerId +
+                                      e);
+            }
+        }
+
+        for (ArbNode peer : topo.get(rgId).getArbNodes()) {
+            ArbNodeId peerId = peer.getResourceId();
+            if (peerId.equals(skipId)) {
+                /* Skip the relocated AN, it is not yet deployed */
+                continue;
+            }
+
+            ArbNodeParams peerANP = admin.getArbNodeParams(peerId);
+
+            /* Write a new config file on the SNA */
+            try {
+                StorageNodeAgentAPI sna =
+                    registry.getStorageNodeAgent(peer.getStorageNodeId());
+                sna.newArbNodeParameters(peerANP.getMap());
+
+                /* Have the RN notice its new params */
+                ArbNodeAdminAPI anAdmin = registry.getArbNodeAdmin(peerId);
+                anAdmin.newParameters();
             } catch (RemoteException e) {
                 /* Save the exception, carry on to all the others */
                 remoteExSeen = e;
@@ -1554,11 +1926,13 @@ public class Utils {
         if (!rnsOnSN.contains(targetRN)) {
             numRNsOnSN += 1;
         }
+        int numANsOnSN = topo.getHostedArbNodeIds(targetSN).size();
 
         RNHeapAndCacheSize heapAndCache =
             targetSNP.calculateRNHeapAndCache(policyMap,
                                               numRNsOnSN,
-                                              targetRNP.getRNCachePercent());
+                                              targetRNP.getRNCachePercent(),
+                                              numANsOnSN);
         targetRNP.setRNHeapAndJECache(heapAndCache);
         targetRNP.setParallelGCThreads(targetSNP.calcGCThreads());
     }
@@ -1591,7 +1965,7 @@ public class Utils {
      * target node is shutdown for relocation.  Does not check quorum if the
      * primary replication factor is 1 or 2.
      *
-     * @param rnId target RN which will be shutdown for relocation.
+     * @param resId target RN or AN which will be shutdown for relocation.
      * @return the primary replication factor
      * @throws OperationFaultException if there is no master or quorum would be
      * lost
@@ -1599,15 +1973,15 @@ public class Utils {
     static int verifyShardHealth(Parameters params,
                                  Topology topo,
                                  Admin admin,
-                                 RepNodeId rnId,
+                                 ResourceId resId,
                                  StorageNodeId oldSN,
                                  StorageNodeId newSN,
                                  Logger logger) {
-        final String msg = "Cannot move "+ rnId + " from " + oldSN +
+        final String msg = "Cannot move "+ resId + " from " + oldSN +
                            " to " + newSN + ". ";
         return verifyShardHealth(params, topo, admin,
-                                 new RepGroupId(rnId.getGroupId()),
-                                 rnId, msg, logger);
+                                 Utils.getRepGroupId(resId),
+                                 resId, msg, logger);
     }
 
     /**
@@ -1616,8 +1990,18 @@ public class Utils {
      * shutdown or converted to a secondary node.  Does not check quorum if the
      * primary replication factor is 1 or 2.
      *
+     * This method may wait and retry if the shard has an arbiter, both RN's
+     * are running and the AN could prevent an RN from being elected a
+     * master. The wait is to allow for the Replica RN to catch up and render
+     * the AN inactive. There is a race condition if data is being inserted
+     * while an AN is active and a replica RN is booted. There is a point when
+     * the replica state is running but the AN is still acking transactions.
+     * Once the RN's feeder is activated on the master, the acking is performed
+     * by the RN and not the AN.
+     *
      * @param rgId target shard
-     * @param rnId rep node being shutdown or converted to secondary
+     * @param resId rep or arb node being shutdown, or rep node converted to
+     * secondary
      * @param msg exception message prefix
      * @return the primary replication factor
      * @throws OperationFaultException if there is no master or quorum would be
@@ -1627,18 +2011,51 @@ public class Utils {
                                          Topology topo,
                                          Admin admin,
                                          RepGroupId rgId,
-                                         RepNodeId rnId,
+                                         ResourceId resId,
                                          String msg,
-                                         @SuppressWarnings("unused")
                                          Logger logger) {
+        int retryCount = 0;
+        while (true) {
+            try {
+                return verifyShardHealthInternal(params,
+                                                 topo,
+                                                 admin,
+                                                 rgId,
+                                                 resId,
+                                                 msg,
+                                                 logger);
+            } catch (ArbiterActiveException aae) {
+                retryCount++;
+                if (retryCount > VERIFY_SHARD_RETRY) {
+                    throw aae;
+                }
+                try {
+                    Thread.sleep(VERIFY_SHARD_WAIT);
+                } catch (InterruptedException ie) {
+                    /* ignore */
+                }
+            }
+        }
+    }
+
+    private static int verifyShardHealthInternal(Parameters params,
+                                                 Topology topo,
+                                                 Admin admin,
+                                                 RepGroupId rgId,
+                                                 ResourceId resId,
+                                                 String msg,
+                                                 @SuppressWarnings("unused")
+                                                 Logger logger) {
 
         /*
          * TODO: In future releases, expose the ElectionQuorum class in JE
          * and use that to query for quorum, to prevent having to know so
          * much about what constitutes quorum in JE.
          */
+
         final ReplicationGroupAdmin repGroupAdmin =
-            admin.getReplicationGroupAdmin(rnId);
+            admin.getReplicationGroupAdmin(rgId.getGroupName(),
+                                           getHelpers(params, resId));
         final ReplicationGroup jeRepGroup;
         try {
             jeRepGroup = Admin.getReplicationGroup(repGroupAdmin);
@@ -1649,7 +2066,7 @@ public class Utils {
         final Set<ReplicationNode> electable = jeRepGroup.getElectableNodes();
         final int electableGroupSize = electable.size();
 
-        /* Caller needs to make special arrangements for RF 1 or 2 */
+        /* Caller needs to make special arrangements for group sizes 1 or 2 */
         if (electableGroupSize <= 2) {
             return electableGroupSize;
         }
@@ -1657,28 +2074,43 @@ public class Utils {
         PingCollector collector = new PingCollector(topo);
         final Map<RepNodeId, RepNodeStatus> status =
             collector.getRepNodeStatus(rgId);
-        final Set<RepNodeId> running = new HashSet<>();
+        final Map<ArbNodeId, ArbNodeStatus> anStatus =
+            collector.getArbNodeStatus(rgId);
+        final Set<ResourceId> running = new HashSet<ResourceId>();
+        long arbiterVLSN = -1;
         for (final ReplicationNode jeNode : electable) {
-            final RepNodeId thisRN = RepNodeId.parse(jeNode.getName());
-
-            /* See it the emergency group size override has been used. */
-            final RepNodeParams rnParams = params.get(thisRN);
-            if (rnParams.getElectableGroupSizeOverride() != 0) {
-                return electableGroupSize;
-            }
-
-            /* Don't count the RN we're about to bring down. */
-            if (rnId.equals(thisRN)) {
-                continue;
-            }
-
-            final RepNodeStatus nodeStatus = status.get(thisRN);
-            if (nodeStatus == null) {
-                continue;
-            }
-
-            if (nodeStatus.getServiceStatus().equals(ServiceStatus.RUNNING)) {
-                running.add(thisRN);
+            if (jeNode.getType() == NodeType.ARBITER) {
+                ArbNodeId thisANId = ArbNodeId.parse(jeNode.getName());
+                if (resId.equals(thisANId)) {
+                    continue;
+                }
+                ArbNodeStatus nodeStatus = anStatus.get(thisANId);
+                if (nodeStatus == null) {
+                    continue;
+                }
+                if (nodeStatus.getServiceStatus().equals(
+                        ServiceStatus.RUNNING)) {
+                    running.add(thisANId);
+                    arbiterVLSN = nodeStatus.getVlsn();
+                }
+            } else {
+                RepNodeId thisRNId = RepNodeId.parse(jeNode.getName());
+                /* See it the emergency group size override has been used. */
+                RepNodeParams rnParams = params.get(thisRNId);
+                if (rnParams.getElectableGroupSizeOverride() != 0) {
+                    return electableGroupSize;
+                }
+                if (resId.equals(thisRNId)) {
+                    continue;
+                }
+                RepNodeStatus nodeStatus = status.get(thisRNId);
+                if (nodeStatus == null) {
+                    continue;
+                }
+                if (nodeStatus.getServiceStatus().equals(
+                        ServiceStatus.RUNNING)) {
+                    running.add(thisRNId);
+                }
             }
         }
 
@@ -1693,6 +2125,27 @@ public class Utils {
                 "Shard " + rgId + " will not have at least " + quorum +
                 " electable nodes up to execute writes. " +
                 "Other running nodes are " + running);
+        }
+
+        /*
+         * Check to see if an Arbiter can prevent an RN from becoming a master.
+         */
+        if (arbiterVLSN >= 0) {
+            for (final ReplicationNode jeNode : electable) {
+                if (jeNode.getType() != NodeType.ARBITER) {
+                    RepNodeId thisRNId = RepNodeId.parse(jeNode.getName());
+                    RepNodeStatus nodeStatus = status.get(thisRNId);
+                    if (nodeStatus == null) {
+                        continue;
+                    }
+                    if (nodeStatus.getVlsn() < arbiterVLSN) {
+                        throw new ArbiterActiveException(
+                            msg + "Shard " + rgId + " has active Arbiter. " +
+                            "AN vlsn " + arbiterVLSN + " RN " + thisRNId +
+                            " vsln " + nodeStatus.getVlsn());
+                    }
+                }
+            }
         }
 
         return electableGroupSize;
@@ -1958,5 +2411,333 @@ public class Utils {
             return true;
         }
         return false;
+    }
+
+    private static String getHelpers(Parameters params, ResourceId resId) {
+        String myNodeHostPort;
+        String helpers;
+        if (resId instanceof RepNodeId) {
+            RepNodeId rnId = (RepNodeId)resId;
+            RepNodeParams rnp = params.get(rnId);
+            if (rnp == null) {
+                return null;
+            }
+            myNodeHostPort = rnp.getJENodeHostPort();
+            helpers = rnp.getJEHelperHosts();
+        } else {
+            ArbNodeId  anId = (ArbNodeId)resId;
+            ArbNodeParams anp = params.get(anId);
+            if (anp == null) {
+                return null;
+            }
+            myNodeHostPort = anp.getJENodeHostPort();
+            helpers = anp.getJEHelperHosts();
+
+        }
+        String allNodes = myNodeHostPort;
+
+        if (!"".equals(helpers) && (helpers != null)) {
+            allNodes += ParameterUtils.HELPER_HOST_SEPARATOR + helpers;
+        }
+        return allNodes;
+    }
+
+    /**
+     * Deletes the old RN on the original SN. Returns SUCCESS if the delete was
+     * successful. This method calls awaitConsistency() on the new node
+     * to make sure it is up and healthy before deleting the old node.
+     *
+     * @return SUCCESS if the old RN was deleted
+     * @throws InterruptedException
+     */
+    public static boolean destroyRepNode(AbstractPlan plan,
+                                         long stopRNTime,
+                                         StorageNodeId targetSNId,
+                                         RepNodeId targetRNId)
+        throws InterruptedException {
+        return waitDestroyRepNodeInternal(plan.getAdmin(),
+                                          plan.getLogger(),
+                                          stopRNTime,
+                                          targetSNId,
+                                          targetRNId, true /* destroyTarget*/);
+
+    }
+
+    public static boolean waitForRepNode(AbstractPlan plan,
+                                         RepNodeId targetRNId)
+        throws InterruptedException {
+        return waitDestroyRepNodeInternal(plan.getAdmin(),
+                                          plan.getLogger(),
+                                          System.currentTimeMillis(),
+                                          null /* SNId */,
+                                          targetRNId,
+                                          false /* destroyTarget */);
+    }
+
+    /**
+     * Deletes the old AN on the original SN. Returns SUCCESS if the delete was
+     * successful. This method calls awaitConsistency() on the new node
+     * to make sure it is up and healthy before deleting the old node.
+     *
+     * @return SUCCESS if the old AN was deleted
+     * @throws InterruptedException
+     */
+    public static boolean destroyArbNode(Admin admin,
+                                         Logger logger,
+                                         StorageNodeId targetSNId,
+                                         ArbNodeId targetANId)
+        throws InterruptedException {
+
+        /* Wait a minute between consistency checks */
+        final int WAIT_FOR_AN_DELAY_MS = 60 * 1000;
+
+        long endCheckAtThisTime = System.currentTimeMillis() +
+            admin.getParams().getAdminParams().getAwaitRNConsistencyPeriod();
+
+        Topology useTopo = admin.getCurrentTopology();
+        RegistryUtils registry = new RegistryUtils(useTopo,
+                                                   admin.getLoginManager());
+        do {
+            logger.log(Level.INFO,
+                       "Waiting for {0} to come " +
+                       "up before removing it from {1}. Topology " +
+                       "says it is on {2}",
+                       new Object[]
+                           {targetANId, targetSNId,
+                           useTopo.get(targetANId).getStorageNodeId()});
+
+            try {
+                final ArbNodeAdminAPI anAdmin =
+                    registry.getArbNodeAdmin(targetANId);
+
+                ArbNodeStatus ans = anAdmin.ping();
+                if (ans.getArbiterState() ==
+                    ReplicatedEnvironment.State.REPLICA) {
+
+                    logger.log(Level.INFO,
+                               "Attempting to delete {0} from {1}",
+                               new Object[]{targetANId, targetSNId});
+
+                    StorageNodeAgentAPI oldSna =
+                        registry.getStorageNodeAgent(targetSNId);
+                    oldSna.destroyArbNode(targetANId, true /* deleteData */);
+                    return true;
+                }
+            } catch (RemoteException re) {
+
+                /*
+                 * Since we have gotten this far, we should do our best to
+                 * finish. The call to awaitConsistency may fail due to various
+                 * network issues or the AN not yet started or is very busy
+                 * starting up. This last case can happen if
+                 * WAIT_FOR_CONSISTENCY_MS > the socket timeout.
+                 */
+                logger.log(Level.INFO,
+                           "Remote call to {0} failed with {1}",
+                            new Object[]{targetANId, re.getLocalizedMessage()});
+
+                /*
+                 * If we have not timed-out, sleep for a short bit to avoid
+                 * spinning on a network error.
+                 */
+                if (endCheckAtThisTime > System.currentTimeMillis()) {
+                    Thread.sleep(WAIT_FOR_AN_DELAY_MS);
+                }
+            } catch (NotBoundException nbe) {
+                logger.log(Level.INFO,
+                           "Registry call failed with {0}",
+                           nbe.getLocalizedMessage());
+
+                if (endCheckAtThisTime > System.currentTimeMillis()) {
+                    Thread.sleep(WAIT_FOR_AN_DELAY_MS);
+                }
+
+                /* Reacquire the registry */
+                registry = new RegistryUtils(admin.getCurrentTopology(),
+                                             admin.getLoginManager());
+            }
+        } while (endCheckAtThisTime > System.currentTimeMillis());
+        return false;
+    }
+
+    /**
+     * Waits for RN to be consistent with passed in time and optionally
+     * destroy the RN.
+     *
+     * @param admin admin
+     * @param logger logger
+     * @param stopRNTime time used for awaitConsistency
+     * @param targetSNId SN used only if destroying target
+     * @param targetRNId RN to wait for
+     * @param destroyTarget if true RN is destroyed
+     *
+     * @return true if successful, false if
+     *         RN was not consistent with stopRNTime
+     * @throws InterruptedException
+     */
+    private static boolean waitDestroyRepNodeInternal(Admin admin,
+                                                      Logger logger,
+                                                      long stopRNTime,
+                                                      StorageNodeId targetSNId,
+                                                      RepNodeId targetRNId,
+                                                      boolean destroyTarget)
+        throws InterruptedException {
+
+        /* Delay between calls to the awaitConsistency after an error */
+        final int WAIT_FOR_CONSISTENCY_DELAY_MS = 1000 * 60;
+
+        /* Wait a minute between consistency checks */
+        final int WAIT_FOR_CONSISTENCY = 60;
+
+        long endCheckAtThisTime = System.currentTimeMillis() +
+            admin.getParams().getAdminParams().getAwaitRNConsistencyPeriod();
+
+        Topology useTopo = admin.getCurrentTopology();
+        RegistryUtils registry = new RegistryUtils(useTopo,
+                                                   admin.getLoginManager());
+        do {
+            if (destroyTarget) {
+                logger.log(Level.INFO,
+                           "Waiting for {0} to become " +
+                           "consistent before removing it from {1}. Topology " +
+                           "says it is on {2}",
+                           new Object[]{
+                               targetRNId, targetSNId,
+                               useTopo.get(targetRNId).getStorageNodeId()});
+            } else {
+                logger.log(Level.INFO,
+                           "Waiting for {0} to become consistent.",
+                            new Object[]{targetRNId});
+            }
+
+            try {
+                final RepNodeAdminAPI rnAdmin =
+                    registry.getRepNodeAdmin(targetRNId);
+
+                if (rnAdmin.awaitConsistency(stopRNTime, WAIT_FOR_CONSISTENCY,
+                                             TimeUnit.SECONDS)) {
+                    if (destroyTarget) {
+                        logger.log(Level.INFO,
+                                   "Attempting to delete {0} from {1}",
+                                   new Object[]{targetRNId, targetSNId});
+
+                        StorageNodeAgentAPI oldSna =
+                            registry.getStorageNodeAgent(targetSNId);
+                        oldSna.destroyRepNode(targetRNId,
+                                              true /* deleteData */);
+                    }
+                    return true;
+                }
+            } catch (RemoteException re) {
+
+                /*
+                 * Since we have gotten this far, we should do our best to
+                 * finish. The call to awaitConsistency may fail due to various
+                 * network issues or the RN not yet started or is very busy
+                 * starting up. This last case can happen if
+                 * WAIT_FOR_CONSISTENCY_MS > the socket timeout.
+                 */
+                logger.log(Level.INFO,
+                           "Remote call to {0} failed with {1}",
+                            new Object[]{targetRNId, re.getLocalizedMessage()});
+
+                /*
+                 * If we have not timed-out, sleep for a short bit to avoid
+                 * spinning on a network error.
+                 */
+                if (endCheckAtThisTime > System.currentTimeMillis()) {
+                    Thread.sleep(WAIT_FOR_CONSISTENCY_DELAY_MS);
+                }
+            } catch (NotBoundException nbe) {
+                logger.log(Level.INFO,
+                           "Registry call failed with {0}",
+                           nbe.getLocalizedMessage());
+
+                if (endCheckAtThisTime > System.currentTimeMillis()) {
+                    Thread.sleep(WAIT_FOR_CONSISTENCY_DELAY_MS);
+                }
+
+                /* Reacquire the registry */
+                registry = new RegistryUtils(admin.getCurrentTopology(),
+                                             admin.getLoginManager());
+            }
+        } while (endCheckAtThisTime > System.currentTimeMillis());
+        return false;
+    }
+
+    public static RepGroupId getRepGroupId(ResourceId resId) {
+        if (resId instanceof RepNodeId) {
+            return new RepGroupId(((RepNodeId)resId).getGroupId());
+        } else  if (resId instanceof ArbNodeId) {
+            return new RepGroupId(((ArbNodeId)resId).getGroupId());
+        } else {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("serial")
+    private static class ArbiterActiveException
+        extends OperationFaultException {
+
+        /**
+         * Constructor making provision for an exception message.
+         *
+         * @param msg the exception message
+         */
+        ArbiterActiveException(String msg) {
+            super(msg);
+        }
+    }
+    /**
+     * Ensure that all existing SNs are in harmony regarding the presence or
+     * lack thereof of a search cluster.  If they are, then return the search
+     * cluster's connection information in a ParameterMap.
+     */
+    public static ParameterMap verifyAndGetSearchParams(Parameters p) {
+
+        final String remedy =
+            "\nTo correct this problem, please issue the register-es command" +
+            " to re-register the search cluster. ";
+
+        String searchClusterName = "";
+        String searchClusterMembers = "";
+        int counter = 0;
+        for (StorageNodeParams sp : p.getStorageNodeParams()) {
+            final String name = sp.getSearchClusterName();
+            final String members = sp.getSearchClusterMembers();
+
+            /* First verify that the two parameters are either both null or
+             * both non-null -- either both should be set or neither.
+             * This really should not be possible, but check it anyway.
+             */
+            if (("".equals(name)) != ("".equals(members))) {
+                throw new IllegalStateException
+                    (sp.getStorageNodeId() +
+                     "'s search cluster parameters are not consistent." +
+                     remedy);
+            }
+
+            /* Now check for inconsistency between SNs */
+            if (counter > 0 &&
+                (! (searchClusterName.equals(name) &&
+                    searchClusterMembers.equals(members)))) {
+                throw new IllegalStateException
+                    (sp.getStorageNodeId() +
+                     "'s search cluster parameters do not match other SNs." +
+                     remedy);
+            }
+
+            searchClusterName = name;
+            searchClusterMembers = members;
+            counter++;
+        }
+
+        ParameterMap pm = new ParameterMap(ParameterState.SNA_TYPE,
+                                           ParameterState.SNA_TYPE);
+        pm.setParameter
+            (ParameterState.SN_SEARCH_CLUSTER_NAME, searchClusterName);
+        pm.setParameter
+            (ParameterState.SN_SEARCH_CLUSTER_MEMBERS, searchClusterMembers);
+        return pm;
     }
 }

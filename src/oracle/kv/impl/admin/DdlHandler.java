@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,15 +43,24 @@
 
 package oracle.kv.impl.admin;
 
+import java.util.Map;
+import java.util.Set;
+
 import oracle.kv.KVSecurityException;
+import oracle.kv.impl.api.table.IndexImpl.AnnotatedField;
+import oracle.kv.impl.api.table.TableImpl;
 import oracle.kv.impl.api.table.TableMetadata;
-import oracle.kv.impl.api.table.query.TableDdl;
 import oracle.kv.impl.fault.ClientAccessException;
 import oracle.kv.impl.metadata.Metadata.MetadataType;
+import oracle.kv.impl.query.QueryStateException;
+import oracle.kv.impl.query.compiler.CompilerAPI;
+import oracle.kv.impl.query.compiler.QueryControlBlock;
+import oracle.kv.impl.query.compiler.StatementFactory;
 import oracle.kv.impl.security.AccessChecker;
 import oracle.kv.impl.security.ExecutionContext;
 import oracle.kv.impl.security.OperationContext;
 import oracle.kv.impl.security.SessionAccessException;
+import oracle.kv.impl.security.util.SecurityUtils;
 
 /**
  * This class encapsulates DDL requests to the admin. The requests are
@@ -83,7 +92,7 @@ import oracle.kv.impl.security.SessionAccessException;
  */
 public class DdlHandler {
 
-    private final TableDdl tableDdl;
+    private QueryControlBlock query;
     private final Admin admin;
     private boolean success;
     private String errorString;
@@ -91,8 +100,10 @@ public class DdlHandler {
     private int planId;
     private boolean hasPlan;
     private boolean canRetry;
+    private DdlOperation ddlOperation;
     private final String statement;
     private final DdlOperationExecutor ddlOpExecutor;
+    private final StatementFactory statementFactory;
 
     /**
      * Constructs a DdlHandler and executes the statement.
@@ -100,15 +111,22 @@ public class DdlHandler {
     DdlHandler(String statement, Admin admin, AccessChecker accessChecker) {
         this.admin = admin;
         this.statement = statement;
+        this.statementFactory = new DdlStatementFactory();
         this.ddlOpExecutor = new DdlOperationExecutor(this, accessChecker);
         TableMetadata metadata =
-            admin.getMetadata(TableMetadata.class,
-                              MetadataType.TABLE);
+            admin.getMetadata(TableMetadata.class, MetadataType.TABLE);
+
         /*
          * This parses and executes the statement.
          */
-        tableDdl = TableDdl.parse(statement, metadata);
-        success = tableDdl.succeeded();
+        try {
+            query = CompilerAPI.compile(statement, metadata, statementFactory);
+            success = query.succeeded();
+        } catch (IllegalArgumentException iae) {
+            errorString = iae.getMessage();
+            success = false;
+            query = null;
+        }
 
         /*
          * Handle the results of the parse.
@@ -117,10 +135,39 @@ public class DdlHandler {
     }
 
     /**
+     * A constructor used only by the DdlSyntaxTest and QueryTest, in
+     * the table/query package.
+     */
+    public DdlHandler(String statement, TableMetadata metadata) {
+
+        this.admin = null;
+        this.statement = statement;
+        this.statementFactory = new DdlStatementFactory();
+        this.ddlOpExecutor = null;
+
+        /*
+         * This parses and executes the statement.
+         */
+        query = CompilerAPI.compile(statement, metadata, statementFactory);
+        success = query.succeeded();
+
+        if (!success) {
+            errorString = query.getErrorMessage();
+        }
+    }
+
+    /**
      * Returns if the operation succeeded or not.
      */
-    boolean getSuccess() {
+    public boolean getSuccess() {
         return success;
+    }
+
+    /**
+     *  Get the exception, if any, from the compilation of the statement.
+     */
+    public RuntimeException getException() {
+        return query.getException();
     }
 
     /**
@@ -166,17 +213,65 @@ public class DdlHandler {
     }
 
     /**
+     * Return the TableImpl object associated with a TableDdlOperation, or null
+     * if the ddlOperation is not a TableDdlOperation.
+     *
+     * This is public so it can be used by tests.
+     */
+    public TableImpl getTable() {
+        return (ddlOperation instanceof TableDdlOperation ?
+                ((TableDdlOperation)ddlOperation).getTable() :
+                null);
+    }
+    /**
+     * Returns true if this is a table create
+     */
+    boolean isTableCreate() {
+        return (ddlOperation instanceof TableDdlOperation.CreateTable);
+    }
+
+    /**
+     * Returns true if this is a table evolve
+     */
+    boolean isTableEvolve() {
+        return (ddlOperation instanceof TableDdlOperation.EvolveTable);
+    }
+
+    /**
+     * Returns true if this is a table drop statement.
+     */
+    boolean isTableDrop() {
+        return (ddlOperation instanceof TableDdlOperation.DropTable);
+    }
+
+    /**
+     * Returns true if this is an index add statement.
+     */
+    boolean isIndexAdd() {
+        return (ddlOperation instanceof TableDdlOperation.CreateIndex);
+    }
+
+    /**
+     * Returns true if this is an index drop statement.
+     */
+    boolean isIndexDrop() {
+        return (ddlOperation instanceof TableDdlOperation.DropIndex);
+    }
+
+    /**
      * Returns true if the operation was a describe.
      */
     boolean isDescribe() {
-        return tableDdl.isDescribe();
+        return (ddlOperation instanceof TableDdlOperation.DescribeTable);
     }
 
     /**
      * Returns true if the operation was a show
      */
     boolean isShow() {
-        return tableDdl.isShow();
+        return (ddlOperation instanceof TableDdlOperation.ShowTableOrIndex ||
+                ddlOperation instanceof SecurityDdlOperation.ShowUser ||
+                ddlOperation instanceof SecurityDdlOperation.ShowRole);
     }
 
     Admin getAdmin() {
@@ -214,16 +309,17 @@ public class DdlHandler {
          * Handle parse and parse tree processing errors
          */
         if (!success) {
-            errorString = tableDdl.getErrorMessage();
+            if (errorString == null && query != null) {
+                errorString = query.getErrorMessage();
+            }
             return;
         }
 
-        DdlOperation ddlOp = tableDdl.getDdlOperation();
-        if (ddlOp == null) {
-            throw new IllegalStateException("Problem parsing " + statement +
-                                            ": " + tableDdl);
+        if (ddlOperation == null) {
+            throw new QueryStateException("Problem parsing " + statement +
+                                          ": " + errorString);
         }
-        ddlOpExecutor.execute(ddlOp);
+        ddlOpExecutor.execute(ddlOperation);
     }
 
     void approveAndExecute(int planId1) {
@@ -312,6 +408,242 @@ public class DdlHandler {
         return sb.toString();
     }
 
+    private class DdlStatementFactory implements StatementFactory {
+
+        @Override
+        public void createTable(TableImpl table,
+                                boolean ifNotExists) {
+            ddlOperation =
+                new TableDdlOperation.CreateTable(table, ifNotExists);
+        }
+
+        @Override
+        public void dropTable(String tableName,
+                              TableImpl table,
+                              boolean ifExists,
+                              boolean removeData) {
+            ddlOperation = new TableDdlOperation.DropTable(tableName,
+                                                           table,
+                                                           ifExists,
+                                                           removeData);
+        }
+
+        @Override
+        public void createIndex(String tableName,
+                                TableImpl table,
+                                String indexName,
+                                String[] fieldArray,
+                                AnnotatedField[] annotatedFields,
+                                Map<String,String> properties,
+                                String indexComment,
+                                boolean ifNotExists) {
+
+            ddlOperation = new TableDdlOperation.CreateIndex(
+                table, tableName, indexName, fieldArray,
+                annotatedFields, properties, indexComment, ifNotExists);
+        }
+
+        @Override
+        public void dropIndex(String tableName,
+                              TableImpl table,
+                              String indexName,
+                              boolean ifExists) {
+
+            ddlOperation = new TableDdlOperation.DropIndex(
+                tableName, table, indexName, ifExists);
+        }
+
+        @Override
+        public void evolveTable(TableImpl table) {
+            ddlOperation = new TableDdlOperation.EvolveTable(table);
+        }
+
+        @Override
+        public void describeTable(String tableName,
+                                  String indexName,
+                                  String[] fieldArray,
+                                  boolean describeAsJson) {
+
+            ddlOperation = new TableDdlOperation.DescribeTable(
+                tableName, indexName, fieldArray, describeAsJson);
+        }
+
+        @Override
+        public void showTableOrIndex(String tableName,
+                                     boolean showTables,
+                                     boolean showIndexes,
+                                     boolean asJson) {
+            ddlOperation =
+                new TableDdlOperation.ShowTableOrIndex(tableName,
+                                                       showTables,
+                                                       showIndexes,
+                                                       asJson);
+        }
+
+        /*
+         * Security methods that read state
+         */
+        @Override
+        public void showUser(String userName,
+                             boolean asJson) {
+
+            ddlOperation = new SecurityDdlOperation.ShowUser(userName, asJson);
+        }
+
+        @Override
+        public void showRole(String role,
+                             boolean asJson) {
+
+            ddlOperation = new SecurityDdlOperation.ShowRole(role, asJson);
+        }
+
+        /*
+         * Security methods that modify state
+         */
+        @Override
+        public void createUser(String userName,
+                               boolean isEnabled,
+                               boolean isAdmin,
+                               final String pass,
+                               Long passLifetimeMillis) {
+
+            final char[] passBytes = resolvePlainPassword(pass);
+            ddlOperation =
+                new SecurityDdlOperation.CreateUser(userName, isEnabled,
+                                                    isAdmin, passBytes,
+                                                    passLifetimeMillis);
+            SecurityUtils.clearPassword(passBytes);
+        }
+
+        /*
+         * Security methods that modify state
+         */
+        @Override
+        public void createExternalUser(String userName,
+                                       boolean isEnabled,
+                                       boolean isAdmin) {
+
+            ddlOperation =
+                new SecurityDdlOperation.CreateExternalUser(userName,
+                                                            isEnabled,
+                                                            isAdmin);
+        }
+
+        @Override
+        public void alterUser(String userName,
+                              Boolean isEnabled,
+                              final String pass,
+                              boolean retainPassword,
+                              boolean clearRetainedPassword,
+                              Long passLifetimeMillis) {
+
+            final char[] passBytes =
+                (pass != null ? resolvePlainPassword(pass) : null);
+
+            ddlOperation =
+                new SecurityDdlOperation.AlterUser(userName,
+                                                   isEnabled,
+                                                   passBytes,
+                                                   retainPassword,
+                                                   clearRetainedPassword,
+                                                   passLifetimeMillis);
+
+            SecurityUtils.clearPassword(passBytes);
+        }
+
+        @Override
+        public void dropUser(String userName) {
+
+            ddlOperation =
+                new SecurityDdlOperation.DropUser(userName,
+                                                  false /* cascade */);
+        }
+
+        @Override
+        public void createRole(String role) {
+
+            ddlOperation = new SecurityDdlOperation.CreateRole(role);
+        }
+
+        @Override
+        public void dropRole(String role) {
+
+            ddlOperation = new SecurityDdlOperation.DropRole(role);
+        }
+
+        @Override
+        public void grantRolesToUser(String userName,
+                                     String[] roles) {
+                ddlOperation =
+                    new SecurityDdlOperation.GrantRoles(userName,
+                                                        roles);
+
+        }
+
+        @Override
+        public void grantRolesToRole(String roleName,
+                                     String[] roles) {
+
+            ddlOperation = new SecurityDdlOperation.GrantRolesToRole(roleName,
+                                                                     roles);
+        }
+
+        @Override
+        public void revokeRolesFromUser(String userName,
+                                        String[] roles) {
+
+                ddlOperation = new SecurityDdlOperation.RevokeRoles(userName,
+                                                                    roles);
+        }
+
+        @Override
+        public void revokeRolesFromRole(String roleName,
+                                        String[] roles) {
+
+            ddlOperation =
+                new SecurityDdlOperation.RevokeRolesFromRole(roleName,
+                                                             roles);
+        }
+
+        @Override
+        public void grantPrivileges(String roleName,
+                                    String tableName,
+                                    Set<String> privSet) {
+
+            ddlOperation = new SecurityDdlOperation.GrantPrivileges(roleName,
+                                                                    tableName,
+                                                                    privSet);
+        }
+
+        @Override
+        public void revokePrivileges(String roleName,
+                                     String tableName,
+                                     Set<String> privSet) {
+
+            ddlOperation = new SecurityDdlOperation.RevokePrivileges(roleName,
+                                                                     tableName,
+                                                                     privSet);
+        }
+
+        /*
+         * TODO: Will be extended to parse other types of authentication. For now
+         * we only parse a password by default.
+         */
+        private char[] resolvePlainPassword(String passStr) {
+            /* Tears down the surrounding '"' */
+            final char[] result = new char[passStr.length() - 2];
+            passStr.getChars(1, passStr.length() - 1, result, 0);
+            return result;
+        }
+    }
+
+    /**
+     * Return the ddl operation object.  For testing only.
+     */
+    DdlOperation getDdlOp() {
+        return ddlOperation;
+    }
+
     /**
      * Runs a ddl operation.  In a secured kvstore, the permission for the
      * specific ddl operation will be checked first.
@@ -354,15 +686,8 @@ public class DdlHandler {
         OperationContext getOperationCtx();
 
         /**
-         * Performs the operation.  
+         * Performs the operation.
          */
         void perform(DdlHandler ddlHandler);
-    }
-
-    /**
-     * @return true if this statement's result string is in JSON format.
-     */
-    boolean isJson() {
-        return tableDdl.isDescribeAsJson();
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -152,7 +152,6 @@ public class MetadataUpdateThread extends UpdateThread {
         }
 
         final RepGroupState rgState = getRepGroupState(nextgid);
-        logger.log(Level.FINE, "RepGroup state: {0}", rgState);
 
         /*
          * Note that the size being passed in is the size of the entire store,
@@ -218,14 +217,18 @@ public class MetadataUpdateThread extends UpdateThread {
         if (mState == null) {
             addUpdateTasksForGroup(rgState, type);
         } else {
-            logger.log(Level.FINE, "Try update master: {0}", mState);
-            threadPool.execute(new UpdateMetadata(rgState, mState, type, true));
+            if (!needsResolution(mState)) {
+                logger.log(Level.FINE,
+                           "Try update metadata for master: {0}", mState);
+                threadPool.execute(new UpdateMetadata(rgState, mState, type, true));
+            }
         }
     }
 
     private void addUpdateTasksForGroup(RepGroupState rgState,
                                         MetadataType type) {
-        logger.log(Level.FINE, "Try update every node in : {0}", rgState);
+        logger.log(Level.FINE,
+                   "Try update metadata for every node in {0}.", rgState);
         for (RepNodeState rnState : rgState.getRepNodeStates()) {
             if (shutdown.get()) {
                 return;
@@ -338,11 +341,11 @@ public class MetadataUpdateThread extends UpdateThread {
 
                 if (info.isEmpty()) {
                     logger.log(Level.FINE,
-                            "Pushed {0} metadata changes [{1}] to {2}",
-                            new Object[]{type, info, targetRNId});
+                               "Pushed {0} metadata changes [{1}] to {2}",
+                               new Object[]{type, info, targetRNId});
                 } else {
                     logger.log(Level.FINE, "Pushed {0} to {1}",
-                            new Object[]{md, targetRNId});
+                               new Object[]{md, targetRNId});
                 }
                 return true;
             } catch (Exception e) {

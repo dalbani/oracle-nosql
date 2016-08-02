@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,23 +44,18 @@
 package oracle.kv.impl.api.ops;
 
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.sleepycat.je.Transaction;
-
 import oracle.kv.KeyRange;
-import oracle.kv.impl.api.ops.MultiGetBatchExecutor.MultiGetBatchHandler;
 import oracle.kv.impl.api.table.TargetTables;
-import oracle.kv.impl.topo.PartitionId;
 
 /**
  * This is an intermediate class for a multi-batch-get table operation.
  */
-abstract class MultiGetBatchTableOperation<V>
-    extends MultiGetTableOperation implements MultiGetBatchHandler<V> {
+abstract class MultiGetBatchTableOperation extends MultiGetTableOperation {
 
     private final List<byte[]> keys;
     private final int batchSize;
@@ -84,7 +79,7 @@ abstract class MultiGetBatchTableOperation<V>
      * to read common elements.
      */
     protected MultiGetBatchTableOperation(OpCode opCode,
-                                          ObjectInput in,
+                                          DataInput in,
                                           short serialVersion)
         throws IOException {
 
@@ -128,7 +123,7 @@ abstract class MultiGetBatchTableOperation<V>
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
@@ -148,19 +143,5 @@ abstract class MultiGetBatchTableOperation<V>
             out.writeShort(-1);
         }
         out.writeInt(batchSize);
-    }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          OperationHandler operationHandler) {
-
-        verifyTableAccess(operationHandler);
-
-        final MultiGetBatchExecutor<V> executor =
-            new MultiGetBatchExecutor<V>(this);
-        return executor.execute(txn, partitionId, operationHandler,
-                                getParentKeys(), getResumeKey(),
-                                getBatchSize());
     }
 }

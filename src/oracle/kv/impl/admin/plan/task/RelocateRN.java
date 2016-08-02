@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,7 +48,6 @@ import java.rmi.RemoteException;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -61,6 +60,7 @@ import oracle.kv.impl.admin.TopologyCheck;
 import oracle.kv.impl.admin.TopologyCheck.Remedy;
 import oracle.kv.impl.admin.TopologyCheckUtils;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
@@ -75,6 +75,8 @@ import oracle.kv.impl.security.login.LoginManager;
 import oracle.kv.impl.sna.StorageNodeAgentAPI;
 import oracle.kv.impl.test.TestHook;
 import oracle.kv.impl.test.TestHookExecute;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepGroup;
 import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.RepNode;
@@ -106,12 +108,6 @@ import com.sleepycat.persist.model.Persistent;
 @Persistent(version=1)
 public class RelocateRN extends SingleJobTask {
     private static final long serialVersionUID = 1L;
-
-    /* Delay between calls to the awaitConsistency after an error */
-    private static final int WAIT_FOR_CONSISTENCY_DELAY_MS = 1000 * 60;
-
-    /* Wait a minute between consistency checks */
-    private static final int WAIT_FOR_CONSISTENCY = 60;
 
     private RepNodeId rnId;
     private StorageNodeId oldSN;
@@ -175,20 +171,20 @@ public class RelocateRN extends SingleJobTask {
 
         /* ApplyRemedy will throw an exception if there is a problem */
         Remedy remedy =
-            checker.checkRNLocation(admin, newSN, rnId,
-                                    false /* calledByDeployNewRN */,
-                                    true /* makeRNEnabled */,
-                                    oldSN, newMountPoint);
+            checker.checkLocation(admin, newSN, rnId,
+                                  false /* calledByDeployNewRN */,
+                                  true /* makeRNEnabled */,
+                                  oldSN, newMountPoint);
         if (!remedy.isOkay()) {
             logger.info("RelocateRN check of newSN: " + remedy);
         }
 
         boolean newDone = checker.applyRemedy(remedy, plan);
 
-        remedy = checker.checkRNLocation(admin, oldSN, rnId,
-                                         false /* calledByDeployRN */,
-                                         true /* makeRNEnabled */,
-                                         oldSN, newMountPoint);
+        remedy = checker.checkLocation(admin, oldSN, rnId,
+                                       false /* calledByDeployRN */,
+                                       true /* makeRNEnabled */,
+                                       oldSN, newMountPoint);
         if (!remedy.isOkay()) {
             logger.info("RelocateRN check of oldSN: " + remedy);
         }
@@ -294,7 +290,7 @@ public class RelocateRN extends SingleJobTask {
             } catch (Exception e) {
                 throw new CommandFaultException(
                     e.getMessage(), e, ErrorMessage.NOSQL_5400,
-                    CommandResult.TOPO_PLAN_REPAIR); 
+                    CommandResult.TOPO_PLAN_REPAIR);
             }
 
             /*
@@ -425,7 +421,7 @@ public class RelocateRN extends SingleJobTask {
      */
     private State destroyRepNode(long stopRNTime) {
         try {
-            if (destroyRepNode(plan, stopRNTime, oldSN, rnId)) {
+            if (Utils.destroyRepNode(plan, stopRNTime, oldSN, rnId)) {
                 return State.SUCCEEDED;
             }
         } catch (InterruptedException ie) {
@@ -442,91 +438,6 @@ public class RelocateRN extends SingleJobTask {
                                         ErrorMessage.NOSQL_5400,
                                         CommandResult.TOPO_PLAN_REPAIR);
     }
-
-    /**
-     * Deletes the old RN on the original SN. Returns SUCCESS if the delete was
-     * successful. This method calls awaitConsistency() on the new node
-     * to make sure it is up and healthy before deleting the old node.
-     *
-     * @return SUCCESS if the old RN was deleted
-     * @throws InterruptedException
-     */
-    public static boolean destroyRepNode(AbstractPlan plan,
-                                         long stopRNTime,
-                                         StorageNodeId targetSNId,
-                                         RepNodeId targetRNId)
-        throws InterruptedException {
-
-        final Admin admin = plan.getAdmin();
-        final Logger logger = plan.getLogger();
-
-        long endCheckAtThisTime = System.currentTimeMillis() +
-            admin.getParams().getAdminParams().getAwaitRNConsistencyPeriod();
-
-        Topology useTopo = admin.getCurrentTopology();
-        RegistryUtils registry = new RegistryUtils(useTopo,
-                                                   admin.getLoginManager());
-        do {
-            logger.log(Level.INFO,
-                       "Waiting for {0} to become " +
-                       "consistent before removing it from {1}. Topology " +
-                       "says it is on {2}",
-                       new Object[]{targetRNId, targetSNId,
-                                    useTopo.get(targetRNId).getStorageNodeId()});
-
-            try {
-                final RepNodeAdminAPI rnAdmin =
-                    registry.getRepNodeAdmin(targetRNId);
-
-                if (rnAdmin.awaitConsistency(stopRNTime, WAIT_FOR_CONSISTENCY,
-                                             TimeUnit.SECONDS)) {
-
-                    logger.log(Level.INFO,
-                               "Attempting to delete {0} from {1}",
-                               new Object[]{targetRNId, targetSNId});
-
-                    StorageNodeAgentAPI oldSna =
-                        registry.getStorageNodeAgent(targetSNId);
-                    oldSna.destroyRepNode(targetRNId, true /* deleteData */);
-                    return true;
-                }
-            } catch (RemoteException re) {
-
-                /*
-                 * Since we have gotten this far, we should do our best to
-                 * finish. The call to awaitConsistency may fail due to various
-                 * network issues or the RN not yet started or is very busy
-                 * starting up. This last case can happen if
-                 * WAIT_FOR_CONSISTENCY_MS > the socket timeout.
-                 */
-                logger.log(Level.INFO,
-                           "Remote call to {0} failed with {1}",
-                            new Object[]{targetRNId, re.getLocalizedMessage()});
-
-                /*
-                 * If we have not timed-out, sleep for a short bit to avoid
-                 * spinning on a network error.
-                 */
-                if (endCheckAtThisTime > System.currentTimeMillis()) {
-                    Thread.sleep(WAIT_FOR_CONSISTENCY_DELAY_MS);
-                }
-            } catch (NotBoundException nbe) {
-                logger.log(Level.INFO,
-                           "Registry call failed with {0}",
-                           nbe.getLocalizedMessage());
-
-                if (endCheckAtThisTime > System.currentTimeMillis()) {
-                    Thread.sleep(WAIT_FOR_CONSISTENCY_DELAY_MS);
-                }
-
-                /* Reacquire the registry */
-                registry = new RegistryUtils(admin.getCurrentTopology(),
-                                             admin.getLoginManager());
-            }
-        } while (endCheckAtThisTime > System.currentTimeMillis());
-        return false;
-    }
-
 
     /**
      * Start the RN, update its params.
@@ -572,7 +483,7 @@ public class RelocateRN extends SingleJobTask {
         try {
             sna.createRepNode(rnp.getMap(), Utils.getMetadataSet(topo, plan));
         } catch (IllegalStateException e) {
-            throw new CommandFaultException(e.getMessage(), e, 
+            throw new CommandFaultException(e.getMessage(), e,
                                             ErrorMessage.NOSQL_5200,
                                             CommandResult.NO_CLEANUP_JOBS);
         }
@@ -584,7 +495,7 @@ public class RelocateRN extends SingleJobTask {
          */
         if (rnExists) {
             try {
-                Utils.waitForRepNodeState(plan, targetRNId,
+                Utils.waitForNodeState(plan, targetRNId,
                                           ServiceStatus.RUNNING);
             } catch (Exception e) {
                 throw new CommandFaultException(e.getMessage(), e,
@@ -618,16 +529,18 @@ public class RelocateRN extends SingleJobTask {
         /* Modify pertinent params and topo */
         StorageNodeId origParamsSN = parameters.get(rnId).getStorageNodeId();
         StorageNodeId origTopoSN = topo.get(rnId).getStorageNodeId();
-        Set<RepNodeParams> changedRNParams = transferRNParams
-            (parameters, portTracker, topo, before, after, rgId);
+        ChangedParams changedParams =
+            transferRNParams(parameters, portTracker, topo,
+                             before, after, rgId);
         boolean topoChanged = transferTopo(topo, before, after);
 
         /*
          * Sanity check that params and topo are in sync, both should be
          * either unchanged or changed
          */
-        if ((changedRNParams.isEmpty() && topoChanged) ||
-            (!changedRNParams.isEmpty() && !topoChanged)) {
+        Set<RepNodeParams> changedRNParams = changedParams.getRNP();
+        Set<ArbNodeParams> changedANParams = changedParams.getANP();
+        if (!changedRNParams.isEmpty() != topoChanged) {
             final String msg =
                 rnId + " params and topo out of sync. Original params SN=" +
                 origParamsSN + ", orignal topo SN=" + origTopoSN +
@@ -640,7 +553,7 @@ public class RelocateRN extends SingleJobTask {
 
         /* Only do the update if there has been a change */
         Logger logger = plan.getLogger();
-        if (!(topoChanged && !changedRNParams.isEmpty())) {
+        if (!(topoChanged || !changedANParams.isEmpty())) {
             logger.log(Level.INFO,
                        "No change to params or topology, no need to update " +
                        "in order to move {0} from {1} to {2}",
@@ -652,6 +565,7 @@ public class RelocateRN extends SingleJobTask {
                                           plan.getDeployedInfo(),
                                           changedRNParams,
                                           Collections.<AdminParams>emptySet(),
+                                          changedANParams,
                                           plan);
         logger.log(Level.INFO,
                    "Updating params and topo for move of {0} from " +
@@ -671,7 +585,7 @@ public class RelocateRN extends SingleJobTask {
      *   a. new helper host values, that point to this new location for our
      *      relocated RN
      */
-    private Set<RepNodeParams> transferRNParams(Parameters parameters,
+    private ChangedParams transferRNParams(Parameters parameters,
                                                 PortTracker portTracker,
                                                 Topology topo,
                                                 StorageNodeId before,
@@ -679,6 +593,7 @@ public class RelocateRN extends SingleJobTask {
                                                 RepGroupId rgId) {
 
         Set<RepNodeParams> changed = new HashSet<>();
+        Set<ArbNodeParams> changedArbp = new HashSet<ArbNodeParams>();
 
         RepNodeParams rnp = parameters.get(rnId);
         ParameterMap policyMap = parameters.copyPolicies();
@@ -693,7 +608,7 @@ public class RelocateRN extends SingleJobTask {
              * to the user to do manually.
              */
             plan.getLogger().info(rnId + " already transferred to " + after);
-            return changed;
+            return new ChangedParams(changedArbp, changed);
         }
 
         /*
@@ -735,7 +650,7 @@ public class RelocateRN extends SingleJobTask {
          * list in case a previous param change had been interrupted.
          */
         rnp.setJEHelperHosts(
-            TopologyCheckUtils.findPeerRNHelpers(rnId, parameters, topo));
+            TopologyCheckUtils.findPeerHelpers(rnId, parameters, topo));
 
         /*
          * Update the RN heap, JE cache size, and parallelGCThreads params,
@@ -760,7 +675,16 @@ public class RelocateRN extends SingleJobTask {
             peerParam.setJEHelperHosts(newHelpers);
             changed.add(peerParam);
         }
-        return changed;
+        for (ArbNode peer : topo.get(rgId).getArbNodes()) {
+            ArbNodeId peerId = peer.getResourceId();
+            ArbNodeParams peerParam = parameters.get(peerId);
+            String oldHelper = peerParam.getJEHelperHosts();
+            String newHelpers = oldHelper.replace(oldNodeHostPort,
+                                                  nodeHostPort);
+            peerParam.setJEHelperHosts(newHelpers);
+            changedArbp.add(peerParam);
+        }
+        return new ChangedParams(changedArbp, changed);
     }
 
     /**
@@ -952,5 +876,21 @@ public class RelocateRN extends SingleJobTask {
         throws PlanLocksHeldException {
         planner.lockShard(plan.getId(), plan.getName(),
                           new RepGroupId(rnId.getGroupId()));
+    }
+
+    class ChangedParams {
+        private final Set<ArbNodeParams> anParams;
+        private final Set<RepNodeParams> rnParams;
+        ChangedParams(Set<ArbNodeParams> anp, Set<RepNodeParams> rnp) {
+            anParams = anp;
+            rnParams = rnp;
+        }
+        Set<ArbNodeParams> getANP() {
+            return anParams;
+        }
+        Set<RepNodeParams> getRNP() {
+            return rnParams;
+        }
+
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -54,9 +54,11 @@ import org.codehaus.jackson.node.LongNode;
 import com.sleepycat.persist.model.Persistent;
 
 @Persistent(version=1)
-class LongValueImpl extends FieldValueImpl implements LongValue {
+public class LongValueImpl extends FieldValueImpl implements LongValue {
+
     private static final long serialVersionUID = 1L;
-    private final long value;
+
+    protected long value;
 
     LongValueImpl(long value) {
         this.value = value;
@@ -76,27 +78,13 @@ class LongValueImpl extends FieldValueImpl implements LongValue {
         value = 0;
     }
 
-    @Override
-    public long get() {
-        return value;
-    }
-
-    @Override
-    public FieldDef.Type getType() {
-        return FieldDef.Type.LONG;
-    }
+    /*
+     * Public api methods from Object and FieldValue
+     */
 
     @Override
     public LongValueImpl clone() {
         return new LongValueImpl(value);
-    }
-
-    @Override
-    public boolean equals(Object other) {
-        if (other instanceof LongValueImpl) {
-            return value == ((LongValueImpl)other).get();
-        }
-        return false;
     }
 
     @Override
@@ -105,45 +93,43 @@ class LongValueImpl extends FieldValueImpl implements LongValue {
     }
 
     @Override
-    public int compareTo(FieldValue other) {
+    public boolean equals(Object other) {
+
         if (other instanceof LongValueImpl) {
-            /* java 7
-            return Long.compare(value, ((LongValueImpl)other).value);
-            */
-            return ((Long)value).compareTo(((LongValueImpl)other).value);
+            return value == ((LongValueImpl)other).get();
         }
-        throw new ClassCastException
-            ("Object is not an LongValue");
+        return false;
     }
 
+    /**
+     * Allow comparison to IntegerValue succeed.
+     */
     @Override
-    public String formatForKey(FieldDef field) {
-        int len = (field != null ?
-                   ((LongDefImpl) field).getEncodingLength() : 0);
-        return SortableString.toSortable(value, len);
-    }
+    public int compareTo(FieldValue other) {
 
-    @Override
-    public FieldValueImpl getNextValue() {
-        if (value == Long.MAX_VALUE) {
-            return null;
+        if (other instanceof LongValueImpl) {
+            return compare(value, ((LongValueImpl)other).value);
         }
-        return new LongValueImpl(value + 1L);
+        throw new ClassCastException("Object is not comparable to LongValue");
+    }
+
+    public static int compare(long x, long y) {
+        return (x < y) ? -1 : ((x == y) ? 0 : 1);
     }
 
     @Override
-    public FieldValueImpl getMinimumValue() {
-        return new LongValueImpl(Long.MIN_VALUE);
+    public String toString() {
+        return Long.toString(value);
     }
 
     @Override
-    public JsonNode toJsonNode() {
-        return new LongNode(value);
+    public FieldDef.Type getType() {
+        return FieldDef.Type.LONG;
     }
 
     @Override
-    public void toStringBuilder(StringBuilder sb) {
-        sb.append(toString());
+    public LongDefImpl getDefinition() {
+        return FieldDefImpl.longDef;
     }
 
     @Override
@@ -157,7 +143,90 @@ class LongValueImpl extends FieldValueImpl implements LongValue {
     }
 
     @Override
-    public String toString() {
+    public boolean isAtomic() {
+        return true;
+    }
+
+    @Override
+    public boolean isNumeric() {
+        return true;
+    }
+
+    /*
+     * Public api methods from LongValue
+     */
+
+    @Override
+    public long get() {
+        return value;
+    }
+
+    /*
+     * FieldValueImpl internal api methods
+     */
+
+    @Override
+    public long getLong() {
+        return value;
+    }
+
+    @Override
+    public void setLong(long v) {
+        value = v;
+    }
+
+    @Override
+    public int castAsInt() {
+        return (int)value;
+    }
+
+    @Override
+    public long castAsLong() {
+        return value;
+    }
+
+    @Override
+    public float castAsFloat() {
+        return value;
+    }
+
+    @Override
+    public double castAsDouble() {
+        return value;
+    }
+
+    @Override
+    public String castAsString() {
         return Long.toString(value);
+    }
+
+    @Override
+    FieldValueImpl getNextValue() {
+        if (value == Long.MAX_VALUE) {
+            return null;
+        }
+        return new LongValueImpl(value + 1L);
+    }
+
+    @Override
+    FieldValueImpl getMinimumValue() {
+        return new LongValueImpl(Long.MIN_VALUE);
+    }
+
+    @Override
+    public String formatForKey(FieldDef field, int storageSize) {
+        int len = (field != null ?
+                   ((LongDefImpl) field).getEncodingLength() : 0);
+        return SortableString.toSortable(value, len);
+    }
+
+    @Override
+    public JsonNode toJsonNode() {
+        return new LongNode(value);
+    }
+
+    @Override
+    public void toStringBuilder(StringBuilder sb) {
+        sb.append(toString());
     }
 }

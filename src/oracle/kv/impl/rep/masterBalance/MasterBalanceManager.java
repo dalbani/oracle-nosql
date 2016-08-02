@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -51,14 +51,13 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import oracle.kv.impl.rep.RepNode;
-import oracle.kv.impl.rep.admin.RepNodeAdmin;
-import oracle.kv.impl.topo.RepNodeId;
-
-import com.sleepycat.je.rep.MasterReplicaTransitionException;
 import com.sleepycat.je.rep.MasterTransferFailureException;
 import com.sleepycat.je.rep.ReplicatedEnvironment;
 import com.sleepycat.je.rep.StateChangeEvent;
+
+import oracle.kv.impl.rep.RepNode;
+import oracle.kv.impl.rep.admin.RepNodeAdmin;
+import oracle.kv.impl.topo.RepNodeId;
 
 
 /**
@@ -72,7 +71,6 @@ import com.sleepycat.je.rep.StateChangeEvent;
  * 2) Implements request for master transfers that result from the state
  * changes sent to the SNA in step 1.
  */
-@SuppressWarnings("deprecation")
 public class MasterBalanceManager implements MasterBalanceManagerInterface {
 
     /**
@@ -234,14 +232,6 @@ public class MasterBalanceManager implements MasterBalanceManagerInterface {
             } catch (IllegalStateException ise) {
                 /* Node is no longer the master. */
                 logger.log(Level.INFO, "Node is no longer the master", ise);
-                return;
-            } catch (MasterReplicaTransitionException e) {
-                /* 
-                 * As of JE 5.0.92.KV3 (NoSQL R2.1.24), 
-                 * MasterReplicatTransitionException is deprecated and no 
-                 * longer thrown. However, keep this catch to maintain backward 
-                 * compatibility with older JE versions, for a while.
-                 */
                 return;
             } catch (Exception e) {
                 logger.log(Level.WARNING,

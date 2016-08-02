@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -68,6 +68,8 @@ import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.api.RequestHandler;
 import oracle.kv.impl.api.RequestHandlerAPI;
+import oracle.kv.impl.arb.admin.ArbNodeAdmin;
+import oracle.kv.impl.arb.admin.ArbNodeAdminAPI;
 import oracle.kv.impl.client.admin.ClientAdminService;
 import oracle.kv.impl.client.admin.ClientAdminServiceAPI;
 import oracle.kv.impl.fault.OperationFaultException;
@@ -86,6 +88,8 @@ import oracle.kv.impl.sna.StorageNodeAgentInterface;
 import oracle.kv.impl.test.RemoteTestAPI;
 import oracle.kv.impl.test.RemoteTestInterface;
 import oracle.kv.impl.test.TestStatus;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.RepNode;
 import oracle.kv.impl.topo.RepNodeId;
@@ -122,6 +126,15 @@ import oracle.kv.impl.util.registry.ssl.SSLClientSocketFactory;
  * @see VersionedRemote
  */
 public class RegistryUtils {
+
+    /**
+     * The exception message used in a ConnectIOException that is thrown when
+     * there may be a security mismatch between the client and the server.
+     */
+    public static final String POSSIBLE_SECURITY_MISMATCH_MESSAGE =
+        "Problem connecting to the storage node agent, which may be caused" +
+        " by a security mismatch between the client and server, or by" +
+        " another network connectivity issue";
 
     /* The overriding registry CSF used on the client side. */
     private static ClientSocketFactory registryCSF = null;
@@ -448,6 +461,28 @@ public class RegistryUtils {
     }
 
     /**
+     * Returns an API wrapper for the RMI handle to the ArbNodeAdmin.
+     */
+    public static ArbNodeAdminAPI getArbNodeAdmin(String storeName,
+                                                  String snHostname,
+                                                  int snRegistryPort,
+                                                  ArbNodeId arbId,
+                                                  LoginManager loginMgr)
+        throws RemoteException, NotBoundException {
+
+        return ArbNodeAdminAPI.wrap
+                ((ArbNodeAdmin) getInterface(storeName,
+                                             snHostname,
+                                             snRegistryPort,
+                                             arbId.getFullName(),
+                                             InterfaceType.ADMIN),
+                 getLogin(loginMgr, snHostname, snRegistryPort,
+                          ResourceType.ARB_NODE));
+    }
+
+
+
+    /**
      * Returns an API wrapper for the RMI handle to the RepNode UserLogin.
      */
     public static UserLoginAPI getRepNodeLogin(String storeName,
@@ -562,6 +597,37 @@ public class RegistryUtils {
         final LoginHandle loginHdl = getLogin(storageNodeId);
 
         return StorageNodeAgentAPI.wrap(snai, loginHdl);
+    }
+
+    /**
+     * Returns the API wrapper for the RMI stub associated with the
+     * administration of the ARB identified by <code>arbNodeId</code>.
+     */
+    public ArbNodeAdminAPI getArbNodeAdmin(ArbNodeId arbNodeId)
+        throws RemoteException, NotBoundException {
+
+        final ArbNode arbNode = topology.get(arbNodeId);
+
+        return ArbNodeAdminAPI.wrap
+            ((ArbNodeAdmin) lookup(arbNodeId.getFullName(),
+                                   InterfaceType.ADMIN,
+                                   arbNode.getStorageNodeId()),
+             getLogin(arbNodeId));
+    }
+    
+    /**
+     * Returns the API wrapper for the RMI stub associated with the test
+     * interface of the AN identified by <code>arbNodeId</code>.
+     */
+    public RemoteTestAPI getArbNodeTest(ArbNodeId arbNodeId)
+        throws RemoteException, NotBoundException {
+
+        final ArbNode arbNode = topology.get(arbNodeId);
+
+        return RemoteTestAPI.wrap
+            ((RemoteTestInterface) lookup(arbNodeId.getFullName(),
+                                          InterfaceType.TEST,
+                                          arbNode.getStorageNodeId()));
     }
 
     public static RemoteTestAPI getStorageNodeAgentTest
@@ -1248,10 +1314,7 @@ public class RegistryUtils {
             /* Wraps the CIOE to give a clearer message to users */
             if (re instanceof ConnectIOException) {
                 throw new ConnectIOException(
-                    "Problem connecting to the KVStore server, which may be " +
-                    "caused by a security mismatch between the client and " +
-                    "server",
-                    re);
+                    POSSIBLE_SECURITY_MISMATCH_MESSAGE, re);
             }
             if (re instanceof ConnectException) {
                 throw new ConnectException(

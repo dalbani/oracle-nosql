@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,17 +43,14 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
-import java.util.Collections;
-import java.util.List;
 
 import oracle.kv.Direction;
+import oracle.kv.KeyRange;
 import oracle.kv.impl.api.StoreIteratorParams;
 import oracle.kv.impl.api.table.TargetTables;
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.security.TablePrivilege;
 
 /**
  * This is an intermediate class for a table iteration where the records
@@ -77,21 +74,22 @@ abstract class TableIterateOperation extends MultiTableOperation {
         this.batchSize = sip.getBatchSize();
         this.resumeKey = resumeKey;
     }
-    
+
     /*
      * Internal use constructor that avoids StoreIteratorParams
-     * construction.  Direction is always forward, there is never
-     * a range.
+     * construction.
      */
     protected TableIterateOperation(OpCode opCode,
                                     byte[] parentKeyBytes,
                                     TargetTables targetTables,
+                                    Direction direction,
+                                    KeyRange range,
                                     boolean majorComplete,
                                     int batchSize,
                                     byte[] resumeKey) {
-        super(opCode, parentKeyBytes, targetTables, null);
+        super(opCode, parentKeyBytes, targetTables, range);
         this.majorComplete = majorComplete;
-        this.direction = Direction.FORWARD;
+        this.direction = direction;
         this.batchSize = batchSize;
         this.resumeKey = resumeKey;
     }
@@ -100,13 +98,26 @@ abstract class TableIterateOperation extends MultiTableOperation {
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    TableIterateOperation(OpCode opCode, ObjectInput in, short serialVersion)
+    TableIterateOperation(OpCode opCode, DataInput in, short serialVersion)
         throws IOException {
 
         super(opCode, in, serialVersion);
         majorComplete = in.readBoolean();
         direction = Direction.getDirection(in.readUnsignedByte());
-        batchSize = in.readInt();
+
+        /*
+         * When doing a scan that includes the parent key the parent is handled
+         * separately from the descendants. The parent key does not make a
+         * valid resume key, so if the batch size is 1, increase it to ensure
+         * that the parent key is not the resume key. This is mostly not a
+         * problem for table scans, but it does not hurt.
+         */
+        int tmpBatchSize = in.readInt();
+        if (getResumeKey() == null && tmpBatchSize == 1) {
+            batchSize = 2;
+        } else {
+            batchSize = tmpBatchSize;
+        }
 
         final int keyLen = in.readShort();
         if (keyLen < 0) {
@@ -121,7 +132,7 @@ abstract class TableIterateOperation extends MultiTableOperation {
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
@@ -152,12 +163,5 @@ abstract class TableIterateOperation extends MultiTableOperation {
 
     boolean getMajorComplete() {
         return majorComplete;
-    }
-
-    @Override
-    public List<? extends KVStorePrivilege>
-        tableAccessPrivileges(long tableId) {
-        return Collections.singletonList(
-            new TablePrivilege.ReadTable(tableId));
     }
 }

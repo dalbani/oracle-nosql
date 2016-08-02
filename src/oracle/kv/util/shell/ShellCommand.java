@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -49,6 +49,7 @@ import java.util.Set;
 import oracle.kv.impl.admin.CommandServiceAPI;
 import oracle.kv.impl.admin.client.CommandUtils;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.DatacenterType;
 import oracle.kv.impl.topo.RepNodeId;
@@ -373,6 +374,17 @@ public abstract class ShellCommand implements Cloneable{
         } catch (IllegalArgumentException ignored) {
             throw new ShellUsageException(
                 "Invalid RepNode ID: " + idString, this);
+        }
+    }
+
+    protected ArbNodeId parseAnid(String idString)
+        throws ShellException {
+
+        try {
+            return ArbNodeId.parse(idString);
+        } catch (IllegalArgumentException ignored) {
+            throw new ShellUsageException(
+                "Invalid ArbNode ID: " + idString, this);
         }
     }
 

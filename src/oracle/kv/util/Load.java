@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -64,6 +64,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.logging.Logger;
 
 import oracle.kv.FaultException;
 import oracle.kv.KVStore;
@@ -72,16 +73,14 @@ import oracle.kv.KVStoreFactory;
 import oracle.kv.Key;
 import oracle.kv.LoginCredentials;
 import oracle.kv.Value;
-import oracle.kv.impl.admin.Admin;
 import oracle.kv.impl.admin.CommandServiceAPI;
 import oracle.kv.impl.admin.client.CommandShell;
+import oracle.kv.impl.admin.SecurityStore;
+import oracle.kv.impl.admin.TableStore;
 import oracle.kv.impl.api.KVStoreImpl;
 import oracle.kv.impl.api.table.TableMetadata;
-import oracle.kv.impl.api.table.TableMetadataProxy;
 import oracle.kv.impl.metadata.Metadata.MetadataType;
-import oracle.kv.impl.metadata.MetadataStore;
 import oracle.kv.impl.security.metadata.SecurityMetadata;
-import oracle.kv.impl.security.metadata.SecurityMetadataProxy;
 import oracle.kv.impl.security.util.KVStoreLogin;
 import oracle.kv.impl.security.util.KVStoreLogin.CredentialsProvider;
 import oracle.kv.impl.topo.PartitionId;
@@ -101,14 +100,12 @@ import com.sleepycat.je.EnvironmentConfig;
 import com.sleepycat.je.EnvironmentNotFoundException;
 import com.sleepycat.je.ForwardCursor;
 import com.sleepycat.je.OperationStatus;
-import com.sleepycat.persist.EntityStore;
-import com.sleepycat.persist.StoreConfig;
-import com.sleepycat.persist.StoreNotFoundException;
-import com.sleepycat.persist.model.AnnotationModel;
-import com.sleepycat.persist.model.EntityModel;
 
 /**
  * Load from an environment directory (source) to a target store.
+ *
+ * Note that due to changes in the Admin's persistent store, this utility
+ * is not compatible with releases prior to R4.0.
  *
  * Command line usage:
  *   Load -source <backup directory> -store <name> -host <hostname>
@@ -797,7 +794,6 @@ public class Load implements CredentialsProvider {
     private static class LoadAdmin {
 
         private final Environment env;
-        private final EntityStore estore;
         private final boolean verboseOutput;
         private final PrintStream output;
         private final String securityFile;
@@ -816,7 +812,6 @@ public class Load implements CredentialsProvider {
                          PrintStream output) {
 
             env = open(envDir);
-            estore = initEstore(envDir);
             this.output = output;
             this.verboseOutput = verboseOutput;
             this.securityFile = securityFile;
@@ -831,9 +826,11 @@ public class Load implements CredentialsProvider {
          * Loads both table and security metadata, if present.
          */
         public void loadMetadata() {
-            TableMetadata tmd = MetadataStore.read(TableMetadata.class,
-                                                   MetadataType.TABLE,
-                                                   estore, null);
+            final Logger logger = Logger.getLogger(LoadAdmin.class.getName());
+            final TableStore ts = TableStore.getReadOnlyInstance(logger, env);
+            final TableMetadata tmd = ts.getTableMetadata(null);
+            ts.close();
+
             if (tmd != null) {
                 verbose("Found table metadata");
                 if (verboseOutput) {
@@ -849,9 +846,12 @@ public class Load implements CredentialsProvider {
                 message("No tables to write");
             }
 
-            SecurityMetadata smd = MetadataStore.read(SecurityMetadata.class,
-                                                      MetadataType.SECURITY,
-                                                      estore, null);
+
+            final SecurityStore ss =
+                               SecurityStore.getReadOnlyInstance(logger, env);
+            final SecurityMetadata smd = ss.getSecurityMetadata(null);
+            ss.close();
+
             if (smd != null) {
                 verbose("Found security metadata");
             }
@@ -859,7 +859,6 @@ public class Load implements CredentialsProvider {
             if (tmd != null || smd != null) {
                 writeMetadata(tmd, smd);
             }
-            estore.close();
             env.close();
         }
 
@@ -919,24 +918,6 @@ public class Load implements CredentialsProvider {
             } catch (ShellException se) {
                 message("Failed to acquire admin interface or write" +
                         " metadata: " + se.getMessage());
-            }
-        }
-
-        private EntityStore initEstore(File envDir) {
-            final EntityModel model = new AnnotationModel();
-            model.registerClass(TableMetadataProxy.class);
-            model.registerClass(SecurityMetadataProxy.class);
-            final StoreConfig stConfig = new StoreConfig();
-            stConfig.setAllowCreate(false);
-            stConfig.setTransactional(false);
-            stConfig.setReadOnly(true);
-            stConfig.setModel(model);
-            try {
-                return new EntityStore(env, Admin.ADMIN_STORE_NAME, stConfig);
-            } catch (StoreNotFoundException snf) {
-                throw new IllegalArgumentException
-                    ("Cannot find an admin database in the directory: " +
-                     envDir);
             }
         }
 

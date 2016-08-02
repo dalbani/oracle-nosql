@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,15 +43,12 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
 import java.io.IOException;
-import java.io.ObjectInput;
 
 import oracle.kv.ReturnValueVersion;
 import oracle.kv.Value;
-import oracle.kv.Version;
-import oracle.kv.impl.topo.PartitionId;
-
-import com.sleepycat.je.Transaction;
+import oracle.kv.table.TimeToLive;
 
 /**
  * Inserts a key/data pair.
@@ -78,29 +75,26 @@ public class PutIfPresent extends Put {
     }
 
     /**
+     * Constructs a put-if-present operation with a table id.
+     */
+    public PutIfPresent(byte[] keyBytes,
+                        Value value,
+                        ReturnValueVersion.Choice prevValChoice,
+                        long tableId,
+                        TimeToLive ttl,
+                        boolean updateTTL) {
+        super(OpCode.PUT_IF_PRESENT, keyBytes, value, prevValChoice, tableId,
+                ttl, updateTTL);
+    }
+
+
+    /**
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    PutIfPresent(ObjectInput in, short serialVersion)
+    PutIfPresent(DataInput in, short serialVersion)
         throws IOException {
 
         super(OpCode.PUT_IF_PRESENT, in, serialVersion);
-    }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          OperationHandler operationHandler) {
-
-        verifyDataAccess(operationHandler, getTableId());
-
-        final ReturnResultValueVersion prevVal =
-            new ReturnResultValueVersion(getReturnValueVersionChoice());
-
-        final Version newVersion = operationHandler.putIfPresent
-            (txn, partitionId, getKeyBytes(), getValueBytes(), prevVal);
-
-        return new Result.PutResult(getOpCode(), prevVal.getValueVersion(),
-                                    newVersion);
     }
 }

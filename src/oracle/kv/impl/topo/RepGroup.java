@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,6 +43,8 @@
 
 package oracle.kv.impl.topo;
 
+import java.io.IOException;
+import java.io.ObjectInputStream;
 import java.util.Collection;
 
 import oracle.kv.impl.topo.ResourceId.ResourceType;
@@ -57,15 +59,21 @@ import com.sleepycat.persist.model.Persistent;
  * <p>
  * Note that a RepGroup simply serves to group RepNodes. It does not have any
  * attributes associated with it.
+ *
+ * version 0: original
+ * version 1: added arbNodeMap field
  */
-@Persistent
+@Persistent(version=1)
 public class RepGroup extends Topology.Component<RepGroupId> {
 
     private static final long serialVersionUID = 1L;
     private final ComponentMap<RepNodeId, RepNode> repNodeMap;
+    private ComponentMap<ArbNodeId, ArbNode> arbNodeMap;
+
 
     public RepGroup() {
         repNodeMap = new RepNodeComponentMap(this, null);
+        arbNodeMap = new ArbNodeComponentMap(this, null);
     }
 
     /**
@@ -76,6 +84,7 @@ public class RepGroup extends Topology.Component<RepGroupId> {
     private RepGroup(RepGroup repGroup) {
         super(repGroup);
         repNodeMap = new RepNodeComponentMap(this, null);
+        arbNodeMap = new ArbNodeComponentMap(this, null);
     }
 
     /* (non-Javadoc)
@@ -152,6 +161,31 @@ public class RepGroup extends Topology.Component<RepGroupId> {
         repNodeMap.apply(change);
     }
 
+    public Collection<ArbNode> getArbNodes() {
+        return arbNodeMap.getAll();
+    }
+
+    public ArbNode get(ArbNodeId arbNodeId) {
+        return arbNodeMap.get(arbNodeId);
+    }
+
+    public ArbNode add(ArbNode arbNode) {
+        return arbNodeMap.add(arbNode);
+    }
+
+    public ArbNode update(ArbNodeId resourceId,
+                          ArbNode arbNode) {
+        return arbNodeMap.update(resourceId, arbNode);
+    }
+
+    public ArbNode remove(ArbNodeId arbNodeId) {
+        return arbNodeMap.remove(arbNodeId);
+    }
+
+    public void applyArbChange(TopologyChange change) {
+        arbNodeMap.apply(change);
+    }
+
     /**
      * Wraps the set method to ensure that the "topology" associated with the
      * repNodeMap is set appropriately as well.
@@ -160,10 +194,20 @@ public class RepGroup extends Topology.Component<RepGroupId> {
     public void setTopology(Topology topology) {
         super.setTopology(topology);
         repNodeMap.setTopology(topology);
+        arbNodeMap.setTopology(topology);
     }
 
     @Override
     public String toString() {
         return "[" + getResourceId() + "]";
+    }
+
+    private void readObject(ObjectInputStream in)
+            throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+
+        if (arbNodeMap == null) {
+            arbNodeMap = new ArbNodeComponentMap(this, null);
+        }
     }
 }

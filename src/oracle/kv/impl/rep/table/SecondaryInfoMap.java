@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -55,23 +55,12 @@ import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import oracle.kv.KVVersion;
-import oracle.kv.impl.api.table.IndexImpl;
-import oracle.kv.impl.api.table.TableImpl;
-import oracle.kv.impl.api.table.TableKey;
-import oracle.kv.impl.metadata.Metadata;
-import oracle.kv.impl.topo.PartitionId;
-import oracle.kv.impl.util.DatabaseUtils;
-import oracle.kv.impl.util.SerializationUtil;
-import oracle.kv.impl.util.TxnUtil;
-import oracle.kv.table.PrimaryKey;
-import oracle.kv.table.Table;
-
 import com.sleepycat.bind.tuple.StringBinding;
 import com.sleepycat.je.Database;
 import com.sleepycat.je.DatabaseConfig;
 import com.sleepycat.je.DatabaseEntry;
 import com.sleepycat.je.DatabaseException;
+import com.sleepycat.je.DatabaseNotFoundException;
 import com.sleepycat.je.Durability;
 import com.sleepycat.je.Durability.ReplicaAckPolicy;
 import com.sleepycat.je.Durability.SyncPolicy;
@@ -80,6 +69,20 @@ import com.sleepycat.je.Transaction;
 import com.sleepycat.je.TransactionConfig;
 import com.sleepycat.je.rep.NoConsistencyRequiredPolicy;
 import com.sleepycat.je.rep.ReplicatedEnvironment;
+
+import oracle.kv.KVVersion;
+import oracle.kv.impl.api.table.IndexImpl;
+import oracle.kv.impl.api.table.TableImpl;
+import oracle.kv.impl.api.table.TableKey;
+import oracle.kv.impl.metadata.Metadata;
+import oracle.kv.impl.rep.table.TableManager.UpdateThread;
+import oracle.kv.impl.test.TestHookExecute;
+import oracle.kv.impl.topo.PartitionId;
+import oracle.kv.impl.util.DatabaseUtils;
+import oracle.kv.impl.util.SerializationUtil;
+import oracle.kv.impl.util.TxnUtil;
+import oracle.kv.table.PrimaryKey;
+import oracle.kv.table.Table;
 
 /**
  * Persistent class containing information on populating secondary databases.
@@ -137,17 +140,16 @@ class SecondaryInfoMap implements Serializable  {
     private static final int CURRENT_SCHEMA_VERSION = 1;
 
     /*
-     * Maps secondary DB name -> populate info
+     * Maps secondary DB name -> DB info.
      */
-    private final Map<String, SecondaryInfo> secondaryMap =
-                                        new HashMap<String, SecondaryInfo>();
+    private final Map<String, SecondaryInfo> secondaryMap = new HashMap<>();
 
     /*
      * Maps table name -> deleted table info. This map contains entries for
      * the tables which have been deleted and their data removed.
      */
     private final Map<String, DeletedTableInfo> deletedTableMap =
-                                        new HashMap<String, DeletedTableInfo>();
+                                                        new HashMap<>();
 
     private int metadataSequenceNum = Metadata.EMPTY_SEQUENCE_NUMBER;
 
@@ -202,39 +204,89 @@ class SecondaryInfoMap implements Serializable  {
     }
 
     /**
-     * Check to see if an index has been removed and record deleted tables if
-     * needed.
+     * Checks to see if an index has been removed and record deleted tables if
+     * needed. If an index has been removed the secondary DB for that index
+     * is removed. This method is called from the table metadata update thread.
      *
-     * @param currentTables the map of tables form the current MD
-     * @param indexes
-     * @param db
+     * @param currentTables the map of tables from the current MD
+     * @param indexes the map of indexes in from the current MD
+     * @param deletedTables the set of deleted tables
+     * @param updateThread the update thread
      * @param logger
      */
     static void check(Map<String, Table> currentTables,
                       Map<String, IndexImpl> indexes,
                       Set<TableImpl> deletedTables,
-                      Database db,
+                      UpdateThread updateThread,
                       Logger logger) {
+        assert updateThread.infoDb != null;
+
         Transaction txn = null;
         try {
             boolean modified = false;
 
-            txn = db.getEnvironment().beginTransaction(null,
+            txn = updateThread.repEnv.beginTransaction(null,
                                                        SECONDARY_INFO_CONFIG);
 
-            final SecondaryInfoMap infoMap = fetch(db, txn, LockMode.RMW);
+            final SecondaryInfoMap infoMap = fetch(updateThread.infoDb, txn,
+                                                   LockMode.RMW);
             final Iterator<Entry<String, SecondaryInfo>> itr =
                                      infoMap.secondaryMap.entrySet().iterator();
 
             /* Remove secondary info for indexes that have been dropped */
             while (itr.hasNext()) {
+                if (updateThread.isStopped()) {
+                    return;
+                }
                 final Entry<String, SecondaryInfo> entry = itr.next();
                 final String dbName = entry.getKey();
                 if (!indexes.containsKey(dbName)) {
+                    /* The DB must be closed before removing it */
+                    if (!updateThread.closeSecondary(dbName)) {
+                        continue;
+                    }
                     logger.log(Level.FINE, "Removing secondary info for {0}",
                                dbName);
-                    itr.remove();
-                    modified = true;
+                    try {
+                        TestHookExecute.
+                                doHookIfSet(TableManager.BEFORE_REMOVE_HOOK, 1);
+                        logger.log(Level.INFO,
+                                   "Secondary database {0} is not " +
+                                   "defined in table metadata " +
+                                   "seq# {1} and is being removed.",
+                                   new Object[]{dbName,
+                                                updateThread.tableMd.
+                                                          getSequenceNumber()});
+                        /*
+                         * Mark the secondary removed, then attempt to remove
+                         * the DB. If the remove fails, marking it will keep
+                         * it from being used until the DB is sucessfully
+                         * removed during some future check.
+                         */
+                        entry.getValue().setRemoved();
+                        modified = true;
+
+                        /* Actually remove the DB */
+                        updateThread.repEnv.removeDatabase(txn, dbName);
+
+                        /* Remove the associated SecondaryInfo instance */
+                        itr.remove();
+                    } catch (DatabaseNotFoundException ignore) {
+                        /* Already gone */
+                        itr.remove();
+                    } catch (RuntimeException re) {
+                        /*
+                         * Log the exception and go on, leaving the db info in
+                         * the map for next time.
+                         */
+                        logger.log(Level.INFO,
+                                   "Exception removing {0}: {1}, operation " +
+                                   "will be retried",
+                                   new Object[]{dbName, re.getMessage()});
+                    } finally {
+                        TestHookExecute.
+                                 doHookIfSet(TableManager.AFTER_REMOVE_HOOK, 1);
+                    }
                 }
             }
 
@@ -245,6 +297,9 @@ class SecondaryInfoMap implements Serializable  {
              * from the metadata.
              */
             while (itr2.hasNext()) {
+                if (updateThread.isStopped()) {
+                    return;
+                }
                 final Entry<String, DeletedTableInfo> entry = itr2.next();
                 final Table table = currentTables.get(entry.getKey());
 
@@ -271,8 +326,11 @@ class SecondaryInfoMap implements Serializable  {
                 }
             }
 
-            /* Add entries for tabled marked for delete */
+            /* Add entries for tables marked for delete */
             for (TableImpl table : deletedTables) {
+                if (updateThread.isStopped()) {
+                    return;
+                }
                 DeletedTableInfo info =
                             infoMap.getDeletedTableInfo(table.getParentName());
 
@@ -287,7 +345,7 @@ class SecondaryInfoMap implements Serializable  {
 
             if (modified) {
                 try {
-                    infoMap.persist(db, txn);
+                    infoMap.persist(updateThread.infoDb, txn);
                     txn.commit();
                     txn = null;
                 } catch (RuntimeException re) {
@@ -493,7 +551,8 @@ class SecondaryInfoMap implements Serializable  {
     }
 
     SecondaryInfo getSecondaryInfo(String dbName) {
-        return secondaryMap.get(dbName);
+        final SecondaryInfo info = secondaryMap.get(dbName);
+        return (info == null) ? null : (info.isRemoved() ? null : info);
     }
 
     boolean secondaryNeedsPopulate() {
@@ -582,6 +641,16 @@ class SecondaryInfoMap implements Serializable  {
         /* The set of partitions which have been completed */
         private Set<PartitionId> completed = null;
 
+        /*
+         * True if the index for this secondary DB has been dropped, but the
+         * secondary DB has not yet been removed.
+         *
+         * Note that this flag was added and therefore may be lost in an
+         * upgrade situation. However, this is more an optimization and things
+         * will function property if incorrectly set to false.
+         */
+        private boolean removed = false;
+
         /**
          * Returns true if the secondary DB needs to be populated.
          *
@@ -606,7 +675,9 @@ class SecondaryInfoMap implements Serializable  {
          * Sets the needs cleaning flag.
          */
         void markForCleaning() {
-            needsCleaning = true;
+            if (!removed) {
+                needsCleaning = true;
+            }
         }
 
         /**
@@ -689,9 +760,30 @@ class SecondaryInfoMap implements Serializable  {
         void completeCurrentPartition() {
             assert needsPopulating == true;
             if (completed == null) {
-                completed = new HashSet<PartitionId>();
+                completed = new HashSet<>();
             }
             completed.add(currentPartition);
+            currentPartition = null;
+            lastKey = null;
+            lastData = null;
+        }
+
+        /**
+         * Returns true if the remove flag is set.
+         *
+         * @return true if the remove flag is set
+         */
+        private boolean isRemoved() {
+            return removed;
+        }
+
+        /**
+         * Sets the removed flag and clears the other state fields.
+         */
+        private void setRemoved() {
+            removed = true;
+            needsPopulating = false;
+            needsCleaning = false;
             currentPartition = null;
             lastKey = null;
             lastData = null;
@@ -702,7 +794,7 @@ class SecondaryInfoMap implements Serializable  {
             return "SecondaryInfo[" + needsPopulating +
                    ", " + currentPartition +
                    ", " + ((completed == null) ? "-" : completed.size()) +
-                   ", " + needsCleaning + "]";
+                   ", " + needsCleaning + ", " + removed + "]";
         }
     }
 
@@ -788,7 +880,7 @@ class SecondaryInfoMap implements Serializable  {
          */
         void completeCurrentPartition() {
             if (completed == null) {
-                completed = new HashSet<PartitionId>();
+                completed = new HashSet<>();
             }
             completed.add(currentPartition);
             currentPartition = null;

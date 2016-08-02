@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,17 +43,17 @@
 
 package oracle.kv.impl.api.table;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
+
+import com.sleepycat.je.tree.Key;
 
 import oracle.kv.Direction;
 import oracle.kv.impl.util.FastExternalizable;
 import oracle.kv.table.FieldRange;
 import oracle.kv.table.MultiRowOptions;
 import oracle.kv.table.TableIteratorOptions;
-
-import com.sleepycat.je.tree.Key;
 
 /**
  * IndexRange is an internal class used to define the parameters for an index
@@ -90,17 +90,25 @@ public class IndexRange implements FastExternalizable {
     private final boolean exactMatch;
     private final Direction direction;
 
-    @SuppressWarnings("null")
+
     IndexRange(IndexKeyImpl indexKey,
                MultiRowOptions getOptions,
                TableIteratorOptions iterateOptions) {
+        this(indexKey,
+             getOptions != null ?
+             getOptions.getFieldRange() : null,
+             iterateOptions == null ? Direction.FORWARD :
+             iterateOptions.getDirection());
+    }
+
+    public IndexRange(IndexKeyImpl indexKey,
+                      FieldRange range,
+                      Direction direction) {
         IndexKeyImpl startTarget = indexKey;
         IndexKeyImpl endTarget = null;
         boolean startInclusive = true;
-        FieldRange range = (getOptions != null ?
-                            getOptions.getFieldRange() : null);
-        direction = iterateOptions == null ? Direction.FORWARD :
-            iterateOptions.getDirection();
+        this.direction = direction;
+
         if (indexKey.isComplete()) {
             if (range != null) {
                 throw new IllegalArgumentException
@@ -108,6 +116,7 @@ public class IndexRange implements FastExternalizable {
                      "specified IndexKey");
             }
             exactMatch = true;
+
         } else if (range != null) {
             /*
              * Start key
@@ -117,9 +126,7 @@ public class IndexRange implements FastExternalizable {
                 /*
                  * Add the start range value to the IndexKey
                  */
-                startTarget.putComplex(range.getFieldName(),
-                                       range.getDefinition().getType(),
-                                       range.getStart());
+                startTarget.putComplex(range.getFieldName(), range.getStart());
                 startInclusive = range.getStartInclusive();
             }
             /*
@@ -130,16 +137,18 @@ public class IndexRange implements FastExternalizable {
                 /*
                  * Add the end range value to the IndexKey
                  */
-                endTarget.putComplex(range.getFieldName(),
-                                     range.getDefinition().getType(),
-                                     range.getEnd());
+                endTarget.putComplex(range.getFieldName(), range.getEnd());
                 endTarget.validate();
             }
+
             exactMatch = false;
+
         } else {
             exactMatch = false;
         }
+
         if (startTarget.size() != 0) {
+
             startTarget.validate();
             /*
              * If exclusive, increment the key.  If this fails that means
@@ -154,6 +163,7 @@ public class IndexRange implements FastExternalizable {
                          "be its maximum value");
                 }
             }
+
             byte[] start =
                 startTarget.getIndexImpl().serializeIndexKey(startTarget);
 
@@ -177,12 +187,14 @@ public class IndexRange implements FastExternalizable {
             prefixKey = null;
             startKey = null;
         }
+
         if (endTarget != null) {
             /*
              * If the end key is inclusive increment the last field value
              * so that the serialized array can be treated as exclusive.
+             * Range cannot be null here, but this keeps Eclipse happy.
              */
-            if (range.getEndInclusive()) {
+            if (range != null && range.getEndInclusive()) {
                 if (!endTarget.incrementIndexKey()) {
                     /*
                      * This means that the end will actually be the end
@@ -206,7 +218,7 @@ public class IndexRange implements FastExternalizable {
      *   startKey (optional)
      *   endKey (optional)
      */
-    public IndexRange(ObjectInput in,
+    public IndexRange(DataInput in,
                       @SuppressWarnings("unused") short serialVersion)
         throws IOException {
 
@@ -256,7 +268,7 @@ public class IndexRange implements FastExternalizable {
      * FastExternalizable writer.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         int flags = 0;

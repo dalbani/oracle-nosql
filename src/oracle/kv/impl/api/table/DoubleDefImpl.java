@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,36 +43,39 @@
 
 package oracle.kv.impl.api.table;
 
-import static oracle.kv.impl.api.table.TableJsonUtils.MIN;
-import static oracle.kv.impl.api.table.TableJsonUtils.MAX;
-
-import oracle.kv.table.DoubleDef;
-
 import com.sleepycat.persist.model.Persistent;
 
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.ObjectNode;
 
+import static oracle.kv.impl.api.table.TableJsonUtils.MAX;
+import static oracle.kv.impl.api.table.TableJsonUtils.MIN;
+
+import oracle.kv.table.DoubleDef;
+
 /**
  * DoubleDefImpl implements the DoubleDef interface.
  */
 @Persistent(version=1)
-class DoubleDefImpl extends FieldDefImpl
-    implements DoubleDef {
+public class DoubleDefImpl extends FieldDefImpl implements DoubleDef {
 
     private static final long serialVersionUID = 1L;
-    private final Double min;
-    private final Double max;
+
+    private Double min;
+    private Double max;
 
     /**
      * Constructor requiring all fields.
      */
-    DoubleDefImpl(String description,
-                  Double min, Double max) {
+    DoubleDefImpl(String description, Double min, Double max) {
         super(Type.DOUBLE, description);
         this.min = min;
         this.max = max;
         validate();
+    }
+
+    DoubleDefImpl(String description) {
+        this(description, null, null);
     }
 
     /**
@@ -88,34 +91,20 @@ class DoubleDefImpl extends FieldDefImpl
         max = impl.max;
     }
 
+    /*
+     * Public api methods from Object and FieldDef
+     */
+
     @Override
-    public Double getMin() {
-        return min;
+    public DoubleDefImpl clone() {
+        return new DoubleDefImpl(this);
     }
 
     @Override
-    public Double getMax() {
-        return max;
-    }
-
-    @Override
-    public boolean isDouble() {
-        return true;
-    }
-
-    @Override
-    public DoubleDef asDouble() {
-        return this;
-    }
-
-    @Override
-    public boolean isValidKeyField() {
-        return true;
-    }
-
-    @Override
-    public boolean isValidIndexField() {
-        return true;
+    public int hashCode() {
+        return super.hashCode() +
+            (min != null ? min.hashCode() : 0) +
+            (max != null ? max.hashCode() : 0);
     }
 
     @Override
@@ -129,10 +118,89 @@ class DoubleDefImpl extends FieldDefImpl
     }
 
     @Override
-    public int hashCode() {
-        return super.hashCode() +
-            (min != null ? min.hashCode() : 0) +
-            (max != null ? max.hashCode() : 0);
+    public boolean isValidKeyField() {
+        return true;
+    }
+
+    @Override
+    public boolean isValidIndexField() {
+        return true;
+    }
+
+    @Override
+    public boolean isDouble() {
+        return true;
+    }
+
+    @Override
+    public boolean isAtomic() {
+        return true;
+    }
+
+    @Override
+    public boolean isNumeric() {
+        return true;
+    }
+
+    @Override
+    public DoubleDef asDouble() {
+        return this;
+    }
+
+    @Override
+    public DoubleValueImpl createDouble(double value) {
+
+        return (hasMin() || hasMax() ?
+                new DoubleRangeValue(value, this) :
+                new DoubleValueImpl(value));
+    }
+
+    @Override
+    DoubleValueImpl createDouble(String value) {
+
+        return (hasMin() || hasMax() ?
+                new DoubleRangeValue(value, this) :
+                new DoubleValueImpl(value));
+    }
+
+    /*
+     * Public api methods from DoubleDef
+     */
+
+    @Override
+    public Double getMin() {
+        return min;
+    }
+
+    @Override
+    public Double getMax() {
+        return max;
+    }
+
+    /*
+     * FieldDefImpl internal api methods
+     */
+
+    @Override
+    public boolean hasMin() {
+        return min != null;
+    }
+
+    @Override
+    public boolean hasMax() {
+        return max != null;
+    }
+
+    @Override
+    public boolean isSubtype(FieldDefImpl superType) {
+
+        if (superType.isDouble() ||
+            superType.isAny() ||
+            superType.isAnyAtomic()) {
+            return true;
+        }
+
+        return false;
     }
 
     @Override
@@ -150,15 +218,21 @@ class DoubleDefImpl extends FieldDefImpl
     }
 
     @Override
-    public DoubleDefImpl clone() {
-        return new DoubleDefImpl(this);
+    FieldValueImpl createValue(JsonNode node) {
+
+        if (node == null || node.isNull()) {
+            return NullValueImpl.getInstance();
+        }
+        if (!node.isDouble()) {
+            throw new IllegalArgumentException
+                ("Default value for type DOUBLE is not double");
+        }
+        return createDouble(node.getDoubleValue());
     }
 
-    @Override
-    public DoubleValueImpl createDouble(double value) {
-        validateRange(value);
-        return new DoubleValueImpl(value);
-    }
+    /*
+     * local methods
+     */
 
     private void validate() {
 
@@ -173,9 +247,9 @@ class DoubleDefImpl extends FieldDefImpl
 
     /**
      * Validates the value against the range if one exists.
+     * min/max are inclusive
      */
-    private void validateRange(double val) {
-        /* min/max are inclusive */
+    void validateValue(double val) {
         if ((min != null && val < min) ||
             (max != null && val > max)) {
             StringBuilder sb = new StringBuilder();
@@ -184,17 +258,5 @@ class DoubleDefImpl extends FieldDefImpl
             sb.append(", is outside of the allowed range");
             throw new IllegalArgumentException(sb.toString());
         }
-    }
-
-    @Override
-    FieldValueImpl createValue(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return NullValueImpl.getInstance();
-        }
-        if (!node.isDouble()) {
-            throw new IllegalArgumentException
-                ("Default value for type DOUBLE is not double");
-        }
-        return createDouble(node.getDoubleValue());
     }
 }

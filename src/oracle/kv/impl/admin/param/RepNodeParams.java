@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,48 +43,26 @@
 
 package oracle.kv.impl.admin.param;
 
-import static oracle.kv.impl.param.ParameterState.COMMON_DISABLED;
 import static oracle.kv.impl.param.ParameterState.COMMON_ELECTABLE_GROUP_SIZE_OVERRIDE;
 import static oracle.kv.impl.param.ParameterState.COMMON_ELECTABLE_GROUP_SIZE_OVERRIDE_DEFAULT;
 import static oracle.kv.impl.param.ParameterState.COMMON_MASTER_BALANCE;
 import static oracle.kv.impl.param.ParameterState.COMMON_RESET_REP_GROUP;
-import static oracle.kv.impl.param.ParameterState.COMMON_SN_ID;
-import static oracle.kv.impl.param.ParameterState.COMMON_USE_CLIENT_SOCKET_FACTORIES;
 import static oracle.kv.impl.param.ParameterState.JE_CACHE_SIZE;
-import static oracle.kv.impl.param.ParameterState.JE_HELPER_HOSTS;
-import static oracle.kv.impl.param.ParameterState.JE_HOST_PORT;
 import static oracle.kv.impl.param.ParameterState.KV_CACHE_MODE;
 import static oracle.kv.impl.param.ParameterState.REPNODE_TYPE;
 import static oracle.kv.impl.param.ParameterState.REQUEST_QUIESCE_TIME;
-import static oracle.kv.impl.param.ParameterState.RN_ADMIN_SO_BACKLOG;
-import static oracle.kv.impl.param.ParameterState.RN_ADMIN_SO_CONNECT_TIMEOUT;
-import static oracle.kv.impl.param.ParameterState.RN_ADMIN_SO_READ_TIMEOUT;
 import static oracle.kv.impl.param.ParameterState.RN_CACHE_MB_MIN;
 import static oracle.kv.impl.param.ParameterState.RN_HEAP_MB_MIN;
-import static oracle.kv.impl.param.ParameterState.RN_LOGIN_SO_BACKLOG;
-import static oracle.kv.impl.param.ParameterState.RN_LOGIN_SO_CONNECT_TIMEOUT;
-import static oracle.kv.impl.param.ParameterState.RN_LOGIN_SO_READ_TIMEOUT;
-import static oracle.kv.impl.param.ParameterState.RN_MAX_TOPO_CHANGES;
-import static oracle.kv.impl.param.ParameterState.RN_MONITOR_SO_BACKLOG;
-import static oracle.kv.impl.param.ParameterState.RN_MONITOR_SO_CONNECT_TIMEOUT;
-import static oracle.kv.impl.param.ParameterState.RN_MONITOR_SO_READ_TIMEOUT;
 import static oracle.kv.impl.param.ParameterState.RN_MOUNT_POINT;
 import static oracle.kv.impl.param.ParameterState.RN_NODE_TYPE;
-import static oracle.kv.impl.param.ParameterState.RN_NRCONFIG_RETAIN_LOG_FILES;
 import static oracle.kv.impl.param.ParameterState.RN_RH_SO_BACKLOG;
 import static oracle.kv.impl.param.ParameterState.RN_RH_SO_CONNECT_TIMEOUT;
 import static oracle.kv.impl.param.ParameterState.RN_RH_SO_READ_TIMEOUT;
 import static oracle.kv.impl.param.ParameterState.RP_RN_ID;
-import static oracle.kv.impl.param.ParameterState.SP_COLLECT_ENV_STATS;
-import static oracle.kv.impl.util.registry.RegistryUtils.InterfaceType.ADMIN;
-import static oracle.kv.impl.util.registry.RegistryUtils.InterfaceType.LOGIN;
 import static oracle.kv.impl.util.registry.RegistryUtils.InterfaceType.MAIN;
-import static oracle.kv.impl.util.registry.RegistryUtils.InterfaceType.MONITOR;
 
 import java.io.File;
-import java.io.Serializable;
 import java.util.EnumSet;
-import java.util.StringTokenizer;
 
 import com.sleepycat.je.CacheMode;
 import com.sleepycat.je.rep.NodeType;
@@ -98,7 +76,6 @@ import oracle.kv.impl.param.ParameterUtils;
 import oracle.kv.impl.test.TestStatus;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.StorageNodeId;
-import oracle.kv.impl.util.registry.ClientSocketFactory;
 import oracle.kv.impl.util.registry.RMISocketPolicy;
 import oracle.kv.impl.util.registry.RMISocketPolicy.SocketFactoryArgs;
 import oracle.kv.impl.util.registry.RMISocketPolicy.SocketFactoryPair;
@@ -106,19 +83,14 @@ import oracle.kv.impl.util.registry.RMISocketPolicy.SocketFactoryPair;
 /**
  * A class implementing RepNodeParams contains all the per-RepNode operational
  * parameters.
+ *
+ * version 0: original
+ * version 1: change to extend GroupNodeParams
  */
-@Persistent
-public class RepNodeParams implements ParamsWithMap, Serializable {
+@Persistent(version=1)
+public class RepNodeParams extends GroupNodeParams {
 
     private static final long serialVersionUID = 1L;
-
-    /*
-     * Note that NoSQL DB is assuming that we are running on Hotspot Sun/Oracle
-     * JVM, and that we are using JVM proprietary flags.
-     */
-    public static final String PARALLEL_GC_FLAG = "-XX:ParallelGCThreads=";
-    public static final String XMS_FLAG = "-Xms";
-    public static final String XMX_FLAG = "-Xmx";
 
     private ParameterMap map;
 
@@ -223,15 +195,6 @@ public class RepNodeParams implements ParamsWithMap, Serializable {
         map.setParameter(RP_RN_ID, rnid.getFullName());
     }
 
-    public StorageNodeId getStorageNodeId() {
-        return new StorageNodeId(map.get(COMMON_SN_ID).asInt());
-    }
-
-    public void setStorageNodeId(StorageNodeId snId) {
-        map.setParameter(COMMON_SN_ID,
-                         Integer.toString(snId.getStorageNodeId()));
-    }
-
     public File getMountPoint() {
         if (map.exists(RN_MOUNT_POINT)) {
             return new File(map.get(RN_MOUNT_POINT).asString());
@@ -253,14 +216,6 @@ public class RepNodeParams implements ParamsWithMap, Serializable {
          * moving it to the root dir of a new SN.
          */
         map.setParameter(RN_MOUNT_POINT, mountPoint);
-    }
-
-    public void setDisabled(boolean disabled) {
-        map.setParameter(COMMON_DISABLED, Boolean.toString(disabled));
-    }
-
-    public boolean isDisabled() {
-        return map.get(COMMON_DISABLED).asBoolean();
     }
 
     public long getJECacheSize() {
@@ -345,142 +300,6 @@ public class RepNodeParams implements ParamsWithMap, Serializable {
         return  (offheapBytesPerRN > 0) ? offheapBytesPerRN : 0;
     }
 
-    /*
-     * Return the current value of the max heap size as it is set in the jvm
-     * misc params.
-     */
-    public long getMaxHeapMB() {
-        long hb = getMaxHeapBytes();
-        if (hb == 0) {
-            return 0;
-        }
-
-        /* Shouldn't be less than 0, JVM spec says -Xmx must be >= 2MB */
-        long heapMB = hb >> 20;
-        return (heapMB < 0) ? 0 : heapMB;
-    }
-
-    /**
-     * Return the value specified by the -Xmx value. Note that the
-     * value returned by Runtime.maxMemory() can be unreliable and deviate
-     * significantly from the -Xmx value -- up to 10% for large heap sizes and
-     * its use is therefore avoided in this method.
-     *
-     * A value of zero is used to indicate that the max size is not available.
-     */
-    private long getMaxHeapBytes() {
-        String jvmArgs = map.getOrDefault(ParameterState.JVM_MISC).asString();
-        return parseJVMArgsForHeap(XMX_FLAG, jvmArgs);
-    }
-
-    /*
-     * Return the current value of the min heap size as it is set in the jvm
-     * misc params, for validity checking.
-     */
-    public long getMinHeapMB() {
-        String jvmArgs = map.getOrDefault(ParameterState.JVM_MISC).asString();
-        long minHeap = parseJVMArgsForHeap(XMS_FLAG, jvmArgs);
-        if (minHeap == 0) {
-            return 0;
-        }
-        return minHeap >> 20;
-    }
-
-    /**
-     * Make this a separate method for unit testing. Return the value,
-     * in bytes of of any -Xmx or -Xms string
-     */
-    public static long parseJVMArgsForHeap(String prefix, String jvmArgs) {
-        String heapVal = parseJVMArgsForPrefix(prefix, jvmArgs);
-        if (heapVal == null) {
-            return 0;
-        }
-
-        long size = findHeapNum(heapVal, "g");
-        if (size != 0) {
-            return size << 30;
-        }
-
-        size = findHeapNum(heapVal, "m");
-        if (size != 0) {
-            return size << 20;
-        }
-
-        size = findHeapNum(heapVal, "k");
-        if (size != 0) {
-            return size << 10;
-        }
-
-        return Long.parseLong(heapVal);
-    }
-
-    public static String parseJVMArgsForPrefix(String prefix, String jvmArgs) {
-        if (jvmArgs == null) {
-            return null;
-        }
-
-        String[] args = jvmArgs.split(prefix);
-        if (args.length < 2) {
-            return null;
-        }
-
-        /*
-         * Get the last occurrence of the prefix flag, since it's the last one
-         * that has precedence.
-         */
-        String lastArg = args[args.length-1];
-        String[] lastVal = lastArg.split(" ");
-        if (lastVal[0].isEmpty()) {
-            return null;
-        }
-        return lastVal[0].toLowerCase();
-    }
-
-    /**
-     * Parse targetJavaMisc and remove any argument that starts with prefix.
-     * If newArg is not null, add in prefix+newArg.
-     * For example, if the string is -Xmx10M -XX:ParallelGCThreads=10 and the
-     * prefix is -Xmx and the newArg is 5G, return
-     *          -XX:ParallelGCThreads=10 -Xmx5G
-     * If newArg is null, return
-     *          -XX:ParallelGCThreads=10
-     */
-    public String replaceOrRemoveJVMArg(String targetJavaMiscParams,
-                                        String prefix,
-                                        String newArg) {
-        StringTokenizer tokenizer = new StringTokenizer(targetJavaMiscParams);
-        StringBuilder result = new StringBuilder();
-        while (tokenizer.hasMoreTokens()) {
-            String arg = tokenizer.nextToken();
-            if (!arg.startsWith(prefix)) {
-                result.append(arg).append(" ");
-            }
-        }
-
-        if (newArg == null) {
-            return result.toString();
-        }
-        return result.toString() + " " + prefix + newArg;
-    }
-
-    private static long findHeapNum(String lastArg, String unit) {
-
-        int unitIndex = lastArg.indexOf(unit);
-        if (unitIndex == -1) {
-            return 0;
-        }
-
-        return Long.parseLong(lastArg.substring(0, unitIndex));
-    }
-
-    public boolean getNRConfigRetainLogFiles() {
-        return map.getOrDefault(RN_NRCONFIG_RETAIN_LOG_FILES).asBoolean();
-    }
-
-    public int getMaxTopoChanges() {
-        return map.getOrDefault(RN_MAX_TOPO_CHANGES).asInt();
-    }
-
     /**
      * Validate the JE cache and JVM heap parameters.
      *
@@ -544,22 +363,6 @@ public class RepNodeParams implements ParamsWithMap, Serializable {
                 Integer.MAX_VALUE : (int)quiesceMs;
     }
 
-    public boolean getCollectEnvStats() {
-        return map.get(SP_COLLECT_ENV_STATS).asBoolean();
-    }
-
-    public int getHAPort() {
-        return HostPortPair.getPort(getJENodeHostPort());
-    }
-
-    public String getJENodeHostPort() {
-        return map.get(JE_HOST_PORT).asString();
-    }
-
-    public String getJEHelperHosts() {
-        return map.get(JE_HELPER_HOSTS).asString();
-    }
-
     public SocketFactoryPair getRHSFP(RMISocketPolicy rmiPolicy,
                                       String servicePortRange,
                                       String csfName,
@@ -578,83 +381,6 @@ public class RepNodeParams implements ParamsWithMap, Serializable {
             setKvStoreName(kvStoreName);
 
         return rmiPolicy.getBindPair(args);
-    }
-
-    public SocketFactoryPair getAdminSFP(RMISocketPolicy rmiPolicy,
-                                         String servicePortRange,
-                                         String csfName) {
-        SocketFactoryArgs args = new SocketFactoryArgs();
-
-        args.setSsfName(ADMIN.interfaceName()).
-            setSsfBacklog(map.getOrDefault(RN_ADMIN_SO_BACKLOG).asInt()).
-            setSsfPortRange(servicePortRange).
-
-            setCsfName(csfName).
-            setUseCsf(getUseClientSocketFactory()).
-            setCsfConnectTimeout((int)ParameterUtils.getDurationMillis(
-                                     map, RN_ADMIN_SO_CONNECT_TIMEOUT)).
-            setCsfReadTimeout((int)ParameterUtils.getDurationMillis(
-                                  map, RN_ADMIN_SO_READ_TIMEOUT));
-
-        return rmiPolicy.getBindPair(args);
-    }
-
-    /**
-     * Returns the SFP used by the RepNode for its ULS
-     */
-    public SocketFactoryPair getLoginSFP(RMISocketPolicy policy,
-                                         String servicePortRange,
-                                         String csfName) {
-        SocketFactoryArgs args = new SocketFactoryArgs();
-
-        args.setSsfName(LOGIN.interfaceName()).
-            setSsfBacklog(map.getOrDefault(RN_LOGIN_SO_BACKLOG).asInt()).
-            setSsfPortRange(servicePortRange).
-            setCsfName(csfName).
-            setUseCsf(getUseClientSocketFactory()).
-            setCsfConnectTimeout((int)ParameterUtils.getDurationMillis(
-                                     map, RN_LOGIN_SO_CONNECT_TIMEOUT)).
-            setCsfReadTimeout((int)ParameterUtils.getDurationMillis(
-                                  map, RN_LOGIN_SO_READ_TIMEOUT));
-
-        return policy.getBindPair(args);
-    }
-
-
-    public SocketFactoryPair getMonitorSFP(RMISocketPolicy rmiPolicy,
-                                           String servicePortRange,
-                                           String csfName) {
-        SocketFactoryArgs args = new SocketFactoryArgs();
-
-        args.setSsfName(MONITOR.interfaceName()).
-            setSsfBacklog(map.getOrDefault(RN_MONITOR_SO_BACKLOG).asInt()).
-            setSsfPortRange(servicePortRange).
-            setCsfName(csfName).
-            setUseCsf(getUseClientSocketFactory()).
-            setCsfConnectTimeout((int)ParameterUtils.getDurationMillis(
-                                     map, RN_MONITOR_SO_CONNECT_TIMEOUT)).
-            setCsfReadTimeout((int)ParameterUtils.getDurationMillis(
-                                  map, RN_MONITOR_SO_READ_TIMEOUT));
-
-        return rmiPolicy.getBindPair(args);
-    }
-
-    public boolean getUseClientSocketFactory() {
-        return (!ClientSocketFactory.isDisabled() &&
-                map.exists(COMMON_USE_CLIENT_SOCKET_FACTORIES)) ?
-            map.get(COMMON_USE_CLIENT_SOCKET_FACTORIES).asBoolean() :
-            false;
-    }
-
-    /**
-     * Set the JE HA nodeHostPort and helperHost fields.
-     */
-    public void setJENodeHostPort(String nodeHostPort) {
-        map.setParameter(ParameterState.JE_HOST_PORT, nodeHostPort);
-    }
-
-    public void setJEHelperHosts(String helperHost) {
-        map.setParameter(ParameterState.JE_HELPER_HOSTS, helperHost);
     }
 
     /* -- Partition migration parameters -- */
@@ -792,34 +518,13 @@ public class RepNodeParams implements ParamsWithMap, Serializable {
         return map.get(ParameterState.SP_ACTIVE_THRESHOLD).asInt();
     }
 
-    public String getLoggingConfigProps() {
-        return map.get(ParameterState.JVM_LOGGING).asString();
-    }
-
-    public String getJavaMiscParams() {
-        return map.getOrDefault(ParameterState.JVM_MISC).asString();
-    }
-
     public String getMallocArenaMax() {
         return map.getOrDefault(ParameterState.RN_MALLOC_ARENA_MAX).asString();
-    }
-
-    public void setJavaMiscParams(String misc) {
-        map.setParameter(ParameterState.JVM_MISC, misc);
     }
 
     public int getMaxTrackedLatency() {
         return (int) ParameterUtils.getDurationMillis
             (map, ParameterState.SP_MAX_LATENCY);
-    }
-
-    public int getStatsInterval() {
-        return (int) ParameterUtils.getDurationMillis
-            (map, ParameterState.SP_INTERVAL);
-    }
-
-    public String getConfigProperties() {
-        return map.get(ParameterState.JE_MISC).asString();
     }
 
     public boolean getMasterBalance() {
@@ -865,27 +570,6 @@ public class RepNodeParams implements ParamsWithMap, Serializable {
         return map.getOrZeroInt(ParameterState.RN_CACHE_PERCENT);
     }
 
-    public int getParallelGCThreads() {
-        String jvmArgs = getJavaMiscParams();
-        String val = parseJVMArgsForPrefix(PARALLEL_GC_FLAG, jvmArgs);
-        if (val == null) {
-            return 0;
-        }
-
-        return Integer.parseInt(val);
-    }
-
-    /**
-     * Set the -XX:ParallelGCThreads flag. If gcThreads is null, clear the
-     * setting from the jvm params.
-     */
-    public void setParallelGCThreads(int gcThreads) {
-        String newVal = (gcThreads == 0) ? null : Integer.toString(gcThreads);
-
-        setJavaMiscParams(replaceOrRemoveJVMArg(getJavaMiscParams(),
-                                                PARALLEL_GC_FLAG, newVal));
-    }
-
     /**
      * Get the node's JE HA node type.
      *
@@ -902,26 +586,6 @@ public class RepNodeParams implements ParamsWithMap, Serializable {
      */
     public void setNodeType(final NodeType nodeType) {
         map.setParameter(RN_NODE_TYPE, nodeType.name());
-    }
-
-    /*
-     * The following accessors are for session and token cache configuration
-     */
-
-    public void setSessionLimit(String value) {
-        map.setParameter(ParameterState.COMMON_SESSION_LIMIT, value);
-    }
-
-    public int getSessionLimit() {
-        return map.getOrDefault(ParameterState.COMMON_SESSION_LIMIT).asInt();
-    }
-
-    public void setLoginCacheSize(String value) {
-        map.setParameter(ParameterState.COMMON_LOGIN_CACHE_SIZE, value);
-    }
-
-    public int getLoginCacheSize() {
-        return map.getOrDefault(ParameterState.COMMON_LOGIN_CACHE_SIZE).asInt();
     }
 
     /**

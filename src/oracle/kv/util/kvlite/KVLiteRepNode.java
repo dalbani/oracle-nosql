@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -118,7 +118,7 @@ public class KVLiteRepNode {
          * Use kvstore name as Datacenter. It will have a repFactor of 1.
          */
         Datacenter dc =
-            Datacenter.newInstance(kvstore, 1, DatacenterType.PRIMARY);
+            Datacenter.newInstance(kvstore, 1, DatacenterType.PRIMARY, false);
         topo.add(dc);
 
         /**

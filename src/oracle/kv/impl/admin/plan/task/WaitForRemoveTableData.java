@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -143,17 +143,12 @@ public class WaitForRemoveTableData extends AbstractTask {
 
             return queryForDone(taskId, runner, ap);
 
-        } catch (RemoteException e) {
+        } catch (RemoteException | NotBoundException e) {
             /* RMI problem, try step 1 again later. */
             return new NextJob(Task.State.RUNNING,
                                makeWaitForRemoveTableDataJob(taskId, runner),
                                ap.getServiceUnreachablePeriod());
 
-        } catch (NotBoundException e) {
-            /* RMI problem, try step 1 again later. */
-            return new NextJob(Task.State.RUNNING,
-                               makeWaitForRemoveTableDataJob(taskId, runner),
-                               ap.getServiceUnreachablePeriod());
         }
     }
 
@@ -205,13 +200,8 @@ public class WaitForRemoveTableData extends AbstractTask {
                           new NextJob(Task.State.RUNNING,
                                       makeDoneQueryJob(taskId, runner, ap),
                                       getCheckIndexTime(ap));
-        } catch (RemoteException e) {
+        } catch (RemoteException | NotBoundException e) {
             /* RMI problem, try again later. */
-            return new NextJob(Task.State.RUNNING,
-                               makeDoneQueryJob(taskId, runner, ap),
-                               ap.getServiceUnreachablePeriod());
-        } catch (NotBoundException e) {
-            /* RMI problem, try step 1 again later. */
             return new NextJob(Task.State.RUNNING,
                                makeDoneQueryJob(taskId, runner, ap),
                                ap.getServiceUnreachablePeriod());
@@ -239,9 +229,10 @@ public class WaitForRemoveTableData extends AbstractTask {
     @Override
     public String toString() {
         return TablePlanGenerator.makeName("WaitForRemoveTableData",
-                                           tableName, null);
+                                           tableName, null,
+                                           groupId.getGroupName());
     }
-    
+
     /**
      * No true impact on table or index creation, no need to compare.
      */

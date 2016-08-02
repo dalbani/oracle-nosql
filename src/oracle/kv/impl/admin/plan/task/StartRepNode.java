@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -56,6 +56,7 @@ import com.sleepycat.persist.model.Persistent;
  * version 0: original.
  * version 1: Changed inheritance chain.
  */
+@Deprecated
 @Persistent(version=1)
 public class StartRepNode extends SingleJobTask {
 
@@ -96,8 +97,8 @@ public class StartRepNode extends SingleJobTask {
     }
 
     @Override
-    public void lockTopoComponents(Planner planner) 
+    public void lockTopoComponents(Planner planner)
         throws PlanLocksHeldException {
-        planner.lockRN(plan.getId(), plan.getName(), repNodeId);
+        planner.lock(plan.getId(), plan.getName(), repNodeId);
     }
 }

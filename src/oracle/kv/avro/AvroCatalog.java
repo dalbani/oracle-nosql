@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -110,7 +110,7 @@ import oracle.kv.Value;
  * <p>
  * The schemas might be stored in a simple text file, {@code schema1.txt}:
  * <pre class="code">
- *  { 
+ *  {
  *  "type": "record",
  *  "name": "MemberInfo",
  *  "namespace": "avro",
@@ -143,7 +143,7 @@ import oracle.kv.Value;
  * schema, it might be stored in  {@code schema2.txt}.  Note that a new field
  * must be given a default value.
  * <pre class="code">
- *  { 
+ *  {
  *  "type": "record",
  *  "name": "MemberInfo",
  *  "namespace": "avro",
@@ -255,7 +255,7 @@ import oracle.kv.Value;
  *   the objects using predefined getters and setters, a program using {@code
  *   GenericAvroBinding} passes in the names of the fields to a generalized
  *   getter to retrieve data from an Avro object. For example, a generalized
- *   NoSQL Database record browser would require this capability. 
+ *   NoSQL Database record browser would require this capability.
  *   <p></li>
  *   <li>{@link JsonAvroBinding} is recommended when interoperability with
  *   other components or external systems that use JSON objects is needed.
@@ -271,7 +271,7 @@ import oracle.kv.Value;
  *   data is exchanged with other components or external systems. Because it is
  *   low level and provides complete flexibility, the {@code RawAvroBinding}
  *   provides the least safety and is the most difficult of the bindings to
- *   use. 
+ *   use.
  *   </ul>
  * <p>
  * The detailed trade-offs for using each type of binding are described in
@@ -398,7 +398,10 @@ import oracle.kv.Value;
  * fill the JVM heap.
  *
  * @since 2.0
+ *
+ * @deprecated as of 4.0, use the table API instead.
  */
+@Deprecated
 public interface AvroCatalog {
 
     /**

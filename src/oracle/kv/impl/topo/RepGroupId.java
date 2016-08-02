@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,9 +43,9 @@
 
 package oracle.kv.impl.topo;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 
 import com.sleepycat.persist.model.Persistent;
 
@@ -56,7 +56,7 @@ import com.sleepycat.persist.model.Persistent;
 public class RepGroupId extends ResourceId implements Comparable<RepGroupId> {
 
     public static RepGroupId NULL_ID = new RepGroupId(-1);
-    
+
     /**
      * The prefix used for rep group names
      */
@@ -81,7 +81,7 @@ public class RepGroupId extends ResourceId implements Comparable<RepGroupId> {
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    public RepGroupId(ObjectInput in, short serialVersion)
+    public RepGroupId(DataInput in, short serialVersion)
         throws IOException {
 
         super(in, serialVersion);
@@ -91,13 +91,13 @@ public class RepGroupId extends ResourceId implements Comparable<RepGroupId> {
     public boolean isNull() {
         return groupId == NULL_ID.groupId;
     }
-    
+
     /**
      * FastExternalizable writer.  Must call superclass method first to write
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
@@ -189,5 +189,12 @@ public class RepGroupId extends ResourceId implements Comparable<RepGroupId> {
     @Override
     public int compareTo(RepGroupId other) {
         return getGroupId() - other.getGroupId();
+    }
+
+    public static RepGroupId getRepGroupId(ResourceId resId) {
+        if (resId instanceof RepGroupId) {
+            return new RepGroupId(((RepGroupId)resId).getGroupId());
+        }
+        return null;
     }
 }

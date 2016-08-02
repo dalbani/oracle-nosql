@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,15 +43,17 @@
 
 package oracle.kv.impl.util;
 
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectOutput;
 
 /**
- * Implemented by classes that are serialized for transfer over RMI using an
- * optimized technique that avoids the performance pitfalls of the standard
- * Serializable and Externalizable approaches.  It is mainly intended for API
- * operations, but may also be useful for high frequency operations outside of
- * the API.
+ * Implemented by classes that are serialized using an optimized technique
+ * that avoids the Java dependency and the performance pitfalls of the standard
+ * Serializable and Externalizable approaches. The serialized form is not Java
+ * dependent and can be used for transfer over RMI to Java remote recipients
+ * as well as to non-Java recipients using some other (non-RMI) transport. It
+ * is mainly intended for API operations, but may also be useful for high
+ * frequency operations outside of the API.
  *
  * === Standard 'Slow' Serialization ===
  *
@@ -151,9 +153,7 @@ import java.io.ObjectOutput;
  * === The FastExternalizable constructor ===
  *
  * Unlike Externalizable, a constructor rather than a method is used to read
- * the object from a ObjectInput.  The constructor signature has the same
- * signature (although we're comparing a method and a constructor) as
- * Externalizable.readExternal.
+ * the object from a DataInput.
  *
  * A constructor is used rather than a method so that the fields it initializes
  * can be declared 'final' and a no-args constructor is not needed.
@@ -163,14 +163,14 @@ import java.io.ObjectOutput;
  * an additional parameter may be required to initialize a class identifier
  * field (more on this below).
  *
- *   ExampleClass(ObjectInput in, int serialVersion) throws IOException {
+ *   ExampleClass(DataInput in, int serialVersion) throws IOException {
  *       ...
  *   }
  *
  * If a field may contain instances of only a single class, not its subclasses,
  * and this won't be changing in the future, the constructor can be used
  * directly by the enclosing class to create the instance (with 'new') and read
- * it from the ObjectInput.  Otherwise, a factory method is used as described
+ * it from the DataInput.  Otherwise, a factory method is used as described
  * next.
  *
  * === The FastExternalizable factory method ===
@@ -186,7 +186,7 @@ import java.io.ObjectOutput;
  *
  * By convention the signature of the factory method is:
  *
- *   static ExampleClass readFastExternal(ObjectInput in, int serialVersion) throws IOException {
+ *   static ExampleClass readFastExternal(DataInput in, int serialVersion) throws IOException {
  *       ...
  *   }
  *
@@ -203,9 +203,9 @@ import java.io.ObjectOutput;
  * break serialization compatibility.
  *
  * When the factory constructs a new instance, it may pass the class identifier
- * (in addition to the ObjectInput parameter) to the constructor, if the class
+ * (in addition to the DataInput parameter) to the constructor, if the class
  * identifier will be stored in an instance field.  The constructor cannot read
- * the class identifier from the ObjectInput, since it has already been read by
+ * the class identifier from the DataInput, since it has already been read by
  * the factory method.
  *
  * === Null values ===
@@ -235,14 +235,6 @@ import java.io.ObjectOutput;
  *  + Serialized fields must not be 'final' for DPL-persistence and
  *    Externalizable, but may be 'final' for Serializable and
  *    FastExternalizable.
- *
- * If ObjectInput.readObject is called downstream from a FastExternalizable
- * constructor or factory method, then ClassNotFoundException must be added to
- * the throws clause (in addition to IOException) on the constructor or factory
- * method, to propagate the exception upward.  This is necessary when combining
- * FastExternalizable with Serializable or Externalizable in certain cases, not
- * in the same class but in the same object hierarchy.  This situation has not
- * yet arisen, but could be handled as described.
  *
  * === Examples ===
  *
@@ -280,10 +272,10 @@ import java.io.ObjectOutput;
 public interface FastExternalizable {
 
     /**
-     * Writes the FastExternalizable object to the ObjectOutput.  To read the
+     * Writes the FastExternalizable object to the DataOutput.  To read the
      * object, use a constructor or factory method as described in the class
      * comments.
      */
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException;
 }

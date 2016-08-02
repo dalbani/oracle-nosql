@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -146,5 +146,10 @@ public class RemoteTestAPI extends RemoteAPI {
         throws RemoteException {
 
         remote.setHook(hook, memberName, getSerialVersion());
+    }
+
+    public void setTTLTime(long time)
+        throws RemoteException {
+        remote.setTTLTime(time, getSerialVersion());
     }
 }

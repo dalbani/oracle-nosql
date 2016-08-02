@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -51,10 +51,12 @@ import java.util.Map;
 
 import oracle.kv.impl.admin.IllegalCommandException;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
 import oracle.kv.impl.topo.RepGroup;
 import oracle.kv.impl.topo.RepNode;
 import oracle.kv.impl.topo.StorageNodeId;
@@ -125,6 +127,41 @@ public class PortTracker {
                         " was used in repNode " + rn + " but was not in " +
                         " available port list(" + snp.getHAPortRange() +
                         ") for" + rnSN;
+                }
+            }
+        }
+
+        /* Remove the ports that are in use. */
+        for (RepGroup rg : topology.getRepGroupMap().getAll()) {
+            for (ArbNode an: rg.getArbNodes()) {
+                ArbNodeParams anp = parameters.get(an.getResourceId());
+                if (anp == null) {
+
+                    /*
+                     * This AN is in the target topology, but is not yet fully
+                     * deployed, and does not have a params instant. It's not
+                     * consuming any ports, so we can skip it.
+                     */
+                    continue;
+                }
+
+                int inUsePort = anp.getHAPort();
+                StorageNodeId anSN = an.getStorageNodeId();
+
+                if (targetSNs.contains(anSN)) {
+
+                    StorageNodeParams snp = parameters.get(anSN);
+
+                    /*
+                     * Take the port in use out of the free port set. Assert
+                     * that it was there in the first place.
+                     */
+                    boolean removed =
+                        freePorts.get(anSN).remove(new HAPort(inUsePort));
+                    assert removed : "Port " + inUsePort +
+                        " was used in Arbiter Node " + an + " but was not in " +
+                        " available port list(" + snp.getHAPortRange() +
+                        ") for" + anSN;
                 }
             }
         }

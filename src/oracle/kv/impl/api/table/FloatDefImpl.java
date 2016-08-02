@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,38 +43,41 @@
 
 package oracle.kv.impl.api.table;
 
-import static oracle.kv.impl.api.table.TableJsonUtils.MAX;
-import static oracle.kv.impl.api.table.TableJsonUtils.MIN;
-import oracle.kv.table.FloatDef;
+import com.sleepycat.persist.model.Persistent;
 
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.ObjectNode;
 
-import com.sleepycat.persist.model.Persistent;
+import static oracle.kv.impl.api.table.TableJsonUtils.MAX;
+import static oracle.kv.impl.api.table.TableJsonUtils.MIN;
+
+import oracle.kv.table.FloatDef;
 
 /**
  * FloatDefImpl implements the FloatDef interface.
  */
 @Persistent(version=1)
-class FloatDefImpl extends FieldDefImpl
-    implements FloatDef {
+public class FloatDefImpl extends FieldDefImpl implements FloatDef {
 
     private static final long serialVersionUID = 1L;
     /*
      * These are not final to allow for schema evolution.
      */
-    private final Float min;
-    private final Float max;
+    private Float min;
+    private Float max;
 
     /**
      * Constructor requiring all fields.
      */
-    FloatDefImpl(String description,
-                 Float min, Float max) {
+    FloatDefImpl(String description, Float min, Float max) {
         super(Type.FLOAT, description);
         this.min = min;
         this.max = max;
         validate();
+    }
+
+    FloatDefImpl(String description) {
+        this(description, null, null);
     }
 
     /**
@@ -92,34 +95,20 @@ class FloatDefImpl extends FieldDefImpl
         max = impl.max;
     }
 
+    /*
+     * Public api methods from Object and FieldDef
+     */
+
     @Override
-    public Float getMin() {
-        return min;
+    public FloatDefImpl clone() {
+        return new FloatDefImpl(this);
     }
 
     @Override
-    public Float getMax() {
-        return max;
-    }
-
-    @Override
-    public boolean isFloat() {
-        return true;
-    }
-
-    @Override
-    public FloatDef asFloat() {
-        return this;
-    }
-
-    @Override
-    public boolean isValidKeyField() {
-        return true;
-    }
-
-    @Override
-    public boolean isValidIndexField() {
-        return true;
+    public int hashCode() {
+        return super.hashCode() +
+            (min != null ? min.hashCode() : 0) +
+            (max != null ? max.hashCode() : 0);
     }
 
     @Override
@@ -133,10 +122,90 @@ class FloatDefImpl extends FieldDefImpl
     }
 
     @Override
-    public int hashCode() {
-        return super.hashCode() +
-            (min != null ? min.hashCode() : 0) +
-            (max != null ? max.hashCode() : 0);
+    public boolean isValidKeyField() {
+        return true;
+    }
+
+    @Override
+    public boolean isValidIndexField() {
+        return true;
+    }
+
+    @Override
+    public boolean isFloat() {
+        return true;
+    }
+
+    @Override
+    public boolean isAtomic() {
+        return true;
+    }
+
+    @Override
+    public boolean isNumeric() {
+        return true;
+    }
+
+    @Override
+    public FloatDef asFloat() {
+        return this;
+    }
+
+    @Override
+    public FloatValueImpl createFloat(float value) {
+
+        return (hasMin() || hasMax() ?
+                new FloatRangeValue(value, this) :
+                new FloatValueImpl(value));
+    }
+
+    @Override
+    FloatValueImpl createFloat(String value) {
+
+        return (hasMin() || hasMax() ?
+                new FloatRangeValue(value, this) :
+                new FloatValueImpl(value));
+    }
+
+    /*
+     * Public api methods from FloatDef
+     */
+
+    @Override
+    public Float getMin() {
+        return min;
+    }
+
+    @Override
+    public Float getMax() {
+        return max;
+    }
+
+    /*
+     * FieldDefImpl internal api methods
+     */
+
+    @Override
+    public boolean hasMin() {
+        return min != null;
+    }
+
+    @Override
+    public boolean hasMax() {
+        return max != null;
+    }
+
+    @Override
+    public boolean isSubtype(FieldDefImpl superType) {
+
+        if (superType.isFloat() ||
+            superType.isDouble() ||
+            superType.isAny() ||
+            superType.isAnyAtomic()) {
+            return true;
+        }
+
+        return false;
     }
 
     @Override
@@ -155,15 +224,25 @@ class FloatDefImpl extends FieldDefImpl
     }
 
     @Override
-    public FloatDefImpl clone() {
-        return new FloatDefImpl(this);
+    FieldValueImpl createValue(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return NullValueImpl.getInstance();
+        }
+
+        /*
+         * Jackson does not have a FloatNode in the version being used, so
+         * no further validation is possible.
+         */
+        if (!node.isNumber()) {
+            throw new IllegalArgumentException
+                ("Default value for type FLOAT is not a number");
+        }
+        return createFloat(Float.valueOf(node.asText()));
     }
 
-    @Override
-    public FloatValueImpl createFloat(float value) {
-        validateRange(value);
-        return new FloatValueImpl(value);
-    }
+    /*
+     * local methods
+     */
 
     private void validate() {
 
@@ -179,7 +258,7 @@ class FloatDefImpl extends FieldDefImpl
     /**
      * Validates the value against the range if one exists.
      */
-    private void validateRange(float val) {
+    void validateValue(float val) {
 
         /* min/max are inclusive */
         if ((min != null && val < min) ||
@@ -190,22 +269,5 @@ class FloatDefImpl extends FieldDefImpl
             sb.append(", is outside of the allowed range");
             throw new IllegalArgumentException(sb.toString());
         }
-    }
-
-    @Override
-    FieldValueImpl createValue(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return NullValueImpl.getInstance();
-        }
-
-        /*
-         * Jackson does not have a FloatNode in the version being used, so
-         * no further validation is possible.
-         */
-        if (!node.isNumber()) {
-            throw new IllegalArgumentException
-                ("Default value for type FLOAT is not a number");
-        }
-        return createFloat(Float.valueOf(node.asText()));
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -42,9 +42,9 @@
  */
 package oracle.kv.impl.security.login;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 import java.io.Serializable;
 import java.util.Arrays;
 
@@ -153,7 +153,7 @@ public final class SessionId implements Serializable, FastExternalizable {
     }
 
     /* for FastExternalizable */
-    public SessionId(ObjectInput in, short serialVersion)
+    public SessionId(DataInput in, short serialVersion)
         throws IOException {
 
         final int flagByte = in.readByte();
@@ -161,7 +161,7 @@ public final class SessionId implements Serializable, FastExternalizable {
 
         final int valueLen = in.readByte();
         idValue = new byte[valueLen];
-        in.read(idValue, 0, valueLen);
+        in.readFully(idValue, 0, valueLen);
         if ((flagByte & HAS_ALLOCATOR) != 0) {
             allocator = ResourceId.readFastExternal(in, serialVersion);
         }
@@ -172,7 +172,7 @@ public final class SessionId implements Serializable, FastExternalizable {
      * interface.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         int flagByte = 0;

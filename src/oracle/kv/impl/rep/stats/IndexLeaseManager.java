@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2014 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,6 +45,8 @@ package oracle.kv.impl.rep.stats;
 
 import java.util.Date;
 
+import oracle.kv.impl.api.table.TableBuilder;
+import oracle.kv.impl.api.table.TableImpl;
 import oracle.kv.impl.rep.stats.IndexLeaseManager.IndexLeaseInfo;
 import oracle.kv.impl.rep.stats.StatsLeaseManager.LeaseInfo;
 import oracle.kv.table.PrimaryKey;
@@ -54,16 +56,16 @@ import oracle.kv.table.TableAPI;
 /**
  * StatsLeaseTable is used to manage the shard-wide lease associated with the
  * gathering of index statistics for a shard.
- *
  */
 public class IndexLeaseManager extends StatsLeaseManager<IndexLeaseInfo> {
     /* Table name */
-    public static final String TABLE_NAME = "IndexStatsLease";
+    public static final String TABLE_NAME =
+        TableImpl.SYSTEM_TABLE_PREFIX + "IndexStatsLease";
 
     /* The index-specific columns in the lease table  */
-    public static final String COL_NAME_TABLE_NAME = "tableName";
-    public static final String COL_NAME_INDEX_NAME = "indexName";
-    public static final String COL_NAME_SHARD_ID = "shardId";
+    protected static final String COL_NAME_TABLE_NAME = "tableName";
+    protected static final String COL_NAME_INDEX_NAME = "indexName";
+    protected static final String COL_NAME_SHARD_ID = "shardId";
 
     public IndexLeaseManager(TableAPI tableAPI) {
         super(tableAPI);
@@ -122,6 +124,32 @@ public class IndexLeaseManager extends StatsLeaseManager<IndexLeaseInfo> {
     @Override
     protected String getLeaseTableName() {
         return TABLE_NAME;
+    }
+
+    /**
+     * Get table builder of IndexStatsLease
+     */
+    public static TableBuilder getTableBuilder() {
+        final TableBuilder builder =
+            TableBuilder.createSystemTableBuilder(TABLE_NAME);
+
+        /* Types of all fields within this table */
+        builder.addString(COL_NAME_TABLE_NAME);
+        builder.addString(COL_NAME_INDEX_NAME);
+        builder.addInteger(COL_NAME_SHARD_ID);
+        builder.addString(COL_NAME_LEASE_RN);
+        builder.addString(COL_NAME_LEASE_DATE);
+        builder.addString(COL_NAME_LAST_UPDATE);
+
+        builder.primaryKey(COL_NAME_TABLE_NAME,
+                           COL_NAME_INDEX_NAME,
+                           COL_NAME_SHARD_ID);
+
+        builder.shardKey(COL_NAME_TABLE_NAME,
+                         COL_NAME_INDEX_NAME,
+                         COL_NAME_SHARD_ID);
+
+        return builder;
     }
 
     /**

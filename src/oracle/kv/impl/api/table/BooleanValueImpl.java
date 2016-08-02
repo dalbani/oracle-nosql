@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -52,20 +52,14 @@ import org.codehaus.jackson.node.BooleanNode;
 import com.sleepycat.persist.model.Persistent;
 
 @Persistent(version=1)
-class BooleanValueImpl extends FieldValueImpl implements BooleanValue {
+public class BooleanValueImpl extends FieldValueImpl implements BooleanValue {
+
     private static final long serialVersionUID = 1L;
+
     private boolean value;
 
     BooleanValueImpl(boolean value) {
         this.value = value;
-    }
-
-    /**
-     * Boolean.parseBoolean simply does a case-insensitive comparison to "true"
-     * and assigns that value.  This means any other string results in false.
-     */
-    BooleanValueImpl(String value) {
-        this.value = Boolean.parseBoolean(value);
     }
 
     /* DPL */
@@ -73,23 +67,18 @@ class BooleanValueImpl extends FieldValueImpl implements BooleanValue {
     private BooleanValueImpl() {
     }
 
-    public static BooleanValueImpl create(boolean value) {
-        return new BooleanValueImpl(value);
-    }
-
-    @Override
-    public boolean get() {
-        return value;
-    }
-
-    @Override
-    public FieldDef.Type getType() {
-        return FieldDef.Type.BOOLEAN;
-    }
+    /*
+     * Public api methods from Object and FieldValue
+     */
 
     @Override
     public BooleanValueImpl clone() {
         return new BooleanValueImpl(value);
+    }
+
+    @Override
+    public int hashCode() {
+        return ((Boolean) value).hashCode();
     }
 
     @Override
@@ -101,11 +90,6 @@ class BooleanValueImpl extends FieldValueImpl implements BooleanValue {
     }
 
     @Override
-    public int hashCode() {
-        return ((Boolean) value).hashCode();
-    }
-
-    @Override
     public int compareTo(FieldValue other) {
         if (other instanceof BooleanValueImpl) {
             /* java 7
@@ -113,8 +97,60 @@ class BooleanValueImpl extends FieldValueImpl implements BooleanValue {
             */
             return ((Boolean)value).compareTo(((BooleanValueImpl)other).value);
         }
-        throw new ClassCastException
-            ("Object is not an BooleanValue");
+        throw new ClassCastException("Object is not an BooleanValue");
+    }
+
+    @Override
+    public String toString() {
+        return Boolean.toString(value);
+    }
+
+    @Override
+    public FieldDef.Type getType() {
+        return FieldDef.Type.BOOLEAN;
+    }
+
+    @Override
+    public BooleanDefImpl getDefinition() {
+        return FieldDefImpl.booleanDef;
+    }
+
+    @Override
+    public BooleanValue asBoolean() {
+        return this;
+    }
+
+    @Override
+    public boolean isBoolean() {
+        return true;
+    }
+
+    @Override
+    public boolean isAtomic() {
+        return true;
+    }
+
+    /*
+     * Public api methods from BooleanValue
+     */
+
+    @Override
+    public boolean get() {
+        return value;
+    }
+
+    /*
+     * FieldValueImpl internal api methods
+     */
+
+    @Override
+    public boolean getBoolean() {
+        return value;
+    }
+
+    @Override
+    public void setBoolean(boolean v) {
+        value = v;
     }
 
     @Override
@@ -127,18 +163,12 @@ class BooleanValueImpl extends FieldValueImpl implements BooleanValue {
         sb.append(toString());
     }
     
-    @Override
-    public BooleanValue asBoolean() {
-        return this;
+    /*
+     * local methods
+     */
+
+    public static BooleanValueImpl create(boolean value) {
+        return new BooleanValueImpl(value);
     }
 
-    @Override
-    public boolean isBoolean() {
-        return true;
-    }
-
-    @Override
-    public String toString() {
-        return Boolean.toString(value);
-    }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,10 +44,12 @@
 package oracle.kv.impl.mgmt;
 
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.measurement.ProxiedServiceStatusChange;
 import oracle.kv.impl.sna.ServiceManager;
 import oracle.kv.impl.sna.StorageNodeAgent;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.util.ServiceStatusTracker;
 
@@ -82,6 +84,14 @@ public class NoOpAgent implements MgmtAgent {
 
     @Override
     public void removeRepNode(RepNodeId rnid) {
+    }
+
+    @Override
+    public void addArbNode(ArbNodeParams arp, ServiceManager mgr) {
+    }
+
+    @Override
+    public void removeArbNode(ArbNodeId arbid) {
     }
 
     @Override

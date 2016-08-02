@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -53,9 +53,9 @@ import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams.RNHeapAndCacheSize;
 import oracle.kv.impl.admin.plan.task.NewRepNodeParameters;
-import oracle.kv.impl.admin.plan.task.StartRepNode;
-import oracle.kv.impl.admin.plan.task.StopRepNode;
-import oracle.kv.impl.admin.plan.task.WaitForRepNodeState;
+import oracle.kv.impl.admin.plan.task.StartNode;
+import oracle.kv.impl.admin.plan.task.StopNode;
+import oracle.kv.impl.admin.plan.task.WaitForNodeState;
 import oracle.kv.impl.admin.plan.task.WriteNewParams;
 import oracle.kv.impl.admin.plan.task.WriteNewSNParams;
 import oracle.kv.impl.mgmt.MgmtUtil;
@@ -212,6 +212,9 @@ public class ChangeSNParamsPlan extends AbstractPlan {
         final int numHostedRNs =
             admin.getCurrentTopology().getHostedRepNodeIds(snId).size();
 
+        final int numHostedANs =
+                admin.getCurrentTopology().getHostedArbNodeIds(snId).size();
+
         /* Find the RN heap memory percent to use */
         int rnHeapPercent = snp.getRNHeapPercent();
         if (newMap.exists(ParameterState.SN_RN_HEAP_PERCENT)) {
@@ -245,7 +248,7 @@ public class ChangeSNParamsPlan extends AbstractPlan {
             RNHeapAndCacheSize heapAndCache =
                 StorageNodeParams.calculateRNHeapAndCache
                 (policyMap, capacity, numHostedRNs, memoryMB, rnHeapPercent,
-                 rnp.getRNCachePercent());
+                 rnp.getRNCachePercent(), numHostedANs);
             ParameterMap rnMap = new ParameterMap(ParameterState.REPNODE_TYPE,
                                                   ParameterState.REPNODE_TYPE);
 
@@ -299,11 +302,11 @@ public class ChangeSNParamsPlan extends AbstractPlan {
                                        true));
 
             if (rnMap.hasRestartRequired()) {
-                addTask(new StopRepNode(this, snId, rnId, false));
-                addTask(new StartRepNode(this, snId, rnId, false));
-                addTask(new WaitForRepNodeState(this,
-                                                rnId,
-                                                ServiceStatus.RUNNING));
+                addTask(new StopNode(this, snId, rnId, false));
+                addTask(new StartNode(this, snId, rnId, false));
+                addTask(new WaitForNodeState(this,
+                                             rnId,
+                                             ServiceStatus.RUNNING));
             } else {
                 addTask(new NewRepNodeParameters(this, rnp.getRepNodeId()));
             }
@@ -311,7 +314,7 @@ public class ChangeSNParamsPlan extends AbstractPlan {
     }
 
     @Override
-    void stripForDisplay() {
+    public void stripForDisplay() {
         newParams = null;
     }
 

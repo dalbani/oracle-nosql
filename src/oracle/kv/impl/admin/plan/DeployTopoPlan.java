@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -66,6 +66,7 @@ import oracle.kv.impl.admin.topo.Rules;
 import oracle.kv.impl.admin.topo.Rules.Results;
 import oracle.kv.impl.admin.topo.TopologyCandidate;
 import oracle.kv.impl.admin.topo.TopologyDiff;
+import oracle.kv.impl.api.table.TableMetadata;
 import oracle.kv.impl.metadata.Metadata;
 import oracle.kv.impl.metadata.Metadata.MetadataType;
 import oracle.kv.impl.rep.migration.PartitionMigrationStatus;
@@ -506,7 +507,14 @@ public class DeployTopoPlan extends AbstractPlan {
             case TOPOLOGY:
                 return updatingTopo((Topology)metadata);
             case TABLE:
-                return false;
+                final TableMetadata currentTableMd = this.getAdmin().
+                        getMetadata(TableMetadata.class, MetadataType.TABLE);
+
+                if (currentTableMd == null) {
+                    return true;
+                }
+                return metadata.getSequenceNumber() >
+                    currentTableMd.getSequenceNumber();
             case SECURITY:
                 final SecurityMetadata currentSecMd = this.getAdmin().
                     getMetadata(SecurityMetadata.class, MetadataType.SECURITY);
@@ -544,14 +552,6 @@ public class DeployTopoPlan extends AbstractPlan {
     public synchronized void addTaskDetails(Map<String, String> taskRunStatus,
                                             Map<String, String> info) {
         taskRunStatus.putAll(info);
-    }
-
-    @Override
-    void stripForDisplay() {
-        /*
-         * Nothing much to do, seem that the deploymentInfo is worth leaving,
-         * might want to display it.
-         */
     }
 
     @Override

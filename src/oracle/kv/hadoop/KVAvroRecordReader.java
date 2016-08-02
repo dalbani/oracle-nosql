@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,18 +45,20 @@ package oracle.kv.hadoop;
 
 import java.io.IOException;
 
+import org.apache.avro.generic.IndexedRecord;
+import org.apache.hadoop.mapreduce.InputSplit;
+import org.apache.hadoop.mapreduce.TaskAttemptContext;
+
 import oracle.kv.Key;
 import oracle.kv.Value;
 import oracle.kv.avro.AvroCatalog;
 import oracle.kv.avro.GenericAvroBinding;
 
-import org.apache.avro.generic.IndexedRecord;
-import org.apache.hadoop.mapreduce.InputSplit;
-import org.apache.hadoop.mapreduce.TaskAttemptContext;
-
 /**
  * @hidden
+ * @deprecated as of 4.0, use the table API instead.
  */
+@Deprecated
 public class KVAvroRecordReader
     extends KVRecordReaderBase<Key, IndexedRecord> {
 

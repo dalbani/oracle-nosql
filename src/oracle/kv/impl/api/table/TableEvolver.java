@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -138,7 +138,7 @@ public class TableEvolver extends TableBuilderBase {
      * this instance can be reused, which is helpful in testing.
      */
     public TableImpl evolveTable() {
-        table.evolve(fields);
+        table.evolve(fields, ttl);
 
         /*
          * Reset the fields member to avoid accidental updates to the
@@ -153,7 +153,7 @@ public class TableEvolver extends TableBuilderBase {
      */
     public String toJsonString(boolean pretty) {
         TableImpl t = table.clone();
-        t.evolve(fields);
+        t.evolve(fields, ttl);
         return t.toJsonString(pretty);
     }
 

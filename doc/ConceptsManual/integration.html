@@ -13,7 +13,7 @@
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
@@ -39,6 +39,11 @@
         <dl>
           <dt>
             <span class="sect2">
+              <a href="integration.html#dmsintegration">Oracle Database Mobile Server Integration</a>
+            </span>
+          </dt>
+          <dt>
+            <span class="sect2">
               <a href="integration.html#hadoopintegration">Hadoop Integration</a>
             </span>
           </dt>
@@ -59,6 +64,53 @@
             the Oracle stack. In the following sections you will learn more
             about this. 
         </p>
+      <div class="sect2" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h3 class="title"><a id="dmsintegration"></a>Oracle Database Mobile Server Integration</h3>
+            </div>
+          </div>
+        </div>
+        <p> 
+                As of Oracle Database Mobile Server (Oracle DMS) 12.1 
+                release, Oracle NoSQL Database can be integrated with Oracle Database Mobile
+                Server. Oracle DMS facilitates the development, deployment
+                and management of mobile database applications for a large number
+                of mobile users. 
+            </p>
+        <p>
+                 The main integration feature is synchronizing Oracle NoSQL
+                 with Oracle Berkeley DB/SQLite/Java DB.
+             </p>
+        <p>
+                 Oracle DMS can be used as a data synchronization engine between
+                 Oracle NoSQL and mobile client databases including
+                 Oracle Berkeley DB, SQLite and Java DB. Existing tables in an
+                 Oracle NoSQL database can be published to Oracle DMS using
+                 publish/subscribe APIs. Oracle DMS creates corresponding tables
+                 on the client-side and allows them to synchronously upload their
+                 data to Oracle NoSQL. Since, Oracle DMS completely manages the data
+                 format conversion between the local client database and Oracle
+                 NoSQL DB, no additional coding or scripting is required. The
+                 mobile to NoSQL paradigm fits best where the number of clients is
+                 large, and/or the amount of collected data is large, and/or the
+                 server application requires NoSQL as data storage. 
+              </p>
+        <p>
+                 With Oracle NoSQL as data storage, mobile and embedded applications
+                 can use Oracle DMS as a complete and reliable
+                 solution for synchronizing their data to the highly scalable
+                 Oracle NoSQL database. For more information, see section 2.12.3
+                 <span class="emphasis"><em>"Creating NoSQL Queue Publication Item"</em></span>
+                 in the <span class="emphasis"><em>Oracle Database Mobile Server Developer's Guide</em></span>.
+                 You can also find the FleetControl sample application in Oracle
+                 Mobile Development Kit (a development toolkit for Oracle DMS),
+                 which demonstrates how to use Oracle NoSQL as a back-end database
+                 and how to synchronize application data between mobile client
+                 database and Oracle NoSQL via Oracle DMS. 
+              </p>
+      </div>
       <div class="sect2" lang="en" xml:lang="en">
         <div class="titlepage">
           <div>

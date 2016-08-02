@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,10 +44,10 @@
 package oracle.kv;
 
 import java.io.ByteArrayInputStream;
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
 import java.io.ObjectInputStream;
-import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.nio.ByteBuffer;
@@ -55,6 +55,7 @@ import java.util.UUID;
 
 import com.sleepycat.je.utilint.DbLsn;
 import com.sleepycat.je.utilint.VLSN;
+
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
 import oracle.kv.impl.util.FastExternalizable;
@@ -142,8 +143,6 @@ public class Version implements FastExternalizable, Serializable {
                    long repNodeLsn) {
         assert repGroupUuid != null;
         assert repGroupVlsn > 0 : repGroupVlsn;
-        assert repNodeId != null;
-        assert repNodeLsn != 0 && repNodeLsn != DbLsn.NULL_LSN : repNodeLsn;
 
         this.repGroupUuid = repGroupUuid;
         this.repGroupVlsn = repGroupVlsn;
@@ -155,39 +154,10 @@ public class Version implements FastExternalizable, Serializable {
      * For internal use only.
      * @hidden
      *
-     * FastExternalizable constructor.
-     */
-    public Version(ObjectInput in, short serialVersion)
-        throws IOException {
-
-        final long mostSig = in.readLong();
-        final long leastSig = in.readLong();
-        repGroupUuid = new UUID(mostSig, leastSig);
-        repGroupVlsn = in.readLong();
-
-        if (in.read() == 0) {
-            repNodeId = null;
-            repNodeLsn = 0;
-            return;
-        }
-
-        /*
-         * The serialized form supports ResourceIds of different subclasses,
-         * but here we only allow a RepNodeId.
-         */
-        repNodeId = (RepNodeId) ResourceId.readFastExternal(in, serialVersion);
-
-        repNodeLsn = in.readLong();
-    }
-
-    /**
-     * For internal use only.
-     * @hidden
-     *
      * FastExternalizable writer.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         out.writeLong(repGroupUuid.getMostSignificantBits());
@@ -195,11 +165,11 @@ public class Version implements FastExternalizable, Serializable {
         out.writeLong(repGroupVlsn);
         if (repNodeId == null) {
             out.write(0);
-            return;
+        } else {
+            out.write(1);
+            repNodeId.writeFastExternal(out, serialVersion);
+            out.writeLong(repNodeLsn);
         }
-        out.write(1);
-        repNodeId.writeFastExternal(out, serialVersion);
-        out.writeLong(repNodeLsn);
     }
 
     /**
@@ -213,13 +183,13 @@ public class Version implements FastExternalizable, Serializable {
          * ObjectOutputStream and the actual payload.
          *
          * The total size is 33 or 50 bytes, depending on repNodeId.  The
-         * first 6 bytes is the ObjectOutputStream header and the remaining 
+         * first 6 bytes is the ObjectOutputStream header and the remaining
          * bytes are the serialized Version.
          */
         final int headerSize = 6;
         /* totalSize - headerSize */
         final byte payloadSize = (repNodeId == null ? (byte)27 : (byte)44);
-        
+
         ByteBuffer bb = ByteBuffer.allocate(headerSize + payloadSize);
 
         bb.putShort(ObjectOutputStream.STREAM_MAGIC);
@@ -241,7 +211,6 @@ public class Version implements FastExternalizable, Serializable {
             bb.putInt(repNodeId.getNodeNum());
             bb.putLong(repNodeLsn);
         }
-
         return bb.array();
     }
 
@@ -257,7 +226,7 @@ public class Version implements FastExternalizable, Serializable {
 
             final short serialVersion = ois.readShort();
 
-            return new Version(ois, serialVersion);
+            return createVersion(ois, serialVersion);
 
         } catch (IOException e) {
             /* Should never happen. */
@@ -348,5 +317,38 @@ public class Version implements FastExternalizable, Serializable {
         return repNodeLsn == otherNodeLsn &&
                repNodeId != null &&
                repNodeId.equals(otherNodeId);
+    }
+
+    /**
+     * @hidden
+     *
+     * Static factory to construct a Version.
+     */
+    public static Version createVersion(DataInput in, short serialVersion)
+        throws IOException {
+
+        UUID repGroupUuid;
+        long repGroupVlsn;
+        RepNodeId repNodeId;
+        long repNodeLsn;
+
+        final long mostSig = in.readLong();
+        final long leastSig = in.readLong();
+        repGroupUuid = new UUID(mostSig, leastSig);
+        repGroupVlsn = in.readLong();
+
+        if (in.readByte() == 0) {
+            repNodeId = null;
+            repNodeLsn = 0;
+        } else {
+            /*
+             * The serialized form supports ResourceIds of different subclasses,
+             * but here we only allow a RepNodeId.
+             */
+            repNodeId = (RepNodeId) ResourceId.readFastExternal(in,
+                                                                serialVersion);
+            repNodeLsn = in.readLong();
+        }
+        return new Version(repGroupUuid, repGroupVlsn, repNodeId, repNodeLsn);
     }
 }

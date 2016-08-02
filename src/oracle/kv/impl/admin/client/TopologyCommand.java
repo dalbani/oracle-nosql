@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -80,7 +80,8 @@ class TopologyCommand extends CommandWithSubs {
         new TopologyRebalanceSub(),             /* rebalance */
         new TopologyRedistributeSub(),          /* redistribute */
         new TopologyValidateSub(),              /* validate */
-        new TopologyViewSub()                   /* view */
+        new TopologyViewSub(),                  /* view */
+        new TopologyChangeZoneArbitersSub()     /* change-zone-arbiters */
         );
 
     private static final String TOPOLOGY_COMMAND_NAME = "topology";
@@ -206,7 +207,7 @@ class TopologyCommand extends CommandWithSubs {
     static class TopologyChangeZoneTypeSub extends SubCommand {
 
         TopologyChangeZoneTypeSub() {
-            super("change-zone-type", 8);
+            super("change-zone-type", 13);
         }
 
         @Override
@@ -263,6 +264,80 @@ class TopologyCommand extends CommandWithSubs {
             return
                 "Modifies the topology to change the type of " +
                 "the specified" + eolt + "zone to a new type.";
+        }
+    }
+
+    @SuppressWarnings("null")
+    static class TopologyChangeZoneArbitersSub extends SubCommand {
+
+        TopologyChangeZoneArbitersSub() {
+            super("change-zone-arbiters", 13);
+        }
+
+        @Override
+        protected boolean isHidden() {
+            return !CommandShell.enableArbiters;
+        }
+
+        @Override
+        public String execute(String[] args, Shell shell)
+            throws ShellException {
+
+            Shell.checkHelp(args, this);
+            if (!CommandShell.enableArbiters) {
+                return "Arbiters are not supported";
+            }
+
+            final CommandShell cmd = (CommandShell)shell;
+            final CommandServiceAPI cs = cmd.getAdmin();
+            String topoName = null;
+            DatacenterId dcid = null;
+            Boolean allowArbiters = null;
+            String dcName = null;
+            for (int i = 1; i < args.length; i++) {
+                String arg = args[i];
+                if ("-name".equals(arg)) {
+                    topoName = Shell.nextArg(args, i++, this);
+                } else if (CommandUtils.isDatacenterIdFlag(arg)) {
+                    dcid = parseDatacenterId(Shell.nextArg(args, i++, this));
+                } else if (CommandUtils.isDatacenterNameFlag(arg)) {
+                    dcName = Shell.nextArg(args, i++, this);
+                } else if ("-arbiters".equals(arg)) {
+                    allowArbiters = true;
+                } else if ("-no-arbiters".equals(arg)) {
+                   allowArbiters = false;
+                } else {
+                    shell.unknownArgument(arg, this);
+                }
+            }
+            if (topoName == null || allowArbiters == null ||
+                (dcid == null && dcName == null)) {
+                shell.requiredArg(null, this);
+            }
+
+            try {
+                if (dcid == null) {
+                    dcid = CommandUtils.getDatacenterId(dcName, cs, this);
+                }
+                CommandUtils.ensureTopoExists(topoName, cs, this);
+                return cs.changeZoneArbiters(topoName, dcid, allowArbiters);
+            } catch (RemoteException re) {
+                cmd.noAdmin(re);
+            }
+            return "";
+        }
+
+        @Override
+        protected String getCommandSyntax() {
+            return "topology change-zone-arbiters -name <name> " + eolt +
+                "{-zn <id> | -znname <name>}  {-arbiter | -no-arbiter}";
+        }
+
+        @Override
+        protected String getCommandDescription() {
+            return
+                "Modifies the topology to change the arbiter attribute of " +
+                "the specified" + eolt + "zone.";
         }
     }
 

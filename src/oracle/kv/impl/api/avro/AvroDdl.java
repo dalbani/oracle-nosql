@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -86,11 +86,11 @@ public class AvroDdl {
             this.name = name;
             this.id = id;
         }
-        
+
         public AvroSchemaMetadata getMetadata() {
             return metadata;
         }
-        
+
         public String getName() {
             return name;
         }
@@ -145,7 +145,7 @@ public class AvroDdl {
             super(metadata, name, id);
             this.text = text;
         }
-        
+
         public String getText() {
             return text;
         }
@@ -258,6 +258,17 @@ public class AvroDdl {
 
     public AvroDdl(KVStore store) {
         this.accessor = new SchemaAccessor(store);
+    }
+
+    /**
+     * Returns a sorted map containing all the avro schemas in the kvstore
+     *
+     * @param includeDisabled if true disabled schemas will be included
+     */
+    public SortedMap<Integer, SchemaData>
+        getAllSchemas(boolean includeDisabled) {
+
+        return accessor.readAllSchemas(includeDisabled, Consistency.ABSOLUTE);
     }
 
     public SortedMap<String, SchemaSummary>

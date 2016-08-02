@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -92,7 +92,7 @@ public class ChangeGlobalSecurityParamsPlan extends AbstractPlan {
 
     private ParameterMap newParams = null;
     private Parameters currentParams;
-    private static final Set<AdminId> allAdminIds = new HashSet<AdminId>();
+    private static final Set<AdminId> allAdminIds = new HashSet<>();
 
     public ChangeGlobalSecurityParamsPlan(AtomicInteger idGenerator,
                                           String name,
@@ -229,7 +229,7 @@ public class ChangeGlobalSecurityParamsPlan extends AbstractPlan {
              * broadcast metadata on Admin to all RNs.
              */
             if (Utils.storeKerberosInfo(this, md)) {
-                addTask(new BroadcastMetadata<SecurityMetadata>(this, md));
+                addTask(new BroadcastMetadata<>(this, md));
             }
         } catch (Exception e) {
             throw new IllegalStateException(
@@ -255,7 +255,7 @@ public class ChangeGlobalSecurityParamsPlan extends AbstractPlan {
     }
 
     @Override
-    void stripForDisplay() {
+    public void stripForDisplay() {
         newParams = null;
         currentParams = null;
     }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,8 +45,10 @@ package oracle.kv.hadoop.hive.table;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
@@ -62,7 +64,12 @@ import oracle.kv.impl.util.ExternalDataSourceUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hive.ql.index.IndexPredicateAnalyzer;
+import org.apache.hadoop.hive.ql.index.IndexSearchCondition;
 import org.apache.hadoop.hive.ql.metadata.DefaultStorageHandler;
+import org.apache.hadoop.hive.ql.metadata.HiveStoragePredicateHandler;
+import org.apache.hadoop.hive.ql.plan.ExprNodeDesc;
+import org.apache.hadoop.hive.ql.plan.ExprNodeGenericFuncDesc;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
@@ -81,7 +88,8 @@ import org.apache.hadoop.mapred.JobConf;
  */
 abstract class TableStorageHandlerBase<K extends WritableComparable<?>,
                                        V extends Writable>
-                          extends DefaultStorageHandler {
+                          extends DefaultStorageHandler
+                          implements HiveStoragePredicateHandler {
 
     private static final Log LOG = LogFactory.getLog(
                        "oracle.kv.hadoop.hive.table.TableStorageHandlerBase");
@@ -254,7 +262,7 @@ abstract class TableStorageHandlerBase<K extends WritableComparable<?>,
             jobConf.set(
                 ParamConstant.PRIMARY_KEY.getName(), primaryKeyProperty);
         }
-        LOG.debug("primaryKeyProperty = " + primaryKeyProperty);
+        LOG.trace("primaryKeyProperty = " + primaryKeyProperty);
 
         /* For MultiRowOptions. */
         fieldRangeProperty = tableProperties.getProperty(
@@ -265,7 +273,7 @@ abstract class TableStorageHandlerBase<K extends WritableComparable<?>,
             jobConf.set(
                 ParamConstant.FIELD_RANGE.getName(), fieldRangeProperty);
         }
-        LOG.debug("fieldRangeProperty = " + fieldRangeProperty);
+        LOG.trace("fieldRangeProperty = " + fieldRangeProperty);
 
         /*
          * For TableIteratorOptions. Note that when doing PrimaryKey iteration,
@@ -280,7 +288,7 @@ abstract class TableStorageHandlerBase<K extends WritableComparable<?>,
                 ParamConstant.CONSISTENCY.getName(), consistencyStr);
             jobConf.set(ParamConstant.CONSISTENCY.getName(), consistencyStr);
         }
-        LOG.debug("consistency = " + consistencyStr);
+        LOG.trace("consistency = " + consistencyStr);
 
         final String timeoutStr = tableProperties.getProperty(
             ParamConstant.TIMEOUT.getName());
@@ -290,7 +298,7 @@ abstract class TableStorageHandlerBase<K extends WritableComparable<?>,
             jobProperties.put(ParamConstant.TIMEOUT.getName(), timeoutStr);
             jobConf.set(ParamConstant.TIMEOUT.getName(), timeoutStr);
         }
-        LOG.debug("timeout = " + timeout);
+        LOG.trace("timeout = " + timeout);
 
         final String maxRequestsStr = tableProperties.getProperty(
             ParamConstant.MAX_REQUESTS.getName());
@@ -308,7 +316,7 @@ abstract class TableStorageHandlerBase<K extends WritableComparable<?>,
                      "by system");
             }
         }
-        LOG.debug("maxRequests = " + maxRequests);
+        LOG.trace("maxRequests = " + maxRequests);
 
         final String batchSizeStr = tableProperties.getProperty(
             ParamConstant.BATCH_SIZE.getName());
@@ -326,7 +334,7 @@ abstract class TableStorageHandlerBase<K extends WritableComparable<?>,
                      "by system");
             }
         }
-        LOG.debug("batchSize = " + batchSize);
+        LOG.trace("batchSize = " + batchSize);
 
         final String maxBatchesStr = tableProperties.getProperty(
             ParamConstant.MAX_BATCHES.getName());
@@ -344,7 +352,7 @@ abstract class TableStorageHandlerBase<K extends WritableComparable<?>,
                      "by system");
             }
         }
-        LOG.debug("maxBatches = " + maxBatches);
+        LOG.trace("maxBatches = " + maxBatches);
 
         /* Handle properties related to security. */
         configureKVSecurityProperties(tableProperties, jobProperties);
@@ -486,5 +494,71 @@ abstract class TableStorageHandlerBase<K extends WritableComparable<?>,
                 }
             }
         }
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public DecomposedPredicate decomposePredicate(
+               JobConf jobConfig,
+               org.apache.hadoop.hive.serde2.Deserializer deserializer,
+               ExprNodeDesc predicate) {
+
+        /* Reset to default value (iterator scan by partitions not shards). */
+        TableHiveInputFormat.resetSplitOnShards();
+
+        /*
+         * The analyzer created below will be used to validate the components
+         * of the given predicate and separate them into two disjoint sets:
+         * A set of search conditions that correspond to either a valid
+         * PrimaryKey or IndexKey (and optional FieldRange) that can be
+         * scanned (in the backend KVStore server) using one of the
+         * TableIterators; and a set containing the remaining components
+         * of the predicate (the 'residual' predicate), which Hive will
+         * apply to the results returned after the search conditions have
+         * first been applied on (pushed to) the backend.
+         */
+        final IndexPredicateAnalyzer analyzer =
+            TableHiveInputFormat.sargablePredicateAnalyzer(
+                predicate, (TableSerDe) deserializer);
+
+        if (analyzer == null) {
+            /* Cannot push predicate, so all filtering is performed by Hive. */
+            LOG.debug("predicate analyzer = null ... NO PREDICATE PUSHDOWN");
+            return null;
+        }
+
+        /* Decompose predicate into search conditions and resisual. */
+        final List<IndexSearchCondition> searchConditions =
+            new ArrayList<IndexSearchCondition>();
+
+        final ExprNodeGenericFuncDesc residualPredicate =
+            (ExprNodeGenericFuncDesc) analyzer.analyzePredicate(
+                predicate, searchConditions);
+
+        final DecomposedPredicate decomposedPredicate =
+            new DecomposedPredicate();
+
+        decomposedPredicate.pushedPredicate =
+            analyzer.translateSearchConditions(searchConditions);
+        decomposedPredicate.residualPredicate = residualPredicate;
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("search conditions = " + searchConditions);
+            LOG.debug("predicate = " + decomposedPredicate.pushedPredicate);
+            LOG.debug("residual = " + decomposedPredicate.residualPredicate);
+        }
+
+        /*
+         * Valid search conditions and residual have been obtained.
+         * Determine whether the search conditions are index based or
+         * based on the table's primary key. If index based, then tell
+         * the InputFormat to build splits and scan (iterate) based on
+         * shards; otherwise, tell the InputFormat to base the iterator
+         * on partition sets.
+         */
+        TableHiveInputFormat.setSplitOnShards(
+            searchConditions, (TableSerDe) deserializer);
+
+        return decomposedPredicate;
     }
 }

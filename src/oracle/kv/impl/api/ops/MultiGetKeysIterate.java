@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,18 +43,12 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.util.ArrayList;
-import java.util.List;
 
 import oracle.kv.Depth;
 import oracle.kv.Direction;
 import oracle.kv.KeyRange;
-import oracle.kv.impl.api.ops.OperationHandler.KVAuthorizer;
-import oracle.kv.impl.topo.PartitionId;
-
-import com.sleepycat.je.Transaction;
 
 /**
  * A multi-get-keys-iterate operation.
@@ -78,28 +72,9 @@ public class MultiGetKeysIterate extends MultiKeyIterate {
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    MultiGetKeysIterate(ObjectInput in, short serialVersion)
+    MultiGetKeysIterate(DataInput in, short serialVersion)
         throws IOException {
 
         super(OpCode.MULTI_GET_KEYS_ITERATE, in, serialVersion);
-    }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          OperationHandler operationHandler) {
-
-        final KVAuthorizer kvAuth = checkPermission(operationHandler);
-
-        final List<byte[]> results = new ArrayList<byte[]>();
-
-        final boolean moreElements = operationHandler.iterateKeys
-            (txn, partitionId, getParentKey(), true /*majorPathComplete*/,
-             getSubRange(), getDepth(), getDirection(), getBatchSize(),
-             getResumeKey(), OperationHandler.CURSOR_READ_COMMITTED, results,
-             kvAuth);
-
-        return new Result.KeysIterateResult(getOpCode(), results,
-                                            moreElements);
     }
 }

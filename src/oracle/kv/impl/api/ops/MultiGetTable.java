@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,15 +44,10 @@
 package oracle.kv.impl.api.ops;
 
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.util.ArrayList;
-import java.util.List;
-
-import com.sleepycat.je.Transaction;
+import java.io.DataInput;
 
 import oracle.kv.KeyRange;
 import oracle.kv.impl.api.table.TargetTables;
-import oracle.kv.impl.topo.PartitionId;
 
 /**
  * A multi-get table operation over a set of records in the same partition.
@@ -74,29 +69,9 @@ public class MultiGetTable extends MultiGetTableOperation {
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    MultiGetTable(ObjectInput in, short serialVersion)
+    MultiGetTable(DataInput in, short serialVersion)
         throws IOException {
 
         super(OpCode.MULTI_GET_TABLE, in, serialVersion);
-    }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          final OperationHandler operationHandler) {
-
-        verifyTableAccess(operationHandler);
-
-        final List<ResultKeyValueVersion> results =
-            new ArrayList<ResultKeyValueVersion>();
-
-        final boolean moreElements =
-            iterateTable(operationHandler, txn, partitionId, getParentKey(),
-                         0, null, new TableScanValueVisitor(this,
-                                                            operationHandler,
-                                                            results));
-
-        assert (!moreElements);
-        return new Result.IterateResult(getOpCode(), results, moreElements);
     }
 }

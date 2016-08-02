@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -45,10 +45,15 @@ package oracle.kv.impl.api.table;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
-import oracle.kv.table.FieldDef;
 import oracle.kv.impl.util.JsonUtils;
+import oracle.kv.table.FieldDef;
+import oracle.kv.table.TimeToLive;
 
 import org.apache.avro.io.DecoderFactory;
 import org.apache.avro.io.EncoderFactory;
@@ -82,6 +87,8 @@ public class TableJsonUtils extends JsonUtils {
     final static String MAX_INCL = "max_inclusive";
     final static String COLLECTION = "collection";
     final static String ENUM_NAME = "enum_name";
+    final static String TTL = "ttl";
+    final static String PKEY_SIZES = "primaryKeySizes";
 
     /*
      * These are used for construction of JSON nodes representing FieldDef
@@ -170,36 +177,57 @@ public class TableJsonUtils extends JsonUtils {
         FieldDef.Type type = FieldDef.Type.valueOf(typeString);
         switch (type) {
         case INTEGER:
+            if (descString == null && minString == null && maxString == null) {
+                return FieldDefImpl.integerDef;
+            }
             return new IntegerDefImpl
                 (descString,
-                 minString != null ? Integer.valueOf(minString) : null,
-                 maxString != null ? Integer.valueOf(maxString) : null);
+                minString != null ? Integer.valueOf(minString) : null,
+                maxString != null ? Integer.valueOf(maxString) : null);
         case LONG:
+            if (descString == null && minString == null && maxString == null) {
+                return FieldDefImpl.longDef;
+            }
             return new LongDefImpl
                 (descString,
                  minString != null ? Long.valueOf(minString) : null,
                  maxString != null ? Long.valueOf(maxString) : null);
         case DOUBLE:
+            if (descString == null && minString == null && maxString == null) {
+                return FieldDefImpl.doubleDef;
+            }
             return new DoubleDefImpl
                 (descString,
                  minString != null ? Double.valueOf(minString) : null,
                  maxString != null ? Double.valueOf(maxString) : null);
         case FLOAT:
+            if (descString == null && minString == null && maxString == null) {
+                return FieldDefImpl.floatDef;
+            }
             return new FloatDefImpl
                 (descString,
                  minString != null ? Float.valueOf(minString) : null,
                  maxString != null ? Float.valueOf(maxString) : null);
         case STRING:
+            if (descString == null && minString == null && maxString == null) {
+                return FieldDefImpl.stringDef;
+            }
             Boolean minInclusive = getBoolean(node, MIN_INCL);
             Boolean maxInclusive = getBoolean(node, MAX_INCL);
             return new StringDefImpl
                 (descString, minString, maxString, minInclusive, maxInclusive);
         case BINARY:
+            if (descString == null) {
+                return FieldDefImpl.binaryDef;
+            }
             return new BinaryDefImpl(descString);
         case FIXED_BINARY:
             int size = (sizeString == null ? 0 : Integer.valueOf(sizeString));
             return new FixedBinaryDefImpl(nameString, size, descString);
         case BOOLEAN:
+            if (descString == null) {
+                return FieldDefImpl.booleanDef;
+            }
             return new BooleanDefImpl(descString);
         case ARRAY:
         case MAP:
@@ -247,34 +275,46 @@ public class TableJsonUtils extends JsonUtils {
             }
             return new EnumDefImpl(enumName, values, descString);
         }
+        case ANY:
+            return FieldDefImpl.anyDef;
+        case ANY_ATOMIC:
+            return FieldDefImpl.anyAtomicDef;
+        case ANY_RECORD:
+            return FieldDefImpl.anyRecordDef;
+        case EMPTY:
+        default:
+            throw new IllegalArgumentException
+                ("Cannot construct FieldDef type from JSON: " + type);
         }
-        throw new IllegalArgumentException
-            ("Cannot construct FieldDef type from JSON: " + type);
     }
 
     /**
      * Adds an index definition from the ObjectNode (JSON) to the table.
      */
     static void indexFromJsonNode(ObjectNode node, TableImpl table) {
-        ArrayNode fields = (ArrayNode) node.get("fields");
+        ArrayNode fields = (ArrayNode) node.get(FIELDS);
         ArrayList<String> fieldStrings = new ArrayList<String>(fields.size());
         for (int i = 0; i < fields.size(); i++) {
             fieldStrings.add(fields.get(i).asText());
         }
         String name = getStringFromNode(node, NAME, true);
         String desc = getStringFromNode(node, DESC, false);
-        table.addIndex(new IndexImpl(name, table, fieldStrings, desc));
+        Map<String,String> annotations = getMapFromNode(node, "annotations");
+        Map<String,String> properties = getMapFromNode(node, "properties");
+        table.addIndex(new IndexImpl(name, table, fieldStrings,
+                                     annotations, properties, desc));
     }
 
     /**
      * Build Table from JSON string
      *
-     * NOTE: as of R3 this is used only for test purposes, along with the
-     * methods it calls.  In the future there may be public methods to
-     * construct tables from JSON.
+     * NOTE: this format was test-only in R3, but export/import has made use
+     * of it for R4. This means that changes must be made carefully and if
+     * state is added to a table or index it needs to be reflected in the JSON
+     * format.
      */
-    protected static TableImpl fromJsonString(String jsonString,
-                                              TableImpl parent) {
+    public static TableImpl fromJsonString(String jsonString,
+                                           TableImpl parent) {
         JsonNode rootNode = null;
         try {
             rootNode = getObjectMapper().readTree(jsonString);
@@ -289,7 +329,7 @@ public class TableJsonUtils extends JsonUtils {
         TableBuilder tb =
             TableBuilder.createTableBuilder
             (rootNode.get(NAME).asText(),
-             rootNode.get(DESC).asText(),
+             null, /* handle description below */
              parent, true);
 
         /*
@@ -300,14 +340,42 @@ public class TableJsonUtils extends JsonUtils {
             tb.shardKey(makeListFromArray(rootNode, "shardKey"));
         }
 
+        if (rootNode.get(DESC) != null) {
+            tb.setDescription(rootNode.get(DESC).asText());
+        }
+
         if (rootNode.get("r2compat") != null) {
             tb.setR2compat(true);
+        }
+
+        if (rootNode.get(TTL) != null) {
+            String ttlString = rootNode.get(TTL).asText();
+            String[] ttlArray = ttlString.split(" ");
+            if (ttlArray.length != 2) {
+                throw new IllegalArgumentException(
+                    "Invalid value for ttl string: " + ttlString);
+            }
+            tb.setDefaultTTL(TimeToLive.createTimeToLive(
+                          Long.parseLong(ttlArray[0]),
+                          TimeUnit.valueOf(ttlArray[1])));
+        }
+
+        if (rootNode.get(PKEY_SIZES) != null) {
+            ArrayNode pks = (ArrayNode) rootNode.get(PKEY_SIZES);
+            List<String> pkey = tb.getPrimaryKey();
+            assert pks.size() == pkey.size();
+            for (int i = 0; i < pks.size(); i++) {
+                int size = pks.get(i).asInt();
+                if (size > 0) {
+                    tb.primaryKeySize(pkey.get(i), size);
+                }
+            }
         }
 
         /*
          * Add fields.
          */
-        ArrayNode arrayNode = (ArrayNode) rootNode.get("fields");
+        ArrayNode arrayNode = (ArrayNode) rootNode.get(FIELDS);
         for (int i = 0; i < arrayNode.size(); i++) {
             ObjectNode node = (ObjectNode) arrayNode.get(i);
             String fieldName =
@@ -363,5 +431,33 @@ public class TableJsonUtils extends JsonUtils {
                 ("Missing required node in JSON table representation: " + name);
         }
         return null;
+    }
+
+    /**
+     * Returns a Map<String, String> of the named field in the ObjectNode
+     * if it exists, otherwise null.
+     * @param node the containing node
+     * @param name the name of the field in the node
+     * @return a map of the name/value pairs in the object, or null
+     * @throws IllegalArgumentException if the node exists and it's not an
+     * ObjectNode
+     */
+    private static Map<String,String> getMapFromNode(ObjectNode node,
+                                                     String name) {
+        JsonNode jnode = node.get(name);
+        if (jnode == null) {
+            return null;
+        }
+        if (!(jnode instanceof ObjectNode)) {
+            throw new IllegalArgumentException("Node is not an ObjectNode: " +
+                                               name);
+        }
+        Map<String, String> map = new HashMap<String, String>();
+        Iterator<Map.Entry<String, JsonNode>> iter = jnode.getFields();
+        while (iter.hasNext()) {
+            Map.Entry<String, JsonNode> entry = iter.next();
+            map.put(entry.getKey(), entry.getValue().asText());
+        }
+        return map;
     }
 }

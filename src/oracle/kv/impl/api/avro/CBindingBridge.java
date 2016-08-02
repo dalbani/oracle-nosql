@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -51,6 +51,7 @@ import oracle.kv.avro.UndefinedSchemaException;
 /**
  * Provides caching of the C schema and other utilities needed by the C API.
  */
+@SuppressWarnings("deprecation")
 public interface CBindingBridge {
 
     /**
@@ -79,6 +80,7 @@ public interface CBindingBridge {
      * @throws IllegalArgumentException if the given schema text cannot be
      * parsed.
      */
+    @SuppressWarnings("javadoc")
     public Schema putSchema(String schemaText, long cSchema)
         throws UndefinedSchemaException, IllegalArgumentException;
 
@@ -96,6 +98,7 @@ public interface CBindingBridge {
      * in the store.  If the Java schema was obtained from
      * RawAvroBinding.toObject().getSchema(), this should never happen.
      */
+    @SuppressWarnings("javadoc")
     public long getCSchema(Schema javaSchema)
         throws UndefinedSchemaException;
 
@@ -113,6 +116,7 @@ public interface CBindingBridge {
      * in the store.  If the Java schema was obtained from
      * RawAvroBinding.toObject().getSchema(), this should never happen.
      */
+    @SuppressWarnings("javadoc")
     public long putSchema(Schema javaSchema, long cSchema)
         throws UndefinedSchemaException;
 

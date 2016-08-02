@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -121,6 +121,7 @@ import oracle.kv.impl.util.ConfigurableService.ServiceStatus;
 import oracle.kv.impl.util.FileNames;
 import oracle.kv.impl.util.SerialVersion;
 import oracle.kv.impl.util.registry.VersionedRemoteImpl;
+import oracle.kv.table.TimeToLive;
 import oracle.kv.util.ErrorMessage;
 
 import com.sleepycat.je.DatabaseException;
@@ -586,6 +587,26 @@ public class CommandServiceImpl
     }
 
     @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.SYSOPER })
+    public String changeZoneArbiters(final String candidateName,
+                                     final DatacenterId dcId,
+                                     final boolean allowArbiters,
+                                     AuthContext authCtx,
+                                     short serialVersion) {
+        return aservice.getFaultHandler().execute
+        (new ProcessFaultHandler.SimpleOperation<String>() {
+
+            @Override
+            public String execute() {
+                requireConfigured();
+                return admin.changeZoneArbiters(candidateName,
+                                                dcId,
+                                                allowArbiters);
+            }
+        });
+    }
+
+    @Override
     @SecureR2Method
     public String redistributeTopology(final String candidateName,
                                        final String snPoolName,
@@ -955,7 +976,6 @@ public class CommandServiceImpl
      * Note that datacenterComment is unused, and is deprecated as of R2.  This
      * method is only used by R2 and earlier clients.
      */
-    // TBD:DELETE??
     @Override
     @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.SYSOPER })
     public int createDeployDatacenterPlan(final String planName,
@@ -964,24 +984,13 @@ public class CommandServiceImpl
                                           final String datacenterComment,
                                           AuthContext authCtx,
                                           short serialVersion) {
-
-        return aservice.getFaultHandler().execute
-            (new ProcessFaultHandler.SimpleOperation<Integer>() {
-
-            @Override
-            public Integer execute() {
-                requireConfigured();
-                try {
-                    Rules.validateReplicationFactor(repFactor);
-                } catch (IllegalArgumentException iae) {
-                    throw new IllegalCommandException("Bad replication factor",
-                                                      iae);
-                }
-                return admin.getPlanner().createDeployDatacenterPlan
-                    (planName, datacenterName, repFactor,
-                     DatacenterType.PRIMARY);
-            }
-        });
+        return createDeployDatacenterPlan(planName,
+                                          datacenterName,
+                                          repFactor,
+                                          DatacenterType.PRIMARY,
+                                          false /* allowArbiters */,
+                                          authCtx,
+                                          serialVersion);
     }
 
     @Override
@@ -1002,6 +1011,24 @@ public class CommandServiceImpl
                                           final DatacenterType datacenterType,
                                           AuthContext authCtx,
                                           final short serialVersion) {
+        return createDeployDatacenterPlan(planName,
+                                          datacenterName,
+                                          repFactor,
+                                          datacenterType,
+                                          false /* allowArbiters */,
+                                          authCtx,
+                                          serialVersion);
+    }
+
+    @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.SYSOPER })
+    public int createDeployDatacenterPlan(final String planName,
+                                          final String datacenterName,
+                                          final int repFactor,
+                                          final DatacenterType datacenterType,
+                                          final boolean allowArbiters,
+                                          AuthContext authCtx,
+                                          final short serialVersion) {
 
         return aservice.getFaultHandler().execute(
             new ProcessFaultHandler.SimpleOperation<Integer>() {
@@ -1011,11 +1038,20 @@ public class CommandServiceImpl
                     try {
                         Rules.validateReplicationFactor(repFactor);
                     } catch (IllegalArgumentException iae) {
-                        throw new IllegalCommandException("Bad replication factor",
-                                                      iae);
+                        throw new IllegalCommandException(
+                            "Bad replication factor", iae);
+                    }
+
+                    try {
+                        Rules.validateArbiter(allowArbiters, datacenterType);
+                    } catch (IllegalArgumentException iae) {
+                        throw new IllegalCommandException(
+                           "Secondary datacenters do not allow Arbiters.",
+                           iae);
                     }
                     return admin.getPlanner().createDeployDatacenterPlan
-                        (planName, datacenterName, repFactor, datacenterType);
+                        (planName, datacenterName, repFactor,
+                         datacenterType, allowArbiters);
                 }
             });
     }
@@ -1406,6 +1442,26 @@ public class CommandServiceImpl
     }
 
     @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.SYSOPER })
+    public int createChangeAllANParamsPlan(final String planName,
+                                           final DatacenterId dcid,
+                                           final ParameterMap newParams,
+                                           AuthContext authCtx,
+                                           short serialVersion) {
+
+        return aservice.getFaultHandler().execute
+            (new ProcessFaultHandler.SimpleOperation<Integer>() {
+
+            @Override
+            public Integer execute() {
+                requireConfigured();
+                return admin.getPlanner().
+                    createChangeAllANParamsPlan(planName, dcid, newParams);
+            }
+        });
+    }
+
+    @Override
     @SecureR2Method
     public int createChangeAllAdminsPlan(final String planName,
                                          final DatacenterId dcid,
@@ -1678,6 +1734,9 @@ public class CommandServiceImpl
         });
     }
 
+    /*
+     * The pre-4.0 version
+     */
     @Override
     @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.CREATE_ANY_TABLE })
     public int createAddTablePlan(final String planName,
@@ -1685,12 +1744,35 @@ public class CommandServiceImpl
                                   final String parentName,
                                   final FieldMap fieldMap,
                                   final List<String> primaryKey,
-                                  final List<String> majorKey,
+                                  final List<String> shardKey,
                                   final boolean r2compat,
                                   final int schemaId,
                                   final String description,
                                   AuthContext authCtx,
                                   short serialVersion) {
+
+        return createAddTablePlan(planName, tableName, parentName,
+                                  fieldMap, primaryKey, null,
+                                  shardKey, null, r2compat, schemaId,
+                                  description, authCtx, serialVersion);
+    }
+
+    @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.CREATE_ANY_TABLE })
+    public int createAddTablePlan(final String planName,
+                                  final String tableName,
+                                  final String parentName,
+                                  final FieldMap fieldMap,
+                                  final List<String> primaryKey,
+                                  final List<Integer> primaryKeySizes,
+                                  final List<String> shardKey,
+                                  final TimeToLive ttl,
+                                  final boolean r2compat,
+                                  final int schemaId,
+                                  final String description,
+                                  AuthContext authCtx,
+                                  final short serialVersion) {
+
 
        return aservice.getFaultHandler().execute
             (new ProcessFaultHandler.SimpleOperation<Integer>() {
@@ -1701,12 +1783,23 @@ public class CommandServiceImpl
                 if (schemaId != 0) {
                     validateSchemaId(schemaId);
                 }
+                TableImpl table = TableImpl.createTable(
+                    tableName,
+                    null,
+                    primaryKey,
+                    primaryKeySizes,
+                    shardKey,
+                    fieldMap,
+                    r2compat,
+                    schemaId,
+                    description,
+                    true,
+                    null,
+                    ttl,
+                    false);
+
                 return admin.getPlanner().
-                    createAddTablePlan(planName, tableName,
-                                       parentName, fieldMap,
-                                       primaryKey,
-                                       majorKey, r2compat,
-                                       schemaId, description);
+                    createAddTablePlan(planName, table, parentName);
             }
         });
     }
@@ -1807,6 +1900,21 @@ public class CommandServiceImpl
             }
         });
     }
+    
+    /*
+     * The pre-4.0 version (without TimeToLive argument).
+     */
+    @Override
+    @SecureInternalMethod
+    public int createEvolveTablePlan(final String planName,
+                                     final String tableName,
+                                     final int tableVersion,
+                                     final FieldMap fieldMap,
+                                     AuthContext authCtx,
+                                     short serialVersion) {
+        return createEvolveTablePlan(planName, tableName, tableVersion,
+                fieldMap, null, authCtx, serialVersion);
+    }
 
     @Override
     @SecureInternalMethod
@@ -1814,6 +1922,7 @@ public class CommandServiceImpl
                                      final String tableName,
                                      final int tableVersion,
                                      final FieldMap fieldMap,
+                                     final TimeToLive ttl,
                                      AuthContext authCtx,
                                      short serialVersion) {
 
@@ -1833,7 +1942,7 @@ public class CommandServiceImpl
 
                 return admin.getPlanner().
                     createEvolveTablePlan(planName, tableName, tableVersion,
-                                          fieldMap);
+                                          fieldMap, ttl);
             }
         });
     }
@@ -3606,4 +3715,51 @@ public class CommandServiceImpl
             return SystemPrivilege.internalPrivList;
         }
     }
+
+    /**
+     * Creates a plan to inform the Store of the existence of an ES node, and
+     * stores it by its plan id.
+     */
+    @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.SYSOPER })
+    public int createRegisterESClusterPlan(final String planName,
+                                           final String clusterName,
+                                           final String transportHp,
+                                           final boolean forceClear,
+                                           AuthContext authCtx,
+                                           short serialVersion) {
+        return aservice.getFaultHandler().execute
+            (new ProcessFaultHandler.SimpleOperation<Integer>() {
+
+            @Override
+            public Integer execute() {
+                requireConfigured();
+                return admin.getPlanner().createRegisterESClusterPlan
+                    (planName, clusterName, transportHp, forceClear);
+            }
+        });
+    }
+
+    /**
+     * Creates a plan to cause the Store to forget about a registered ES
+     * cluster.  Only one cluster may be registered, so no identifying
+     * information is needed.
+     */
+    @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.SYSOPER })
+    public int createDeregisterESClusterPlan(final String planName,
+                                             AuthContext authCtx,
+                                             short serialVersion) {
+        return aservice.getFaultHandler().execute
+            (new ProcessFaultHandler.SimpleOperation<Integer>() {
+
+            @Override
+            public Integer execute() {
+                requireConfigured();
+                return admin.getPlanner().createDeregisterESClusterPlan
+                    (planName);
+            }
+        });
+    }
+
 }

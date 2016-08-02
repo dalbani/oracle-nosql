@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -46,6 +46,7 @@ package oracle.kv.impl.monitor;
 import java.io.Serializable;
 import java.rmi.RemoteException;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 /**
@@ -160,12 +161,14 @@ public abstract class Tracker<T> {
 
         long interesting = lastTimestampGiven;
 
-        for (TrackerListener tl : listeners) {
+        final Iterator<TrackerListener> iter = listeners.iterator();
+        while (iter.hasNext()) {
+            final TrackerListener tl = iter.next();
             long candidate;
             try {
                 candidate = tl.getInterestingTime();
             } catch (RemoteException re) {
-                listeners.remove(tl);
+                iter.remove();
                 continue;
             }
 

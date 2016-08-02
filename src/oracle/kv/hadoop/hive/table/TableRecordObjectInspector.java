@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -78,8 +78,21 @@ public class TableRecordObjectInspector extends StandardStructObjectInspector {
      * the parent class.
      */
 
+    protected static final String DEFAULT_FIELD_NAME = "";
+
+    private static final List<String> DEFAULT_FIELD_NAME_LIST =
+        new ArrayList<String>();
+
+    private static final List<ObjectInspector> DEFAULT_OI_LIST =
+        new ArrayList<ObjectInspector>();
+
+    static {
+        DEFAULT_FIELD_NAME_LIST.add(DEFAULT_FIELD_NAME);
+        DEFAULT_OI_LIST.add(null);
+    }
+
     TableRecordObjectInspector() {
-        super();
+        super(DEFAULT_FIELD_NAME_LIST, DEFAULT_OI_LIST);
     }
 
     TableRecordObjectInspector(
@@ -158,7 +171,7 @@ public class TableRecordObjectInspector extends StandardStructObjectInspector {
             }
             return list.get(fieldID);
 
-        } else {
+        } else if (data instanceof Object[]) {
 
             final Object[] arr = (Object[]) data;
             final int nFields = arr.length;
@@ -198,10 +211,41 @@ public class TableRecordObjectInspector extends StandardStructObjectInspector {
             final List<Object> list = (List<Object>) data;
             assert (list.size() == fields.size());
             return list;
-        } else {
+        } else if (data instanceof Object[]) {
             final Object[] arr = (Object[]) data;
             assert (arr.length == fields.size());
             return Arrays.asList(arr);
+        }
+        throw new IllegalArgumentException(
+                      "invalid input object: must be Object[], " +
+                      "List, or RecordValue");
+    }
+
+    /**
+     * Special class provided to support testing the 
+     * <code>getStructFieldData</code> method; which casts the given
+     * <code>StructField</code> parameter to the <code>MyField</code>
+     * nested class of the <code>StandardStructObjectInspector</code>
+     * class. Tests can create an instance or subclass of this class
+     * to be input to that method, and the cast that is performed will
+     * be allowed.
+     */
+    protected static class TableStructField extends MyField {
+        public TableStructField() {
+            this(0, "", null);
+        }
+
+        public TableStructField(int fieldId,
+                               String fieldName,
+                               ObjectInspector fieldObjectInspector) {
+            super(fieldId, fieldName, fieldObjectInspector);
+        }
+
+        public TableStructField(int fieldId,
+                               String fieldName,
+                               ObjectInspector fieldObjectInspector,
+                               String fieldComment) {
+            super(fieldId, fieldName, fieldObjectInspector, fieldComment);
         }
     }
 }

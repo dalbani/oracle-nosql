@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,20 +43,11 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.util.ArrayList;
-import java.util.List;
 
 import oracle.kv.impl.api.StoreIteratorParams;
 import oracle.kv.impl.api.table.TargetTables;
-import oracle.kv.impl.topo.PartitionId;
-
-import com.sleepycat.je.Cursor;
-import com.sleepycat.je.DatabaseEntry;
-import com.sleepycat.je.LockMode;
-import com.sleepycat.je.OperationStatus;
-import com.sleepycat.je.Transaction;
 
 /**
  * Iterate over table keys where the records may or may not reside on
@@ -77,81 +68,9 @@ public class TableKeysIterate extends TableIterateOperation {
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    TableKeysIterate(ObjectInput in, short serialVersion)
+    TableKeysIterate(DataInput in, short serialVersion)
         throws IOException {
 
         super(OpCode.TABLE_KEYS_ITERATE, in, serialVersion);
-    }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          final OperationHandler operationHandler) {
-
-        verifyTableAccess(operationHandler);
-
-        final List<byte[]> results = new ArrayList<byte[]>();
-
-        final boolean moreElements = iterateTable
-            (operationHandler,
-             txn,
-             partitionId,
-             getMajorComplete(),
-             getDirection(),
-             getBatchSize(),
-             getResumeKey(),
-             OperationHandler.CURSOR_READ_COMMITTED,
-             LockMode.READ_UNCOMMITTED_ALL,
-             new OperationHandler.ScanVisitor() {
-
-                 @Override
-                 public int visit(Cursor cursor,
-                                  DatabaseEntry keyEntry,
-                                  DatabaseEntry dataEntry) {
-
-                     /*
-                      * 1.  check to see if key is part of table
-                      * 2.  if so:
-                      *  - add to results
-                      */
-                     int match = keyInTargetTable(operationHandler,
-                                                  keyEntry,
-                                                  dataEntry,
-                                                  cursor);
-                     if (match > 0) {
-
-                         /*
-                          * The iteration was done using READ_UNCOMMITTED_ALL so
-                          * it's necessary to call getCurrent() here to lock
-                          * the record.  The original DatabaseEntry is used
-                          * to avoid fetching data.  It had setPartial() called
-                          * on it.
-                          */
-                         assert dataEntry.getPartial();
-                         if (cursor.getCurrent
-                             (keyEntry, dataEntry,
-                              LockMode.DEFAULT) == OperationStatus.SUCCESS) {
-                             /*
-                              * Add ancestor table results.  These appear
-                              * before targets, even for reverse iteration.
-                              */
-                             match += addAncestorKeys(cursor,
-                                                      results,
-                                                      keyEntry);
-                             addKeyResult(results, keyEntry.getData());
-                         }
-                     }
-                     return match;
-                 }
-             });
-        /*
-         * Table iteration filters results on the server side so some records
-         * may be skipped.  This voids the moreElements logic in
-         * OperationHandler.scan() so if moreElements is true but there are no
-         * actual results in the current set, reset moreElements to false.
-         */
-        boolean more = (moreElements && results.size() == 0) ? false :
-            moreElements;
-        return new Result.KeysIterateResult(getOpCode(), results, more);
     }
 }

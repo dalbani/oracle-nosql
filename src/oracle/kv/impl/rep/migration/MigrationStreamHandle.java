@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -156,8 +156,10 @@ public class MigrationStreamHandle {
      * @param key
      * @param value
      * @param vlsn
+     * @param expirationTime
      */
-    public void addPut(DatabaseEntry key, DatabaseEntry value, long vlsn) {
+    public void addPut(DatabaseEntry key, DatabaseEntry value,
+                       long vlsn, long expirationTime) {
         /* NOOP */
     }
 
@@ -228,11 +230,13 @@ public class MigrationStreamHandle {
         }
 
         @Override
-        public void addPut(DatabaseEntry key, DatabaseEntry value, long vlsn) {
+        public void addPut(DatabaseEntry key, DatabaseEntry value,
+                           long vlsn, long expirationTime) {
             assert !prepared;
             assert key != null;
             assert value != null;
-            if (source.sendPut(txn.getId(), key, value, vlsn)) {
+            if (source.sendPut(txn.getId(), key, value,
+                               vlsn, expirationTime)) {
                 opsSent++;
             }
         }

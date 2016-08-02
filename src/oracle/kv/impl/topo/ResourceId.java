@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,9 +43,9 @@
 
 package oracle.kv.impl.topo;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 import java.io.Serializable;
 import java.util.Arrays;
 import java.util.EnumSet;
@@ -73,7 +73,7 @@ public abstract class ResourceId implements Serializable, FastExternalizable {
     public static enum ResourceType {
         DATACENTER() {
             @Override
-            ResourceId readResourceId(ObjectInput in, short serialVersion)
+            ResourceId readResourceId(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new DatacenterId(in, serialVersion);
@@ -86,7 +86,7 @@ public abstract class ResourceId implements Serializable, FastExternalizable {
         },
         STORAGE_NODE() {
             @Override
-            ResourceId readResourceId(ObjectInput in, short serialVersion)
+            ResourceId readResourceId(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new StorageNodeId(in, serialVersion);
@@ -99,7 +99,7 @@ public abstract class ResourceId implements Serializable, FastExternalizable {
         },
         REP_GROUP() {
             @Override
-            ResourceId readResourceId(ObjectInput in, short serialVersion)
+            ResourceId readResourceId(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new RepGroupId(in, serialVersion);
@@ -112,7 +112,7 @@ public abstract class ResourceId implements Serializable, FastExternalizable {
         },
         REP_NODE() {
             @Override
-            ResourceId readResourceId(ObjectInput in, short serialVersion)
+            ResourceId readResourceId(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new RepNodeId(in, serialVersion);
@@ -125,7 +125,7 @@ public abstract class ResourceId implements Serializable, FastExternalizable {
         },
         PARTITION() {
             @Override
-            ResourceId readResourceId(ObjectInput in, short serialVersion)
+            ResourceId readResourceId(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new PartitionId(in, serialVersion);
@@ -138,7 +138,7 @@ public abstract class ResourceId implements Serializable, FastExternalizable {
         },
         ADMIN() {
             @Override
-            ResourceId readResourceId(ObjectInput in, short serialVersion)
+            ResourceId readResourceId(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new AdminId(in, serialVersion);
@@ -151,7 +151,7 @@ public abstract class ResourceId implements Serializable, FastExternalizable {
         },
         CLIENT() {
             @Override
-            ResourceId readResourceId(ObjectInput in, short serialVersion)
+            ResourceId readResourceId(DataInput in, short serialVersion)
                 throws IOException {
 
                 return new ClientId(in, serialVersion);
@@ -161,10 +161,22 @@ public abstract class ResourceId implements Serializable, FastExternalizable {
             public boolean isClient() {
                 return true;
             }
+        },
+        ARB_NODE() {
+            @Override
+            ResourceId readResourceId(DataInput in, short serialVersion)
+                throws IOException {
+
+                return new ArbNodeId(in, serialVersion);
+            }
+
+            @Override
+            public boolean isArbNode() {
+                return true;
+            }
         };
 
-        abstract ResourceId readResourceId(ObjectInput in,
-                                           short serialVersion)
+        abstract ResourceId readResourceId(DataInput in, short serialVersion)
             throws IOException;
 
         /**
@@ -191,6 +203,10 @@ public abstract class ResourceId implements Serializable, FastExternalizable {
         }
 
         public boolean isAdmin() {
+            return false;
+        }
+
+        public boolean isArbNode() {
             return false;
         }
 
@@ -298,14 +314,14 @@ public abstract class ResourceId implements Serializable, FastExternalizable {
      *
      * The ResourceType was read by readFastExternal.
      */
-    public ResourceId(@SuppressWarnings("unused") ObjectInput in,
+    public ResourceId(@SuppressWarnings("unused") DataInput in,
                       @SuppressWarnings("unused") short serialVersion) {
     }
 
     /**
      * FastExternalizable factory for all ResourceId subclasses.
      */
-    public static ResourceId readFastExternal(ObjectInput in,
+    public static ResourceId readFastExternal(DataInput in,
                                               short serialVersion)
         throws IOException {
 
@@ -318,7 +334,7 @@ public abstract class ResourceId implements Serializable, FastExternalizable {
      * writing additional elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         out.writeByte(getType().ordinal());

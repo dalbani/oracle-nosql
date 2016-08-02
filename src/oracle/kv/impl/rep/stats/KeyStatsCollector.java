@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2014 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -165,10 +165,14 @@ public class KeyStatsCollector implements ParameterListener {
              */
             if (scanningThread == null || scanningThread.isStopping()) {
                 scanningThread = new ScanningThread();
+                logger.log(Level.INFO, "Start statistics gathering: {0}",
+                           scanningThread );
                 scanningThread.start();
             }
         } else {
             if (scanningThread != null) {
+                logger.log(Level.INFO, "Stop statistics gathering: {0}",
+                           scanningThread );
                 scanningThread.stopScan();
             }
         }
@@ -527,11 +531,7 @@ public class KeyStatsCollector implements ParameterListener {
                 return;
             }
 
-            logger.log(Level.FINE, "Delete obsolete statistics from " +
-                        "statistics tables");
-            /*
-             * Get all tables include top tables and inner tables
-             */
+            /*  Get all tables include top tables and inner tables */
             tableListMap = getAllTables();
             if (tableListMap == null) {
                 return;
@@ -592,6 +592,7 @@ public class KeyStatsCollector implements ParameterListener {
              */
             final TableIterator<PrimaryKey> itr =
                     tableAPI.tableKeysIterator(primaryKey,  null, null);
+            int numDeletedRecords = 0;
 
             try {
                 while (itr.hasNext() && !stop) {
@@ -602,7 +603,13 @@ public class KeyStatsCollector implements ParameterListener {
                         if (!tableListMap.containsKey(storedTableName) &&
                             !storedTableName.equals(
                                     PartitionScan.KV_STATS_TABLE_NAME)) {
-                            tableAPI.delete(pk, null, null);
+                            /*
+                             * Increase numDeletedRecord only when deleting
+                             * successfully
+                             */
+                            if(tableAPI.delete(pk, null, null)) {
+                                numDeletedRecords++;
+                            }
                         }
                     } catch (DurabilityException |
                              RequestTimeoutException ignore) {
@@ -611,6 +618,15 @@ public class KeyStatsCollector implements ParameterListener {
                 }
             } finally {
                 itr.close();
+            }
+
+            String tableName = primaryKey.getTable().getFullName();
+            if (numDeletedRecords == 1) {
+                logger.log(Level.INFO, "Deleted " + numDeletedRecords +
+                           " record of obsolete statistics from " + tableName);
+            } else if (numDeletedRecords > 1) {
+                logger.log(Level.INFO, "Deleted " + numDeletedRecords +
+                           " records of obsolete statistics from " + tableName);
             }
         }
 
@@ -638,6 +654,7 @@ public class KeyStatsCollector implements ParameterListener {
              */
             final TableIterator<PrimaryKey> itr =
                     tableAPI.tableKeysIterator(primaryKey, null, null);
+            int numDeletedRecords = 0;
 
             try {
                 while (itr.hasNext() && !stop) {
@@ -651,7 +668,13 @@ public class KeyStatsCollector implements ParameterListener {
                                 tableListMap.get(storedTableName);
                         if (table != null) {
                             if (table.getIndex(storedIndexName) == null) {
-                                tableAPI.delete(pk, null, null);
+                                /*
+                                 * Increase numDeletedRecord only when deleting
+                                 * successfully
+                                 */
+                                if(tableAPI.delete(pk, null, null)) {
+                                    numDeletedRecords++;
+                                }
                             }
                         }
                     } catch (DurabilityException |
@@ -661,6 +684,15 @@ public class KeyStatsCollector implements ParameterListener {
                 }
             } finally {
                 itr.close();
+            }
+
+            String tableName = primaryKey.getTable().getFullName();
+            if (numDeletedRecords == 1) {
+                logger.log(Level.INFO, "Deleted " + numDeletedRecords +
+                           " record of obsolete statistics from " + tableName);
+            } else if (numDeletedRecords > 1) {
+                logger.log(Level.INFO, "Deleted " + numDeletedRecords +
+                           " records of obsolete statistics from " + tableName);
             }
         }
 
@@ -796,13 +828,20 @@ public class KeyStatsCollector implements ParameterListener {
                 for (final Map.Entry<String, Index> entry :
                     table.getIndexes().entrySet()) {
 
+                    final Index index = entry.getValue();
+
+                    /* skip all text indices */
+                    if (index.getType().equals(Index.IndexType.TEXT)) {
+                        continue;
+                    }
+
                     /* Check whether can scanning */
                     if (stop) {
                         return;
                     }
 
                     final String tableName = table.getFullName();
-                    final String indexName = entry.getValue().getName();
+                    final String indexName = index.getName();
 
                     /*
                      * Create LeaseInfo for scanning of selected index

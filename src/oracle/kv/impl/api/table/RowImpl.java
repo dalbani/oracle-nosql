@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -57,6 +57,7 @@ import oracle.kv.table.RecordDef;
 import oracle.kv.table.Row;
 import oracle.kv.table.Table;
 import oracle.kv.table.TableAPI;
+import oracle.kv.table.TimeToLive;
 
 /**
  * RowImpl is a specialization of RecordValue to represent a single record,
@@ -68,10 +69,26 @@ import oracle.kv.table.TableAPI;
  * operations.
  */
 public class RowImpl extends RecordValueImpl implements Row {
+
     private static final long serialVersionUID = 1L;
+
     protected final TableImpl table;
+
     private Version version;
+
     private int tableVersion;
+
+    /*
+     * A special expiration time of -1 is used to indicate that this value
+     * is not valid. This is internal use only and never returned to users.
+     */
+    private long expirationTime;
+
+    private TimeToLive ttl;
+
+    public RowImpl() {
+        table = null;
+    }
 
     RowImpl(RecordDef field, TableImpl table) {
         super(field);
@@ -79,6 +96,7 @@ public class RowImpl extends RecordValueImpl implements Row {
         this.table = table;
         version = null;
         tableVersion = 0;
+        expirationTime = -1;
     }
 
     RowImpl(RecordDef field, TableImpl table, Map<String, FieldValue> fieldMap) {
@@ -87,6 +105,7 @@ public class RowImpl extends RecordValueImpl implements Row {
         this.table = table;
         version = null;
         tableVersion = 0;
+        expirationTime = -1;
     }
 
     RowImpl(RowImpl other) {
@@ -94,6 +113,8 @@ public class RowImpl extends RecordValueImpl implements Row {
         this.table = other.table;
         this.version = other.version;
         this.tableVersion = other.tableVersion;
+        this.expirationTime = other.expirationTime;
+        this.ttl = other.ttl;
     }
 
     /**
@@ -164,7 +185,8 @@ public class RowImpl extends RecordValueImpl implements Row {
         return table.createKey(this, allowPartial);
     }
 
-    TableImpl getTableImpl() {
+    /* public for query processor */
+    public TableImpl getTableImpl() {
         return table;
     }
 
@@ -175,11 +197,14 @@ public class RowImpl extends RecordValueImpl implements Row {
      *
      * @param keyOnly set to true if only primary key fields should be
      * copied/cloned.
+     *
+     * public for access from api/ops
      */
-    RowImpl rowFromValueVersion(ValueVersion vv, boolean keyOnly) {
+    public RowImpl rowFromValueVersion(ValueVersion vv, boolean keyOnly) {
 
         /*
-         * Don't use clone to avoid creating a PrimaryKey
+         * Don't use clone to avoid creating a PrimaryKey, in the case
+         * that "this" is actually a PrimaryKey.
          */
         RowImpl row = new RowImpl(this);
         if (keyOnly) {
@@ -253,11 +278,66 @@ public class RowImpl extends RecordValueImpl implements Row {
         return super.hashCode() + table.getFullName().hashCode();
     }
 
+    /*
+     * At this time it's difficult, but not imppossible for an application to
+     * create a TimeToLive with a negative duration, so check that. It is
+     * using the TimeToLive.fromExpirationTime() interface.
+     */
+    @Override
+    public void setTTL(TimeToLive ttl) {
+        if (ttl != null && ttl.getValue() < 0) {
+            throw new IllegalArgumentException(
+                "Row.setTTL() does not support negative time periods");
+        }
+        this.ttl = ttl;
+    }
+
+    @Override
+    public TimeToLive getTTL() {
+        return ttl;
+    }
+
+    /*
+     * If the expiration time is not valid, throw.
+     */
+    @Override
+    public long getExpirationTime() {
+        if (expirationTime >= 0) {
+            return expirationTime;
+        }
+        throw new IllegalStateException(
+            "Row expiration time is not defined for this instance");
+    }
+
+    /**
+     * Sets expiration time on output. This is used internally by methods that
+     * create Row instances retrieved from the server. This method is not used
+     * for input. setTTL() is used by users to set a time to live value for a
+     * row.
+     */
+    void setExpirationTime(long t) {
+        expirationTime = t;
+    }
+
+    /*
+     * This is used by internal methods to return the actual TTL value, if
+     * set. It has the side effect of clearing expiration time.  Expiration
+     * time must be cleared because this method is called on put operations and
+     * the expiration time is set as a side effect, so any existing expiration
+     * time must be removed.
+     */
+    TimeToLive getTTLAndClearExpiration() {
+        TimeToLive retVal = ttl;
+        expirationTime = -1;
+        return retVal;
+    }
+
     private void removeValueFields() {
         if (table.hasValueFields()) {
             /* remove non-key fields if present */
             Iterator<Map.Entry<String, FieldValue>> entries =
                 valueMap.entrySet().iterator();
+
             while (entries.hasNext()) {
                 Map.Entry<String, FieldValue> entry = entries.next();
                 if (!table.isKeyComponent(entry.getKey())) {

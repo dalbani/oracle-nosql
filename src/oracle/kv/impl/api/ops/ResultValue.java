@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,9 +43,9 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 
 import oracle.kv.Value;
 import oracle.kv.impl.util.FastExternalizable;
@@ -81,7 +81,7 @@ class ResultValue implements FastExternalizable {
      * Deserialize into byte array.
      * Used by the client when deserializing a response.
      */
-    public ResultValue(ObjectInput in, short serialVersion)
+    public ResultValue(DataInput in, short serialVersion)
         throws IOException {
 
         bytes = null;
@@ -93,7 +93,7 @@ class ResultValue implements FastExternalizable {
      * Used by the service when serializing a response.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out,
+    public void writeFastExternal(DataOutput out,
                                   short serialVersion)
         throws IOException {
 
@@ -118,7 +118,7 @@ class ResultValue implements FastExternalizable {
     byte[] getBytes() {
         return bytes;
     }
-    
+
     @Override
     public String toString() {
         return UserDataControl.displayValue(value, bytes);

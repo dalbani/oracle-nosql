@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -47,13 +47,13 @@ import static oracle.kv.impl.api.table.TableJsonUtils.FIELDS;
 import static oracle.kv.impl.api.table.TableJsonUtils.NAME;
 
 import java.io.Serializable;
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
 import oracle.kv.table.FieldDef;
-import oracle.kv.table.FieldValue;
 
 import org.codehaus.jackson.node.ArrayNode;
 import org.codehaus.jackson.node.ObjectNode;
@@ -84,10 +84,12 @@ import com.sleepycat.persist.model.Persistent;
 public class FieldMap implements Cloneable, Serializable {
 
     private static final long serialVersionUID = 1L;
+
     private final Map<String, FieldMapEntry> fields;
+
     private final List<String> fieldOrder;
 
-    FieldMap() {
+    public FieldMap() {
         fields = new TreeMap<String, FieldMapEntry>(FieldComparator.instance);
         fieldOrder = new LinkedList<String>();
     }
@@ -97,8 +99,7 @@ public class FieldMap implements Cloneable, Serializable {
         fieldOrder = copyFieldOrder(other.fieldOrder);
     }
 
-    FieldMap(Map<String, FieldMapEntry> fields,
-             List<String> fieldOrder) {
+    FieldMap(Map<String, FieldMapEntry> fields, List<String> fieldOrder) {
         this.fields = copyMap(fields);
         this.fieldOrder = copyFieldOrder(fieldOrder);
     }
@@ -106,8 +107,9 @@ public class FieldMap implements Cloneable, Serializable {
     /**
      * Utility method to deep copy a map
      */
-    private static Map<String, FieldMapEntry>
-        copyMap(Map<String, FieldMapEntry> map) {
+    private static Map<String, FieldMapEntry> copyMap(
+        Map<String, FieldMapEntry> map) {
+
         Map<String, FieldMapEntry> newMap =
             new TreeMap<String, FieldMapEntry>(FieldComparator.instance);
         for (Map.Entry<String, FieldMapEntry> entry : map.entrySet()) {
@@ -120,6 +122,7 @@ public class FieldMap implements Cloneable, Serializable {
      * Utility method to copy the field order list
      */
     private static List<String> copyFieldOrder(List<String> other) {
+
         List<String> newList = new LinkedList<String>();
         for (String s : other) {
             newList.add(s);
@@ -135,22 +138,48 @@ public class FieldMap implements Cloneable, Serializable {
         return fieldOrder;
     }
 
+    /**
+     * Utility method used by the query translator.
+     */
+    public void reverseFieldOrder() {
+        Collections.reverse(fieldOrder);
+    }
+
+    int getFieldPos(String name) {
+
+        int pos = 0;
+        for (String s : fieldOrder) {
+            if (s.equalsIgnoreCase(name)) {
+                break;
+            }
+            ++pos;
+        }
+
+        return (pos >= fieldOrder.size() ? -1 : pos);
+    }
+
     FieldDef get(String name) {
         FieldMapEntry fme = fields.get(name);
         return (fme != null ? fme.getField() : null);
     }
 
     void put(String name, FieldMapEntry field) {
+
         fieldOrder.add(name);
-        fields.put(name, field);
+
+        if (fields.put(name, field) != null) {
+            throw new IllegalArgumentException(
+              "Field already exists: Field name = " + name);
+        }
     }
 
-    void put(String name, FieldDef field,
-             boolean nullable, FieldValue defaultValue) {
-        fieldOrder.add(name);
-        put(name, new FieldMapEntry((FieldDefImpl) field,
-                                    nullable,
-                                    (FieldValueImpl) defaultValue));
+    public void put(
+        String name,
+        FieldDefImpl type,
+        boolean nullable,
+        FieldValueImpl defaultValue) {
+
+        put(name, new FieldMapEntry(type, nullable, defaultValue));
     }
 
     boolean exists(String name) {
@@ -181,23 +210,60 @@ public class FieldMap implements Cloneable, Serializable {
      */
     @Override
     public boolean equals(Object obj) {
-        if (obj instanceof FieldMap) {
-            FieldMap other = (FieldMap) obj;
-            if (fieldOrder.size() == other.fieldOrder.size()) {
-                for (Map.Entry<String, FieldMapEntry> entry :
-                         fields.entrySet()) {
-                    FieldMapEntry otherEntry = other.fields.get(entry.getKey());
-                    if (otherEntry != null &&
-                        entry.getValue().equals(otherEntry)) {
-                        continue;
-                    }
-                    return false;
-                }
-                return true;
+
+        if (!(obj instanceof FieldMap)) {
+            return false;
+        }
+
+        FieldMap other = (FieldMap) obj;
+
+        if (fieldOrder.size() != other.fieldOrder.size()) {
+            return false;
+        }
+
+        for (Map.Entry<String, FieldMapEntry> entry : fields.entrySet()) {
+
+            FieldMapEntry otherEntry = other.fields.get(entry.getKey());
+            if (otherEntry != null &&
+                entry.getValue().equals(otherEntry)) {
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    public boolean isPrecise() {
+
+        for (Map.Entry<String, FieldMapEntry> entry : fields.entrySet()) {
+            if (!entry.getValue().isPrecise()) {
+                return false;
             }
         }
-        return false;
+        return true;
     }
+
+    public boolean isSubtype(FieldMap superType) {
+
+        if (fieldOrder.size() != superType.fieldOrder.size()) {
+            return false;
+        }
+
+        for (Map.Entry<String, FieldMapEntry> entry : fields.entrySet()) {
+
+            FieldMapEntry supEntry = superType.fields.get(entry.getKey());
+
+            if (supEntry != null &&
+                entry.getValue().isSubtype(supEntry)) {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
 
     @Override
     public int hashCode() {
@@ -214,7 +280,9 @@ public class FieldMap implements Cloneable, Serializable {
      * records.  Output in declaration order.
      */
     void putFields(ObjectNode node) {
+
         ArrayNode array = node.putArray(FIELDS);
+
         for (String fname : getFieldOrder()) {
             FieldMapEntry entry = getFieldMapEntry(fname);
             ObjectNode fnode = array.addObject();

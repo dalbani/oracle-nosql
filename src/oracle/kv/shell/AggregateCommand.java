@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -51,6 +51,11 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.avro.Schema;
+import org.apache.avro.Schema.Field;
+import org.apache.avro.Schema.Type;
+import org.codehaus.jackson.JsonNode;
+
 import oracle.kv.Direction;
 import oracle.kv.FaultException;
 import oracle.kv.KVStore;
@@ -61,11 +66,6 @@ import oracle.kv.ParallelScanIterator;
 import oracle.kv.StoreIteratorConfig;
 import oracle.kv.StoreIteratorException;
 import oracle.kv.Value;
-import oracle.kv.avro.AvroCatalog;
-import oracle.kv.avro.JsonAvroBinding;
-import oracle.kv.avro.JsonRecord;
-import oracle.kv.avro.SchemaNotAllowedException;
-import oracle.kv.avro.UndefinedSchemaException;
 import oracle.kv.impl.admin.client.CommandShell;
 import oracle.kv.shell.CommandUtils.RunTableAPIOperation;
 import oracle.kv.table.FieldValue;
@@ -78,11 +78,6 @@ import oracle.kv.table.TableIterator;
 import oracle.kv.util.shell.CommandWithSubs;
 import oracle.kv.util.shell.Shell;
 import oracle.kv.util.shell.ShellException;
-
-import org.apache.avro.Schema;
-import org.apache.avro.Schema.Field;
-import org.apache.avro.Schema.Type;
-import org.codehaus.jackson.JsonNode;
 
 /**
  * Aggregate command, a simple data aggregation command to count, sum, or
@@ -547,6 +542,7 @@ public class AggregateCommand extends CommandWithSubs {
             super(COMMAND_NAME, 2);
         }
 
+        @SuppressWarnings("deprecation")
         @Override
         void exec(String[] args, Shell shell, AggResult aggResult)
             throws ShellException {
@@ -595,7 +591,7 @@ public class AggregateCommand extends CommandWithSubs {
                 shell.requiredArg(SCHEMA_FLAG, this);
             }
 
-            JsonAvroBinding binding = null;
+            oracle.kv.avro.JsonAvroBinding binding = null;
             if (schemaName != null) {
                 binding = getAvroBinding(store, schemaName);
             }
@@ -603,10 +599,12 @@ public class AggregateCommand extends CommandWithSubs {
             execAgg(store, key, kr, fields, binding, aggResult);
         }
 
-        private JsonAvroBinding getAvroBinding(KVStore store, String schemaName)
+        @SuppressWarnings("deprecation")
+        private oracle.kv.avro.JsonAvroBinding getAvroBinding(KVStore store,
+                                                              String schemaName)
             throws ShellException {
 
-            AvroCatalog catalog = store.getAvroCatalog();
+            oracle.kv.avro.AvroCatalog catalog = store.getAvroCatalog();
             catalog.refreshSchemaCache(null);
             Map<String, Schema> schemaMap = catalog.getCurrentSchemas();
             Schema schema = schemaMap.get(schemaName);
@@ -616,7 +614,7 @@ public class AggregateCommand extends CommandWithSubs {
             }
             try {
                 return catalog.getJsonBinding(schema);
-            } catch (UndefinedSchemaException  use) {
+            } catch (oracle.kv.avro.UndefinedSchemaException  use) {
                 throw new ShellException("Schema does not exist or " +
                     "is disabled: " + schemaName);
             }
@@ -626,8 +624,10 @@ public class AggregateCommand extends CommandWithSubs {
          * execAgg is the heart of this command, it iterates the matched
          * records and get specified field value and tally them.
          */
+        @SuppressWarnings("deprecation")
         private void execAgg(KVStore store, Key key, KeyRange kr,
-                             List<String> fields, JsonAvroBinding binding,
+                             List<String> fields,
+                             oracle.kv.avro.JsonAvroBinding binding,
                              AggResult aggResult)
             throws ShellException {
 
@@ -685,7 +685,8 @@ public class AggregateCommand extends CommandWithSubs {
                 while (it.hasNext()) {
                     if (binding != null) {
                         Value value = ((KeyValueVersion)it.next()).getValue();
-                        JsonRecord jsonRec = getJsonRec(binding, value);
+                        oracle.kv.avro.JsonRecord jsonRec =
+                            getJsonRec(binding, value);
                         if (jsonRec == null) {
                             continue;
                         }
@@ -728,13 +729,17 @@ public class AggregateCommand extends CommandWithSubs {
             }
         }
 
-        private JsonRecord getJsonRec(JsonAvroBinding binding, Value value) {
+        @SuppressWarnings("deprecation")
+        private oracle.kv.avro.JsonRecord getJsonRec(
+            oracle.kv.avro.JsonAvroBinding binding,
+            Value value) {
+
             if (value == null || value.getFormat() != Value.Format.AVRO) {
                 return null;
             }
             try {
                 return binding.toObject(value);
-            } catch (SchemaNotAllowedException ignored) {
+            } catch (oracle.kv.avro.SchemaNotAllowedException ignored) {
                 /**
                  * Return null if specified schema is not the
                  * schema associated with the value.
@@ -745,8 +750,9 @@ public class AggregateCommand extends CommandWithSubs {
             return null;
         }
 
+        @SuppressWarnings("deprecation")
         private void tallyFieldValue(AggResult aggResult,
-                                     JsonRecord jsonRec,
+                                     oracle.kv.avro.JsonRecord jsonRec,
                                      String field) {
 
             Type type = getScalarType(jsonRec.getSchema(), field);

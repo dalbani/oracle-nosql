@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,6 +43,8 @@
 
 package oracle.kv.impl.test;
 
+import oracle.kv.impl.admin.client.CommandShell;
+
 /**
  * Used to determine whether the code is operating in a test environment. It's
  * the responsibility of the individual test to set the state. In unit tests,
@@ -60,6 +62,9 @@ public class TestStatus {
      */
     public static void setActive(boolean isActive) {
         TestStatus.isActive = isActive;
+
+        /* Enable arbiters for testing */
+        CommandShell.enableArbiters = isActive;
     }
 
     /**

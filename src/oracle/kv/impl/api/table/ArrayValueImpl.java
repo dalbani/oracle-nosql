@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -46,7 +46,6 @@ package oracle.kv.impl.api.table;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.ListIterator;
@@ -58,7 +57,6 @@ import oracle.kv.table.FieldValue;
 import oracle.kv.table.MapValue;
 import oracle.kv.table.RecordValue;
 
-import org.apache.avro.Schema;
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.JsonParser;
 import org.codehaus.jackson.JsonToken;
@@ -72,8 +70,10 @@ import com.sleepycat.persist.model.Persistent;
  * type ArrayDef.
  */
 @Persistent(version=1)
-class ArrayValueImpl extends ComplexValueImpl implements ArrayValue {
+public class ArrayValueImpl extends ComplexValueImpl implements ArrayValue {
+
     private static final long serialVersionUID = 1L;
+
     private final ArrayList<FieldValue> array;
 
     ArrayValueImpl(ArrayDef field) {
@@ -87,506 +87,17 @@ class ArrayValueImpl extends ComplexValueImpl implements ArrayValue {
         array = null;
     }
 
-    @Override
-    public ArrayDef getDefinition() {
-        return (ArrayDef) super.getDefinition();
-    }
-
-    @Override
-    public FieldValue get(int index) {
-        return array.get(index);
-    }
-
-    @Override
-    public int size() {
-        return array.size();
-    }
-
-    @Override
-    public List<FieldValue> toList() {
-        return Collections.unmodifiableList(array);
-    }
-
-    @Override
-    public ArrayValue add(FieldValue value) {
-        validate(value.getType());
-        array.add(value);
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(int index, FieldValue value) {
-        validate(value.getType());
-        array.add(index, value);
-        return this;
-    }
-
-    @Override
-    public ArrayValue set(int index, FieldValue value) {
-        validate(value.getType());
-        array.set(index, value);
-        return this;
-    }
-
-    /**
-     * set overloads for all simple data types
+    /*
+     * Public api methods from Object and FieldValue
      */
 
-    /**
-     * Integer
-     */
     @Override
-    public ArrayValue add(int value) {
-        validate(FieldDef.Type.INTEGER);
-        add(getElement().createInteger(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(int values[]) {
-        validate(FieldDef.Type.INTEGER);
-        FieldDef def = getElement();
-        for (int i : values) {
-            add(def.createInteger(i));
-        }
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(int index, int value) {
-        validate(FieldDef.Type.INTEGER);
-        add(index, getElement().createInteger(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue set(int index, int value) {
-        validate(FieldDef.Type.INTEGER);
-        set(index, getElement().createInteger(value));
-        return this;
-    }
-
-    /**
-     * Long
-     */
-    @Override
-    public ArrayValue add(long value) {
-        validate(FieldDef.Type.LONG);
-        add(getElement().createLong(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(long values[]) {
-        validate(FieldDef.Type.LONG);
-        FieldDef def = getElement();
-        for (long l : values) {
-            add(def.createLong(l));
-        }
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(int index, long value) {
-        validate(FieldDef.Type.LONG);
-        add(index, getElement().createLong(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue set(int index, long value) {
-        validate(FieldDef.Type.LONG);
-        set(index, getElement().createLong(value));
-        return this;
-    }
-
-    /**
-     * String
-     */
-    @Override
-    public ArrayValue add(String value) {
-        validate(FieldDef.Type.STRING);
-        add(getElement().createString(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(String values[]) {
-        validate(FieldDef.Type.STRING);
-        FieldDef def = getElement();
-        for (String s : values) {
-            add(def.createString(s));
-        }
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(int index, String value) {
-        validate(FieldDef.Type.STRING);
-        add(index, getElement().createString(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue set(int index, String value) {
-        validate(FieldDef.Type.STRING);
-        set(index, getElement().createString(value));
-        return this;
-    }
-
-    /**
-     * Double
-     */
-    @Override
-    public ArrayValue add(double value) {
-        validate(FieldDef.Type.DOUBLE);
-        add(getElement().createDouble(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(double values[]) {
-        validate(FieldDef.Type.DOUBLE);
-        FieldDef def = getElement();
-        for (double d : values) {
-            add(def.createDouble(d));
-        }
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(int index, double value) {
-        validate(FieldDef.Type.DOUBLE);
-        add(index, getElement().createDouble(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue set(int index, double value) {
-        validate(FieldDef.Type.DOUBLE);
-        set(index, getElement().createDouble(value));
-        return this;
-    }
-
-    /**
-     * Float
-     */
-    @Override
-    public ArrayValue add(float value) {
-        validate(FieldDef.Type.FLOAT);
-        add(getElement().createFloat(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(float values[]) {
-        validate(FieldDef.Type.FLOAT);
-        FieldDef def = getElement();
-        for (float d : values) {
-            add(def.createFloat(d));
-        }
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(int index, float value) {
-        validate(FieldDef.Type.FLOAT);
-        add(index, getElement().createFloat(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue set(int index, float value) {
-        validate(FieldDef.Type.FLOAT);
-        set(index, getElement().createFloat(value));
-        return this;
-    }
-
-    /**
-     * Boolean
-     */
-    @Override
-    public ArrayValue add(boolean value) {
-        validate(FieldDef.Type.BOOLEAN);
-        add(getElement().createBoolean(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(boolean values[]) {
-        validate(FieldDef.Type.BOOLEAN);
-        FieldDef def = getElement();
-        for (boolean b : values) {
-            add(def.createBoolean(b));
-        }
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(int index, boolean value) {
-        validate(FieldDef.Type.BOOLEAN);
-        add(index, getElement().createBoolean(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue set(int index, boolean value) {
-        validate(FieldDef.Type.BOOLEAN);
-        set(index, getElement().createBoolean(value));
-        return this;
-    }
-
-    /**
-     * Binary
-     */
-    @Override
-    public ArrayValue add(byte[] value) {
-        validate(FieldDef.Type.BINARY);
-        add(getElement().createBinary(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(byte[] values[]) {
-        validate(FieldDef.Type.BINARY);
-        FieldDef def = getElement();
-        for (byte[] b : values) {
-            add(def.createBinary(b));
-        }
-        return this;
-    }
-
-    @Override
-    public ArrayValue add(int index, byte[] value) {
-        validate(FieldDef.Type.BINARY);
-        add(index, getElement().createBinary(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue set(int index, byte[] value) {
-        validate(FieldDef.Type.BINARY);
-        set(index, getElement().createBinary(value));
-        return this;
-    }
-
-    /**
-     * FixedBinary
-     */
-    @Override
-    public ArrayValue addFixed(byte[] value) {
-        validate(FieldDef.Type.FIXED_BINARY);
-        add(getElement().createFixedBinary(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue addFixed(byte[] values[]) {
-        validate(FieldDef.Type.FIXED_BINARY);
-        FieldDef def = getElement();
-        for (byte[] b : values) {
-            add(def.createFixedBinary(b));
-        }
-        return this;
-    }
-
-    @Override
-    public ArrayValue addFixed(int index, byte[] value) {
-        validate(FieldDef.Type.FIXED_BINARY);
-        add(index, getElement().createFixedBinary(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue setFixed(int index, byte[] value) {
-        validate(FieldDef.Type.FIXED_BINARY);
-        set(index, getElement().createFixedBinary(value));
-        return this;
-    }
-
-    /**
-     * Enum
-     */
-    @Override
-    public ArrayValue addEnum(String value) {
-        validate(FieldDef.Type.ENUM);
-        add(getElement().createEnum(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue addEnum(String values[]) {
-        validate(FieldDef.Type.ENUM);
-        FieldDef def = getElement();
-        for (String s : values) {
-            add(def.createEnum(s));
-        }
-        return this;
-    }
-
-    @Override
-    public ArrayValue addEnum(int index, String value) {
-        validate(FieldDef.Type.ENUM);
-        add(index, getElement().createEnum(value));
-        return this;
-    }
-
-    @Override
-    public ArrayValue setEnum(int index, String value) {
-        validate(FieldDef.Type.ENUM);
-        set(index, getElement().createEnum(value));
-        return this;
-    }
-
-    /**
-     * This is used by index deserialization.  The format for enums is an
-     * integer.
-     */
-    ArrayValue addEnum(int value) {
-        validate(FieldDef.Type.ENUM);
-        add(((EnumDefImpl)getElement()).createEnum(value));
-        return this;
-    }
-
-    @Override
-    public RecordValue setRecord(int index) {
-        validate(FieldDef.Type.RECORD);
-        RecordValue val = getElement().createRecord();
-        array.set(index, val);
-        return val;
-    }
-
-    @Override
-    public RecordValueImpl addRecord() {
-        validate(FieldDef.Type.RECORD);
-        RecordValue val = getElement().createRecord();
-        array.add(val);
-        return (RecordValueImpl) val;
-    }
-
-    @Override
-    public RecordValue addRecord(int index) {
-        validate(FieldDef.Type.RECORD);
-        RecordValue val = getElement().createRecord();
-        array.add(index, val);
-        return val;
-    }
-
-    @Override
-    public MapValue setMap(int index) {
-        validate(FieldDef.Type.MAP);
-        MapValue val = getElement().createMap();
-        array.set(index, val);
-        return val;
-    }
-
-    @Override
-    public MapValueImpl addMap() {
-        validate(FieldDef.Type.MAP);
-        MapValue val = getElement().createMap();
-        array.add(val);
-        return (MapValueImpl) val;
-    }
-
-    @Override
-    public MapValue addMap(int index) {
-        validate(FieldDef.Type.MAP);
-        MapValue val = getElement().createMap();
-        array.add(index, val);
-        return val;
-    }
-
-    @Override
-    public ArrayValue setArray(int index) {
-        validate(FieldDef.Type.ARRAY);
-        ArrayValue val = getElement().createArray();
-        array.set(index, val);
-        return val;
-    }
-
-    @Override
-    public ArrayValueImpl addArray() {
-        validate(FieldDef.Type.ARRAY);
-        ArrayValue val = getElement().createArray();
-        array.add(val);
-        return (ArrayValueImpl) val;
-    }
-
-    @Override
-    public ArrayValue addArray(int index) {
-        validate(FieldDef.Type.ARRAY);
-        ArrayValue val = getElement().createArray();
-        array.add(index, val);
-        return val;
-    }
-
-    @Override
-    public FieldDef.Type getType() {
-        return FieldDef.Type.ARRAY;
-    }
-
-    @Override
-    public boolean isArray() {
-        return true;
-    }
-
-    @Override
-    public ArrayValue asArray() {
-        return this;
-    }
-
-    /**
-     * Increment the value of the array element, not the array.  There
-     * can only be one element in this array.
-     */
-    @Override
-    public FieldValueImpl getNextValue() {
-        if (size() != 1) {
-            throw new IllegalArgumentException
-                ("Array values used in ranges must contain only one element");
-        }
+    public ArrayValueImpl clone() {
         ArrayValueImpl newArray = new ArrayValueImpl(getDefinition());
-        FieldValueImpl fvi = ((FieldValueImpl)get(0)).getNextValue();
-        newArray.add(fvi);
-        return newArray;
-    }
-
-    @Override
-    public FieldValueImpl getMinimumValue() {
-        if (size() != 1) {
-            throw new IllegalArgumentException
-                ("Array values used in ranges must contain only one element");
+        for (FieldValue val : array) {
+            newArray.add(val.clone());
         }
-        ArrayValueImpl newArray = new ArrayValueImpl(getDefinition());
-        FieldValueImpl fvi = ((FieldValueImpl)get(0)).getMinimumValue();
-        newArray.add(fvi);
         return newArray;
-    }
-
-    @Override
-    public boolean equals(Object other) {
-        if (other instanceof ArrayValueImpl) {
-            ArrayValueImpl otherValue = (ArrayValueImpl) other;
-            /* maybe avoid some work */
-            if (this == otherValue) {
-                return true;
-            }
-
-            /*
-             * detailed comparison
-             */
-            if (size() == otherValue.size() &&
-                getElement().equals(otherValue.getElement()) &&
-                getDefinition().equals(otherValue.getDefinition())) {
-                for (int i = 0; i < size(); i++) {
-                    if (!get(i).equals(otherValue.get(i))) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-        }
-        return false;
     }
 
     @Override
@@ -598,6 +109,34 @@ class ArrayValueImpl extends ComplexValueImpl implements ArrayValue {
         return code;
     }
 
+    @Override
+    public boolean equals(Object other) {
+
+        if (other instanceof ArrayValueImpl) {
+            ArrayValueImpl otherValue = (ArrayValueImpl) other;
+            /* maybe avoid some work */
+            if (this == otherValue) {
+                return true;
+            }
+
+            /*
+             * detailed comparison
+             */
+            if (size() == otherValue.size() &&
+                getElementDef().equals(otherValue.getElementDef()) &&
+                getDefinition().equals(otherValue.getDefinition())) {
+
+                for (int i = 0; i < size(); i++) {
+                    if (!get(i).equals(otherValue.get(i))) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * FieldDef must match.
      *
@@ -607,12 +146,14 @@ class ArrayValueImpl extends ComplexValueImpl implements ArrayValue {
      */
     @Override
     public int compareTo(FieldValue other) {
-        if (other instanceof ArrayValueImpl) {
+
+         if (other instanceof ArrayValueImpl) {
             ArrayValueImpl otherImpl = (ArrayValueImpl) other;
             if (!getDefinition().equals(otherImpl.getDefinition())) {
                 throw new IllegalArgumentException
                     ("Cannot compare ArrayValues with different definitions");
             }
+
             for (int i = 0; i < size(); i++) {
                 FieldValueImpl val = (FieldValueImpl) get(i);
                 if (otherImpl.size() < i + 1) {
@@ -634,101 +175,492 @@ class ArrayValueImpl extends ComplexValueImpl implements ArrayValue {
             /* they must be equal */
             return 0;
         }
-        throw new ClassCastException
-            ("Object is not an ArrayValue");
+        throw new ClassCastException("Object is not an ArrayValue");
     }
 
     @Override
-    public ArrayValueImpl clone() {
-        ArrayValueImpl newArray = new ArrayValueImpl(getDefinition());
-        for (FieldValue val : array) {
-            newArray.add(val.clone());
-        }
-        return newArray;
+    public FieldDef.Type getType() {
+        return FieldDef.Type.ARRAY;
     }
 
     @Override
-    public JsonNode toJsonNode() {
-        ArrayNode node = JsonNodeFactory.instance.arrayNode();
-        for (FieldValue value : array) {
-            node.add(((FieldValueImpl)value).toJsonNode());
-        }
-        return node;
+    public boolean isArray() {
+        return true;
     }
 
     @Override
-    public void toStringBuilder(StringBuilder sb) {
-        sb.append('[');
-        for (int i = 0; i < array.size(); i++) {
-            if (i > 0) {
-                sb.append(',');
-            }
-            FieldValueImpl value = (FieldValueImpl)array.get(i);
-            value.toStringBuilder(sb);
-        }
-        sb.append(']');
+    public ArrayValue asArray() {
+        return this;
     }
-
 
     /*
-     * Array maps to Collection.  Use ArrayList
+     * Public api methods from ArrayValue
      */
+
     @Override
-    Object toAvroValue(Schema schema) {
-        Schema valueSchema = getElementSchema(schema);
-        ArrayList<Object> values = new ArrayList<Object>(size());
-        for (FieldValue value : array) {
-            values.add(((FieldValueImpl)value).toAvroValue(valueSchema));
-
-        }
-        return values;
+    public ArrayDefImpl getDefinition() {
+        return (ArrayDefImpl) super.getDefinition();
     }
 
-    @SuppressWarnings("unchecked")
-    static ArrayValueImpl fromAvroValue(FieldDef def,
-                                        Object o,
-                                        Schema schema) {
-        Collection<Object> coll = (Collection<Object>) o;
-        ArrayValue array = def.createArray();
-        for (Object value : coll) {
-            array.add(FieldValueImpl.
-                      fromAvroValue(array.getDefinition().getElement(),
-                                    value,
-                                    getElementSchema(schema)));
-        }
-        return (ArrayValueImpl)array;
+    @Override
+    public FieldValue get(int index) {
+        return getElement(index);
     }
 
-    @SuppressWarnings("unchecked")
-    static ArrayValueImpl fromJavaObjectValue(FieldDef def, Object o) {
-        Iterable<Object> coll = null;
-        if(o instanceof Iterable<?>) {
-            coll = (Iterable<Object>) o;
-        } else {
-            coll = Arrays.asList((Object[]) o);
-        }
-        ArrayValue array = def.createArray();
-        for (Object value : coll) {
-            array.add(FieldValueImpl.
-                      fromJavaObjectValue(array.getDefinition().getElement(),
-                                          value));
-        }
-        return (ArrayValueImpl)array;
+    @Override
+    public int size() {
+        return array.size();
+    }
+
+    @Override
+    public List<FieldValue> toList() {
+        return Collections.unmodifiableList(array);
+    }
+
+    @Override
+    public ArrayValue add(FieldValue value) {
+        /*
+         * If the type of the array elements is a constrained atomic type,
+         * there is no validation that the value conforms to the element
+         * type. ????
+         */
+        validate(value.getType());
+        array.add(value);
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(int index, FieldValue value) {
+        validate(value.getType());
+        array.add(index, value);
+        return this;
+    }
+
+    @Override
+    public ArrayValue set(int index, FieldValue value) {
+        validate(value.getType());
+        array.set(index, value);
+        return this;
     }
 
     /**
-     * Add JSON fields to the array.
+     * Integer
      */
     @Override
-    void addJsonFields(JsonParser jp, boolean isIndexKey,
-                       String fieldName, boolean exact) {
+    public ArrayValue add(int value) {
+        validate(FieldDef.Type.INTEGER);
+        add(getElementDef().createInteger(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(int values[]) {
+        validate(FieldDef.Type.INTEGER);
+        FieldDef def = getElementDef();
+        for (int i : values) {
+            add(def.createInteger(i));
+        }
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(int index, int value) {
+        validate(FieldDef.Type.INTEGER);
+        add(index, getElementDef().createInteger(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue set(int index, int value) {
+        validate(FieldDef.Type.INTEGER);
+        set(index, getElementDef().createInteger(value));
+        return this;
+    }
+
+    /**
+     * Long
+     */
+    @Override
+    public ArrayValue add(long value) {
+        validate(FieldDef.Type.LONG);
+        add(getElementDef().createLong(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(long values[]) {
+        validate(FieldDef.Type.LONG);
+        FieldDef def = getElementDef();
+        for (long l : values) {
+            add(def.createLong(l));
+        }
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(int index, long value) {
+        validate(FieldDef.Type.LONG);
+        add(index, getElementDef().createLong(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue set(int index, long value) {
+        validate(FieldDef.Type.LONG);
+        set(index, getElementDef().createLong(value));
+        return this;
+    }
+
+    /**
+     * String
+     */
+    @Override
+    public ArrayValue add(String value) {
+        validate(FieldDef.Type.STRING);
+        add(getElementDef().createString(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(String values[]) {
+        validate(FieldDef.Type.STRING);
+        FieldDef def = getElementDef();
+        for (String s : values) {
+            add(def.createString(s));
+        }
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(int index, String value) {
+        validate(FieldDef.Type.STRING);
+        add(index, getElementDef().createString(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue set(int index, String value) {
+        validate(FieldDef.Type.STRING);
+        set(index, getElementDef().createString(value));
+        return this;
+    }
+
+    /**
+     * Double
+     */
+    @Override
+    public ArrayValue add(double value) {
+        validate(FieldDef.Type.DOUBLE);
+        add(getElementDef().createDouble(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(double values[]) {
+        validate(FieldDef.Type.DOUBLE);
+        FieldDef def = getElementDef();
+        for (double d : values) {
+            add(def.createDouble(d));
+        }
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(int index, double value) {
+        validate(FieldDef.Type.DOUBLE);
+        add(index, getElementDef().createDouble(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue set(int index, double value) {
+        validate(FieldDef.Type.DOUBLE);
+        set(index, getElementDef().createDouble(value));
+        return this;
+    }
+
+    /**
+     * Float
+     */
+    @Override
+    public ArrayValue add(float value) {
+        validate(FieldDef.Type.FLOAT);
+        add(getElementDef().createFloat(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(float values[]) {
+        validate(FieldDef.Type.FLOAT);
+        FieldDef def = getElementDef();
+        for (float d : values) {
+            add(def.createFloat(d));
+        }
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(int index, float value) {
+        validate(FieldDef.Type.FLOAT);
+        add(index, getElementDef().createFloat(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue set(int index, float value) {
+        validate(FieldDef.Type.FLOAT);
+        set(index, getElementDef().createFloat(value));
+        return this;
+    }
+
+    /**
+     * Boolean
+     */
+    @Override
+    public ArrayValue add(boolean value) {
+        validate(FieldDef.Type.BOOLEAN);
+        add(getElementDef().createBoolean(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(boolean values[]) {
+        validate(FieldDef.Type.BOOLEAN);
+        FieldDef def = getElementDef();
+        for (boolean b : values) {
+            add(def.createBoolean(b));
+        }
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(int index, boolean value) {
+        validate(FieldDef.Type.BOOLEAN);
+        add(index, getElementDef().createBoolean(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue set(int index, boolean value) {
+        validate(FieldDef.Type.BOOLEAN);
+        set(index, getElementDef().createBoolean(value));
+        return this;
+    }
+
+    /**
+     * Binary
+     */
+    @Override
+    public ArrayValue add(byte[] value) {
+        validate(FieldDef.Type.BINARY);
+        add(getElementDef().createBinary(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(byte[] values[]) {
+        validate(FieldDef.Type.BINARY);
+        FieldDef def = getElementDef();
+        for (byte[] b : values) {
+            add(def.createBinary(b));
+        }
+        return this;
+    }
+
+    @Override
+    public ArrayValue add(int index, byte[] value) {
+        validate(FieldDef.Type.BINARY);
+        add(index, getElementDef().createBinary(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue set(int index, byte[] value) {
+        validate(FieldDef.Type.BINARY);
+        set(index, getElementDef().createBinary(value));
+        return this;
+    }
+
+    /**
+     * FixedBinary
+     */
+    @Override
+    public ArrayValue addFixed(byte[] value) {
+        validate(FieldDef.Type.FIXED_BINARY);
+        add(getElementDef().createFixedBinary(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue addFixed(byte[] values[]) {
+        validate(FieldDef.Type.FIXED_BINARY);
+        FieldDef def = getElementDef();
+        for (byte[] b : values) {
+            add(def.createFixedBinary(b));
+        }
+        return this;
+    }
+
+    @Override
+    public ArrayValue addFixed(int index, byte[] value) {
+        validate(FieldDef.Type.FIXED_BINARY);
+        add(index, getElementDef().createFixedBinary(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue setFixed(int index, byte[] value) {
+        validate(FieldDef.Type.FIXED_BINARY);
+        set(index, getElementDef().createFixedBinary(value));
+        return this;
+    }
+
+    /**
+     * Enum
+     */
+    @Override
+    public ArrayValue addEnum(String value) {
+        validate(FieldDef.Type.ENUM);
+        add(getElementDef().createEnum(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue addEnum(String values[]) {
+        validate(FieldDef.Type.ENUM);
+        FieldDef def = getElementDef();
+        for (String s : values) {
+            add(def.createEnum(s));
+        }
+        return this;
+    }
+
+    @Override
+    public ArrayValue addEnum(int index, String value) {
+        validate(FieldDef.Type.ENUM);
+        add(index, getElementDef().createEnum(value));
+        return this;
+    }
+
+    @Override
+    public ArrayValue setEnum(int index, String value) {
+        validate(FieldDef.Type.ENUM);
+        set(index, getElementDef().createEnum(value));
+        return this;
+    }
+
+    /*
+     * Record
+     */
+    @Override
+    public RecordValue setRecord(int index) {
+        validate(FieldDef.Type.RECORD);
+        RecordValue val = getElementDef().createRecord();
+        array.set(index, val);
+        return val;
+    }
+
+    @Override
+    public RecordValueImpl addRecord() {
+        validate(FieldDef.Type.RECORD);
+        RecordValue val = getElementDef().createRecord();
+        array.add(val);
+        return (RecordValueImpl) val;
+    }
+
+    @Override
+    public RecordValue addRecord(int index) {
+        validate(FieldDef.Type.RECORD);
+        RecordValue val = getElementDef().createRecord();
+        array.add(index, val);
+        return val;
+    }
+
+    /*
+     * Map
+     */
+    @Override
+    public MapValue setMap(int index) {
+        validate(FieldDef.Type.MAP);
+        MapValue val = getElementDef().createMap();
+        array.set(index, val);
+        return val;
+    }
+
+    @Override
+    public MapValueImpl addMap() {
+        validate(FieldDef.Type.MAP);
+        MapValue val = getElementDef().createMap();
+        array.add(val);
+        return (MapValueImpl) val;
+    }
+
+    @Override
+    public MapValue addMap(int index) {
+        validate(FieldDef.Type.MAP);
+        MapValue val = getElementDef().createMap();
+        array.add(index, val);
+        return val;
+    }
+
+    /*
+     * Array
+     */
+    @Override
+    public ArrayValue setArray(int index) {
+        validate(FieldDef.Type.ARRAY);
+        ArrayValue val = getElementDef().createArray();
+        array.set(index, val);
+        return val;
+    }
+
+    @Override
+    public ArrayValueImpl addArray() {
+        validate(FieldDef.Type.ARRAY);
+        ArrayValue val = getElementDef().createArray();
+        array.add(val);
+        return (ArrayValueImpl) val;
+    }
+
+    @Override
+    public ArrayValue addArray(int index) {
+        validate(FieldDef.Type.ARRAY);
+        ArrayValue val = getElementDef().createArray();
+        array.add(index, val);
+        return val;
+    }
+
+    /*
+     * Methods from ComplexValueImpl
+     */
+
+    /* This method should never be called on an array */
+    @Override
+    protected void validateIndexField(String fieldName) {
+        throw new IllegalStateException
+            ("validateIndexField called on an array, field name is " +
+             fieldName);
+    }
+
+    /**
+     * Parse a JSON array and put the extracted values into "this" array.
+     */
+    @Override
+    public void addJsonFields(
+        JsonParser jp,
+        boolean isIndexKey,
+        String fieldName,
+        boolean exact) {
+
         try {
-            FieldDef element = getElement();
+            FieldDef element = getElementDef();
+
             JsonToken t = jp.getCurrentToken();
             if(t == null) { /* JSON is empty */
                 return;
             }
             assert(t == JsonToken.START_ARRAY);
+
             while (jp.nextToken() != JsonToken.END_ARRAY) {
                 /*
                  * Handle null.
@@ -778,6 +710,14 @@ class ArrayValueImpl extends ComplexValueImpl implements ArrayValue {
                 case ENUM:
                     addEnum(jp.getText());
                     break;
+                case ANY:
+                case ANY_RECORD:
+                case ANY_ATOMIC:
+                case EMPTY:
+                    // TODO ???? : support the wildcard types
+                    throw new IllegalArgumentException(
+                        "Cannot create an array item with imprecise " +
+                        "element type");
                 }
             }
         } catch (IOException ioe) {
@@ -787,31 +727,85 @@ class ArrayValueImpl extends ComplexValueImpl implements ArrayValue {
     }
 
     /*
-     * Handle the fact that this field may be nullable and therefore have a
-     * Union schema.
-     */
-    private static Schema getElementSchema(Schema schema) {
-        return getUnionSchema(schema, Schema.Type.ARRAY).getElementType();
-    }
-
-    /*
-     * internals
+     * FieldValueImpl internal api methods
      */
 
-    private FieldDef getElement() {
-        return (getDefinition()).getElement();
+    @Override
+    public FieldValueImpl getElement(int index) {
+        return (FieldValueImpl)array.get(index);
     }
 
     /**
-     * This method must expand to do full validation of type, value and
-     * constraints if present in the definition.  Right now it just
-     * validates the type.
+     * Increment the value of the array element, not the array.  There
+     * can only be one element in this array.
      */
-    private void validate(FieldDef.Type type) {
-        if (!getElement().isType(type)) {
+    @Override
+    public FieldValueImpl getNextValue() {
+        if (size() != 1) {
             throw new IllegalArgumentException
-                ("Incorrect type for array");
+                ("Array values used in ranges must contain only one element");
         }
+        ArrayValueImpl newArray = new ArrayValueImpl(getDefinition());
+        FieldValueImpl fvi = ((FieldValueImpl)get(0)).getNextValue();
+        newArray.add(fvi);
+        return newArray;
+    }
+
+    @Override
+    public FieldValueImpl getMinimumValue() {
+        if (size() != 1) {
+            throw new IllegalArgumentException
+                ("Array values used in ranges must contain only one element");
+        }
+        ArrayValueImpl newArray = new ArrayValueImpl(getDefinition());
+        FieldValueImpl fvi = ((FieldValueImpl)get(0)).getMinimumValue();
+        newArray.add(fvi);
+        return newArray;
+    }
+
+
+    @Override
+    public JsonNode toJsonNode() {
+        ArrayNode node = JsonNodeFactory.instance.arrayNode();
+        for (FieldValue value : array) {
+            node.add(((FieldValueImpl)value).toJsonNode());
+        }
+        return node;
+    }
+
+    @Override
+    public void toStringBuilder(StringBuilder sb) {
+        sb.append('[');
+        for (int i = 0; i < array.size(); i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            FieldValueImpl value = (FieldValueImpl)array.get(i);
+            value.toStringBuilder(sb);
+        }
+        sb.append(']');
+    }
+
+
+    @SuppressWarnings("unchecked")
+    static ArrayValueImpl fromJavaObjectValue(FieldDef def, Object o) {
+
+        Iterable<Object> coll = null;
+
+        if (o instanceof Iterable<?>) {
+            coll = (Iterable<Object>) o;
+        } else {
+            coll = Arrays.asList((Object[]) o);
+        }
+
+        ArrayValueImpl array = (ArrayValueImpl)def.createArray();
+
+        for (Object value : coll) {
+            array.add(FieldValueImpl.fromJavaObjectValue(
+                array.getElementDef(), value));
+        }
+
+        return array;
     }
 
     @Override
@@ -836,8 +830,10 @@ class ArrayValueImpl extends ComplexValueImpl implements ArrayValue {
      * element, if present.
      */
     @Override
-    FieldValueImpl findFieldValue(ListIterator<String> fieldPath,
-                                  int arrayIndex) {
+    FieldValueImpl findFieldValue(
+        ListIterator<String> fieldPath,
+        int arrayIndex) {
+
         if (arrayIndex == -1 && size() != 1) {
             throw new IllegalArgumentException
                 ("Array values used in index keys must contain a single " +
@@ -860,51 +856,50 @@ class ArrayValueImpl extends ComplexValueImpl implements ArrayValue {
          * Peek at the current component.  If it is [], consume it,
          * and keep going. This allows operations to target the element
          * itself vs a field contained in the element.
-         * String component = fieldPath.next();
-         * if (TableImpl.ANONYMOUS.equalsIgnoreCase(component)) {
-         *     if (!fieldPath.hasNext()) {
-         *         return fv;
-         *     }
-         * } else {
-         *     fieldPath.previous();
-         * }
          */
+        String component = fieldPath.next();
+        if (TableImpl.ANONYMOUS.equalsIgnoreCase(component)) {
+            if (!fieldPath.hasNext()) {
+                return fv;
+            }
+        } else {
+            fieldPath.previous();
+        }
 
         return fv.findFieldValue(fieldPath, arrayIndex);
     }
 
-    /**
-     * Creates a nested complex instance in an array for indexes on a complex
-     * field in an array.  If the element type in the array is not complex an
-     * exception will be thrown from createComplexValue().  If the array is
-     * empty the appropriate type will be created.  If it is not empty its size
-     * must be 1 and that element is used.
+    /*
+     * Local methods
      */
-    @Override
-    FieldValueImpl putComplex(ListIterator<String> fieldPath,
-                              FieldDef.Type type, Object value)  {
-        ComplexValueImpl val = null;
-        if (array.isEmpty()) {
-            val = createComplexValue(getElement());
-            add(val);
-        } else if (size() == 1 && (get(0) instanceof ComplexValueImpl)) {
-            val = (ComplexValueImpl) get(0);
-        } else {
-            throw new IllegalArgumentException
-                ("Invalid attempt to put a complex element in an array.  " +
-                 "Size must be 1 and the element must be complex.  Array " +
-                 "contents: " + this);
-        }
-        val.putComplex(fieldPath, type, value);
+
+    List<FieldValue> getArrayInternal() {
+        return array;
+    }
+
+    FieldDefImpl getElementDef() {
+        return (FieldDefImpl)(getDefinition()).getElement();
+    }
+
+    /**
+     * This is used by index deserialization.  The format for enums is an
+     * integer.
+     */
+    ArrayValue addEnum(int value) {
+        validate(FieldDef.Type.ENUM);
+        add(((EnumDefImpl)getElementDef()).createEnum(value));
         return this;
     }
 
-    /* This method should never be called on an array */
-    @Override
-    protected void validateIndexField(String fieldName) {
-        throw new IllegalStateException
-            ("validateIndexField called on an array, field name is " +
-             fieldName);
+    /**
+     * This method must expand to do full validation of type, value and
+     * constraints if present in the definition.  Right now it just
+     * validates the type.
+     */
+    private void validate(FieldDef.Type type) {
+        if (!getElementDef().isType(type)) {
+            throw new IllegalArgumentException
+                ("Incorrect type for array");
+        }
     }
-
 }

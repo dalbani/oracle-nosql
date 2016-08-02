@@ -7,14 +7,14 @@
     <link rel="stylesheet" href="gettingStarted.css" type="text/css" />
     <meta name="generator" content="DocBook XSL Stylesheets V1.73.2" />
     <link rel="start" href="index.html" title="Oracle NoSQL Database Administrator's Guide" />
-    <link rel="up" href="diag_util.html" title="Appendix E. Diagnostics Utility" />
-    <link rel="prev" href="diag_util.html" title="Appendix E. Diagnostics Utility" />
+    <link rel="up" href="diag_util.html" title="Appendix F. Diagnostics Utility" />
+    <link rel="prev" href="diag_util.html" title="Appendix F. Diagnostics Utility" />
     <link rel="next" href="diag_verify.html" title="Verifying Storage Node configuration" />
   </head>
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
@@ -22,7 +22,7 @@
         </tr>
         <tr>
           <td width="20%" align="left"><a accesskey="p" href="diag_util.html">Prev</a> </td>
-          <th width="60%" align="center">Appendix E. Diagnostics Utility</th>
+          <th width="60%" align="center">Appendix F. Diagnostics Utility</th>
           <td width="20%" align="right"> <a accesskey="n" href="diag_verify.html">Next</a></td>
         </tr>
       </table>
@@ -36,13 +36,13 @@
           </div>
         </div>
       </div>
-      <p> 
+      <p>
          After completing the <code class="literal">diagnostics setup</code>, you can
          use the <code class="literal">diagnostics collect</code> tool to package
          important information and files to be able to send them to Oracle
-         Support, for example.
+         Support, for example. 
       </p>
-      <p>
+      <p> 
          The usage of this command is: 
       </p>
       <pre class="programlisting">diagnostics collect -logfiles
@@ -54,16 +54,14 @@
 [-configdir &lt;location of Storage Node target file&gt;]
 [-savedir &lt;destination directory for log files&gt;]
 [-nocompress] </pre>
-      <p> 
-         where: 
-      </p>
+      <p> where: </p>
       <div class="itemizedlist">
         <ul type="disc">
           <li>
             <p> 
                -host 
             </p>
-            <p>
+            <p> 
                Specifies the host of a Storage Node. If specified, it
                detects a running topology in order to update the
                   <code class="literal">sn-target-list</code> without having to run
@@ -72,8 +70,8 @@
             </p>
           </li>
           <li>
-            <p>
-               -port 
+            <p> 
+               -port
             </p>
             <p>
                Specifies the host of a Storage Node. If specified, it
@@ -91,35 +89,37 @@
             </p>
           </li>
           <li>
-            <p> 
+            <p>
                -username
             </p>
             <p> Specifies a username to log on as in a secure deployment.
             </p>
           </li>
           <li>
-            <p> 
+            <p>
                -security
             </p>
-            <p> In a secured deployment, specifies a path to the security
+            <p> 
+               In a secured deployment, specifies a path to the security
                file. If not specified in a secure store, updating the
-                  <code class="literal">sn-target-list</code> will fail. </p>
+                  <code class="literal">sn-target-list</code> will fail. 
+            </p>
           </li>
           <li>
-            <p> 
-               -configdir
-            </p>
             <p>
+               -configdir 
+            </p>
+            <p> 
                Specifies the directory which contains the
                   <code class="literal">sn-target-list</code>. If the flag is not
                specified, the default directory is the working directory.
             </p>
           </li>
           <li>
-            <p> 
+            <p>
                -logfiles 
             </p>
-            <p> 
+            <p>
                Specified to gather log files of KVStore and pack them up
                into a compressed file. The log files are all files in the root
                directory of SNAs(excluding database files jdb files). Available
@@ -130,8 +130,8 @@
             </p>
           </li>
           <li>
-            <p> 
-               -nocompress 
+            <p>
+               -nocompress
             </p>
             <p> 
                Specifies that log files should be copied directly instead of
@@ -141,13 +141,13 @@
             </p>
           </li>
           <li>
-            <p> 
-               -savedir 
+            <p>
+               -savedir
             </p>
             <p> 
                Optionally used to specify the path of the directory to
                contain all the log files. If the flag is not specified, the
-               default directory is the working directory. 
+               default directory is the working directory.
             </p>
           </li>
         </ul>
@@ -164,7 +164,7 @@
           <td width="40%" align="right"> <a accesskey="n" href="diag_verify.html">Next</a></td>
         </tr>
         <tr>
-          <td width="40%" align="left" valign="top">Appendix E. Diagnostics Utility </td>
+          <td width="40%" align="left" valign="top">Appendix F. Diagnostics Utility </td>
           <td width="20%" align="center">
             <a accesskey="h" href="index.html">Home</a>
           </td>

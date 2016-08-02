@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -161,20 +161,20 @@ public class TopologyDetector {
             return topology;
         } catch (Exception ex) {
             /*
-             * Output message when security mismatch between the client and
-             * server
+             * Output message when there may be a security mismatch between the
+             * client and server
              */
-            if (ex.getCause() != null &&
-                ex.getCause().getMessage() != null &&
-                ex.getCause().getMessage().contains("which may be " +
-                        "caused by a security mismatch between the " +
-                        "client and server")) {
-                throw new Exception("Security mismatch between the client" +
-                        " server");
+            final Throwable cause = ex.getCause();
+            if ((cause != null) &&
+                (cause.getMessage() != null) &&
+                cause.getMessage().contains(
+                    RegistryUtils.POSSIBLE_SECURITY_MISMATCH_MESSAGE)) {
+                throw new Exception(cause.getMessage());
             }
 
             throw new Exception("Could not establish an initial Topology" +
-                               " from: " + regHostPort + ":" + ex.getMessage());
+                               " from: " + regHostPort + ": " +
+                                ex.getMessage());
         }
     }
 

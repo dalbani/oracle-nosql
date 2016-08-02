@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -49,25 +49,20 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.Formatter;
-import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.codehaus.jackson.node.ObjectNode;
 
-import oracle.kv.KVVersion;
 import oracle.kv.impl.admin.Admin;
-import oracle.kv.impl.admin.AdminEntity;
 import oracle.kv.impl.admin.AdminServiceParams;
 import oracle.kv.impl.admin.CommandResult;
 import oracle.kv.impl.admin.PlanLocksHeldException;
 import oracle.kv.impl.admin.PlanWaiter;
 import oracle.kv.impl.admin.plan.ExecutionState.ExceptionTransfer;
-import oracle.kv.impl.admin.plan.PlanStore.PlanCursor;
 import oracle.kv.impl.admin.plan.task.ParallelBundle;
 import oracle.kv.impl.admin.plan.task.Task;
 import oracle.kv.impl.admin.plan.task.TaskList;
@@ -79,7 +74,6 @@ import oracle.kv.impl.security.util.SecurityUtils;
 import oracle.kv.impl.util.FormatUtils;
 import oracle.kv.util.ErrorMessage;
 
-import com.sleepycat.je.Transaction;
 import com.sleepycat.persist.model.Entity;
 import com.sleepycat.persist.model.PrimaryKey;
 
@@ -122,15 +116,14 @@ import com.sleepycat.persist.model.PrimaryKey;
  *
  * Because of this, we must refrain from starting Admin transactions that
  * acquire JE locks and then attempt to obtain the plan mutex.
+ *
+ * version 0: original
+ * version 1: removed AdminEntity from inheritance chain
  */
-
-@Entity
-public abstract class AbstractPlan
-    implements Plan, AdminEntity<Integer>, Serializable {
+@Entity(version=1)
+public abstract class AbstractPlan implements Plan, Serializable {
 
     private static final long serialVersionUID = 1L;
-
-    private static final int MAXPLANS = 10;
 
     /* Version for plans created before R3.1.0 */
     private static final int INITIAL_PLAN_VERSION = 1;
@@ -244,10 +237,9 @@ public abstract class AbstractPlan
     private void initWithParams(AdminServiceParams aServiceParams) {
         addListener(new PlanTracker(aServiceParams));
     }
-    /**
-     * Plans instantiated from the database.
-     */
-    public void initPlansFromDb(Planner planner1,
+
+    @Override
+    public void initializePlan(Planner planner1,
                                  AdminServiceParams aServiceParams) {
         planner = planner1;
         initWithParams(aServiceParams);
@@ -466,261 +458,10 @@ public abstract class AbstractPlan
         return logger;
     }
 
-    /**
-     * Store the Plan objects in the BDB environment. Plan is
-     * stored in the given PlanStore using the id field as the primary key.
-     *
-     * The method must be called while synchronized on the plan instance
-     * to ensure that the plan instance is not modified while the object is
-     * being serialized into bytes before being stored into the database. Note
-     * that the synchronization hierarchy requires that no other JE locks are
-     * held before the mutex is acquired, so the caller to this method must be
-     * careful. The synchronization is done explicitly by the caller, rather
-     * than making this method synchronized, to provide more flexibility for
-     * obeying the synchronization hierarchy.
-     *
-     * @param planStore the PlanStore that holds the Parameters
-     * @param txn the transaction in progress
-     */
     @Override
-    public void persist(PlanStore planStore, Transaction txn) {
-        planStore.persist(txn, this);
+    public void stripForDisplay() {
+        /* Default implementation is a noop */
     }
-
-    /**
-     * Fetches all non-terminal Plans in the given EntityStore as a Map.
-     */
-    public static Map<Integer, Plan> fetchActivePlans
-       (PlanStore planStore, Transaction txn, Planner planner,
-        AdminServiceParams aServiceParams) {
-
-        final Map<Integer, Plan> activePlans = new HashMap<>();
-
-        final PlanCursor cursor =
-            planStore.getPlanCursor(txn, null /* startPlanId */);
-
-        try {
-            for (AbstractPlan p = cursor.first();
-                 p != null;
-                 p = cursor.next()) {
-
-                if (!p.getState().isTerminal()) {
-                    p.initPlansFromDb(planner, aServiceParams);
-                    activePlans.put(new Integer(p.getId()), p);
-                }
-            }
-        } finally {
-            cursor.close();
-        }
-
-        return activePlans;
-    }
-
-    /**
-     * Retrieve the beginning plan id and number of plans that satisfy the
-     * request.
-     *
-     * Returns an array of two integers indicating a range of plan id
-     * numbers. [0] is the first id in the range, and [1] number of
-     * plan ids in the range.
-     *
-     * Operates in three modes:
-     *
-     *    mode A requests howMany plans ids following startTime
-     *    mode B requests howMany plans ids preceding endTime
-     *    mode C requests a range of plan ids from startTime to endTime.
-     *
-     *    mode A is signified by endTime == 0
-     *    mode B is signified by startTime == 0
-     *    mode C is signified by neither startTime nor endTime being == 0.
-     *        howMany is ignored in mode C.
-     *
-     * If the owner is not null, only plans with the specified owner will be
-     * returned.
-     */
-    public static int[] getPlanIdRange(PlanStore planStore,
-                                       Transaction txn,
-                                       final long startTime,
-                                       final long endTime,
-                                       final int howMany,
-                                       String ownerId) {
-
-        final int[] range = {0, 0};
-
-        final PlanCursor cursor =
-            planStore.getPlanCursor(txn, null /* startPlanId */);
-
-        int n = 0;
-        try {
-            if (startTime == 0L) {
-                /* This is mode B. */
-                for (AbstractPlan p = cursor.last();
-                     p != null && n < howMany;
-                     p = cursor.prev()) {
-
-                    if (ownerId != null) {
-                        final String planOwnerId =
-                            p.getOwner() == null ? null : p.getOwner().id();
-                        if (!ownerId.equals(planOwnerId)) {
-                            continue;
-                        }
-                    }
-
-                    long creation = p.getCreateTime().getTime();
-                    if (creation < endTime) {
-                        n++;
-                        range[0] = p.getId();
-                    }
-                }
-                range[1] = n;
-            } else {
-                for (AbstractPlan p = cursor.first();
-                     p != null;
-                     p = cursor.next()) {
-
-                    if (ownerId != null) {
-                        final String planOwnerId =
-                            p.getOwner() == null ? null : p.getOwner().id();
-                        if (!ownerId.equals(planOwnerId)) {
-                            continue;
-                        }
-                    }
-
-                    long creation = p.getCreateTime().getTime();
-                    if (creation >= startTime) {
-                        if (range[0] == 0) {
-                            range[0] = p.getId();
-                        }
-                        if (endTime != 0L && creation > endTime) {
-                            /* Mode C */
-                            break;
-                        }
-                        if (howMany != 0 && n >= howMany) {
-                            /* Mode A */
-                            break;
-                        }
-                        n++;
-                    }
-                }
-                range[1] = n;
-            }
-        } finally {
-            cursor.close();
-        }
-
-        return range;
-    }
-
-    /**
-     * Returns a map of plans starting at firstPlanId.  The number of plans in
-     * the map is the lesser of howMany, MAXPLANS, or the number of extant
-     * plans with id numbers following firstPlanId.  The range is not
-     * necessarily fully populated; while plan ids are mostly sequential, it is
-     * possible for values to be skipped. If the owner is not null, only plans
-     * with the specified owner will be returned.
-     */
-    public static Map<Integer, Plan> getPlanRange
-        (final PlanStore planStore,
-         final Transaction txn,
-         final Planner planner,
-         final AdminServiceParams aServiceParams,
-         final int firstPlanId,
-         int howMany,
-         String ownerId) {
-
-        if (howMany > MAXPLANS) {
-            howMany = MAXPLANS;
-        }
-
-        final Map<Integer, Plan> fetchedPlans = new HashMap<>();
-
-        final PlanCursor cursor =
-            planStore.getPlanCursor(txn, firstPlanId);
-
-        try {
-            for (AbstractPlan p = cursor.first();
-                 p != null && howMany > 0;
-                 p = cursor.next()) {
-
-                if (ownerId != null) {
-                    final String planOwnerId =
-                        p.getOwner() == null ? null : p.getOwner().id();
-                    if (!ownerId.equals(planOwnerId)) {
-                        continue;
-                    }
-                }
-
-                p.initPlansFromDb(planner, aServiceParams);
-                p.stripForDisplay();
-                fetchedPlans.put(new Integer(p.getId()), p);
-                howMany--;
-            }
-        } finally {
-            cursor.close();
-        }
-        return fetchedPlans;
-    }
-
-    /**
-     * Returns the Plan corresponding to the given id,
-     * fetched from the database; or null if there is no corresponding plan.
-     */
-    public static Plan fetchPlanById(int id,
-                                     PlanStore planStore,
-                                     Transaction txn,
-                                     Planner planner,
-                                     AdminServiceParams aServiceParams) {
-
-        final AbstractPlan p = planStore.fetch(txn, id);
-
-        if (p != null) {
-            p.initPlansFromDb(planner, aServiceParams);
-        }
-        return p;
-    }
-
-    /**
-     * Return the <i>howMany</i> most recent plans in the plan history.
-     * The plan instance returned will be stripped of memory intensive
-     * components and will not be executable.
-     * @deprecated in favor of getPlanRange.
-     */
-    @Deprecated
-    public static Map<Integer, Plan> fetchRecentPlansForDisplay
-        (int howMany,
-         PlanStore planStore,
-         Transaction txn,
-         Planner planner,
-         AdminServiceParams aServiceParams) {
-
-        final Map<Integer, Plan> fetchedPlans = new HashMap<>();
-
-        final PlanCursor cursor =
-            planStore.getPlanCursor(txn, null /* startPlanId */);
-
-        try {
-            int n = 0;
-            for (AbstractPlan p = cursor.last();
-                 p != null && n < howMany;
-                 p = cursor.prev(), n++) {
-
-                p.initPlansFromDb(planner, aServiceParams);
-                p.stripForDisplay();
-                fetchedPlans.put(new Integer(p.getId()), p);
-            }
-        } finally {
-            cursor.close();
-        }
-
-        return fetchedPlans;
-    }
-
-    /**
-     * Null out components of the plan that are have a large memory footprint,
-     * and that are not needed for display. Meant to reduce the cost of
-     * display a list of command in the Admin CLI.
-     */
-    abstract void stripForDisplay();
 
     /**
      * Return the Admin to which this planner belongs.
@@ -977,16 +718,8 @@ public abstract class AbstractPlan
                                   ErrorMessage errorMsg,
                                   String[] cleanupJobs,
                                   Logger logger2) {
-        boolean hasDPLPlanStore = true;
-        try {
-            hasDPLPlanStore = !planner.getAdmin().checkAdminGroupVersion(
-                KVVersion.R3_1);
-        } catch (Exception e) {
-            /* If failed to get admin group version, we use compatible way
-             * to save failure. */
-        }
         taskRun.saveFailure(t, problemDescription, errorMsg, cleanupJobs,
-                            logger2, hasDPLPlanStore);
+                            logger2);
     }
 
     /**
@@ -1005,16 +738,7 @@ public abstract class AbstractPlan
                                          ErrorMessage errorMsg,
                                          String[] cleanupJobs,
                                          Logger logger2) {
-        boolean hasDPLPlanStore = true;
-        try {
-            hasDPLPlanStore = !planner.getAdmin().checkAdminGroupVersion(
-                KVVersion.R3_1);
-        } catch (Exception e) {
-            /* If failed to get admin group version, we use compatible way
-             * to save failure. */
-        }
-        planRun.saveFailure(t, problem, errorMsg, cleanupJobs, logger2,
-                            hasDPLPlanStore);
+        planRun.saveFailure(t, problem, errorMsg, cleanupJobs, logger2);
     }
 
     synchronized TaskRun startTask(PlanRun planRun,
@@ -1089,16 +813,6 @@ public abstract class AbstractPlan
         return owner;
     }
 
-    @Override
-    public Integer getIndexKey() {
-        return id;
-    }
-
-    @Override
-    public EntityType getEntityType() {
-        return EntityType.PLAN;
-    }
-
     /**
      * Must override this method to return true if plan supports JSON command
      * result output.
@@ -1121,7 +835,7 @@ public abstract class AbstractPlan
 
     /**
      * Must override this method to return plan operation if plan support JSON
-     * command result output. 
+     * command result output.
      */
     @Override
     public String getOperation() {

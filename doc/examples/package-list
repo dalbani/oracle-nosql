@@ -1,11 +1,9 @@
-avro
 coherence
 externaltables
 hadoop
 hadoop.hive.table
 hadoop.table
 hello
-schema
-secondaryindex
+security
 seqnum
 table

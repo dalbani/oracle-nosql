@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,7 +48,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import oracle.kv.impl.admin.IllegalCommandException;
-import oracle.kv.impl.admin.plan.task.StopRepNode;
+import oracle.kv.impl.admin.plan.task.StopNode;
 import oracle.kv.impl.security.KVStorePrivilege;
 import oracle.kv.impl.security.SystemPrivilege;
 import oracle.kv.impl.topo.RepNode;
@@ -85,8 +85,8 @@ public class StopRepNodesPlan extends AbstractPlan {
                      ". Please provide the id of an existing RepNode.");
             }
 
-            addTask(new StopRepNode(this, rn.getStorageNodeId(),
-                                    rnid, true));
+            addTask(new StopNode(this, rn.getStorageNodeId(),
+                                 rnid, true));
         }
     }
 
@@ -114,7 +114,7 @@ public class StopRepNodesPlan extends AbstractPlan {
     }
 
     @Override
-    void stripForDisplay() {
+    public void stripForDisplay() {
         repNodeIds = null;
     }
 

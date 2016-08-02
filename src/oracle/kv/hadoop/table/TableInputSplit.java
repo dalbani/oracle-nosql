@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -56,6 +56,7 @@ import java.util.concurrent.TimeUnit;
 import oracle.kv.Consistency;
 import oracle.kv.Direction;
 import oracle.kv.PasswordCredentials;
+import oracle.kv.impl.topo.RepGroupId;
 
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
@@ -94,6 +95,8 @@ public class TableInputSplit extends InputSplit implements Writable {
     private int batchSize;
     private int maxBatches;
     private List<Set<Integer>> partitionSets;
+    private boolean splitOnShards;
+    private Set<RepGroupId> shardSet;
 
     private String loginFlnm = null;
     private PasswordCredentials pwdCredentials = null;
@@ -256,12 +259,38 @@ public class TableInputSplit extends InputSplit implements Writable {
         return maxBatches;
     }
 
-    void setPartitionSets(List<Set<Integer>> partitionSets) {
-        this.partitionSets = partitionSets;
+    TableInputSplit setPartitionSets(List<Set<Integer>> newPartitionSets) {
+        this.partitionSets = newPartitionSets;
+        return this;
     }
 
-    List<Set<Integer>> getPartitionSets() {
+    /**
+     * Returns a <code>List</code> whose elements are <code>Set</code>s of
+     * partitions; whose union is the set of all partitions in the store.
+     * Note that this method is declared <code>public</code> so that the
+     * method <code>TableHiveInputSplit.getPartitionSets</code> can delegate
+     * to this method.
+     */
+    public List<Set<Integer>> getPartitionSets() {
         return partitionSets;
+    }
+
+    TableInputSplit setSplitOnShards(boolean newSplitOnShards) {
+        this.splitOnShards = newSplitOnShards;
+        return this;
+    }
+
+    public boolean getSplitOnShards() {
+        return splitOnShards;
+    }
+
+    TableInputSplit setShardSet(Set<RepGroupId> newShardSet) {
+        this.shardSet = newShardSet;
+        return this;
+    }
+
+    Set<RepGroupId> getShardSet() {
+        return shardSet;
     }
 
     TableInputSplit setKVStoreSecurity(
@@ -328,13 +357,20 @@ public class TableInputSplit extends InputSplit implements Writable {
         out.writeInt(maxRequests);
         out.writeInt(batchSize);
         out.writeInt(maxBatches);
-        out.writeInt(partitionSets.size());
 
+        out.writeInt(partitionSets.size());
         for (Set<Integer> partitions : partitionSets) {
             out.writeInt(partitions.size());
             for (Integer p : partitions) {
                 out.writeInt(p);
             }
+        }
+
+        out.writeBoolean(splitOnShards);
+
+        out.writeInt(shardSet.size());
+        for (RepGroupId repGroupId : shardSet) {
+            out.writeInt(repGroupId.getGroupId());
         }
 
         /*
@@ -424,9 +460,9 @@ public class TableInputSplit extends InputSplit implements Writable {
         maxRequests = in.readInt();
         batchSize = in.readInt();
         maxBatches = in.readInt();
+
         int nSets = in.readInt();
         partitionSets = new ArrayList<Set<Integer>>(nSets);
-
         while (nSets > 0) {
             int nPartitions = in.readInt();
             final Set<Integer> partitions = new HashSet<Integer>(nPartitions);
@@ -437,6 +473,14 @@ public class TableInputSplit extends InputSplit implements Writable {
                 nPartitions--;
             }
             nSets--;
+        }
+
+        splitOnShards = in.readBoolean();
+
+        final int nShards = in.readInt();
+        shardSet = new HashSet<RepGroupId>(nShards);
+        for (int i = 0; i < nShards; i++) {
+            shardSet.add(new RepGroupId(in.readInt()));
         }
 
         /*
@@ -572,9 +616,24 @@ public class TableInputSplit extends InputSplit implements Writable {
             }
         }
 
+        if (obj1.splitOnShards != obj2.splitOnShards) {
+            return false;
+        }
+
+        /* Compare shardSets only if doing index iteration. */
+        if (splitOnShards) {
+
+            if (shardSet != null) {
+                return (obj1.shardSet == null) ? false :
+                            shardSet.containsAll(obj2.shardSet);
+            }
+            return obj2.shardSet == null;
+        }
+
+        /* Doing PrimaryKey iteration. Compare partition sets. */
         if (partitionSets != null) {
             return (obj1.partitionSets == null) ? false :
-                                partitionSets.containsAll(obj2.partitionSets);
+                        partitionSets.containsAll(obj2.partitionSets);
         }
         return obj2.partitionSets == null;
     }
@@ -606,8 +665,15 @@ public class TableInputSplit extends InputSplit implements Writable {
             hcSum = hcSum + fieldRangeProperty.hashCode();
         }
 
-        if (partitionSets != null) {
-            hcSum += partitionSets.hashCode();
+        if (splitOnShards) {
+            hcSum += 1;
+            if (shardSet != null) {
+                hcSum += shardSet.hashCode();
+            }
+        } else {
+            if (partitionSets != null) {
+                hcSum += partitionSets.hashCode();
+            }
         }
 
         hc = (pm * hc) + hcSum;
@@ -642,49 +708,53 @@ public class TableInputSplit extends InputSplit implements Writable {
             buf.append(tableName);
         }
 
-        if (primaryKeyProperty == null) {
-            buf.append(", primaryKeyProperty=wild-card");
-        } else {
+        if (primaryKeyProperty != null) {
             buf.append(", primaryKeyProperty=");
             buf.append(primaryKeyProperty);
         }
 
-        if (fieldRangeProperty == null) {
-            buf.append(", fieldRangeProperty=all-ranges");
-        } else {
+        if (fieldRangeProperty != null) {
             buf.append(", fieldRangeProperty=");
             buf.append(fieldRangeProperty);
         }
 
-        if (partitionSets == null) {
-            buf.append(", partitionSets=null");
+        if (splitOnShards) {
+            buf.append(", IndexScanSplits");
+            buf.append(", shardSet=");
+            buf.append(shardSet);
         } else {
-            /*
-             * The list of sets of partition ids can get quite large. Only
-             * display the whole list if its size is reasonably small;
-             * otherwise, elide most of the elements.
-             */
-            final int maxListSize = 5;
-            final int maxSetSize = 3;
-            buf.append(", partitionSets=[");
-            /* Display only the 1st maxListSize sets in the list. */
-            int i = 0;
-            for (Set<Integer> partitionSet : partitionSets) {
-                if (i >= maxListSize) {
-                    buf.append(", ...");
-                    break;
-                }
-                if (i > 0) {
-                    buf.append(", [");
-                } else {
-                    buf.append("[");
-                }
-                i++;
+            buf.append(", TableScanSplits");
 
-                bufPartitionIdSets(partitionSet, maxSetSize, buf);
+            if (partitionSets == null) {
+                buf.append(", partitionSets=null");
+            } else {
+                /*
+                 * The list of sets of partition ids can get quite large. Only
+                 * display the whole list if its size is reasonably small;
+                 * otherwise, elide most of the elements.
+                 */
+                final int maxListSize = 5;
+                final int maxSetSize = 3;
+                buf.append(", partitionSets=[");
+                /* Display only the 1st maxListSize sets in the list. */
+                int i = 0;
+                for (Set<Integer> partitionSet : partitionSets) {
+                    if (i >= maxListSize) {
+                        buf.append(", ...");
+                        break;
+                    }
+                    if (i > 0) {
+                        buf.append(", [");
+                    } else {
+                        buf.append("[");
+                    }
+                    i++;
+
+                    bufPartitionIdSets(partitionSet, maxSetSize, buf);
+                    buf.append("]");
+                }
                 buf.append("]");
             }
-            buf.append("]");
         }
         buf.append("]");
         return buf.toString();

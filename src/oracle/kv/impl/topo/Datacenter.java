@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -52,10 +52,12 @@ import com.sleepycat.persist.model.Persistent;
 
 /**
  * The Datacenter topology component.
+ * 
  * version 0: original
  * version 1: added repFactor field
+ * version 2: added allowArbiters field
  */
-@Persistent(version=1)
+@Persistent(version=2)
 public class Datacenter extends Topology.Component<DatacenterId> {
 
     private static final long serialVersionUID = 1L;
@@ -66,13 +68,16 @@ public class Datacenter extends Topology.Component<DatacenterId> {
 
     private String name;
     private int repFactor;
+    private boolean allowArbiters;
 
     /** Creates a new Datacenter. */
     public static Datacenter newInstance(final String name,
                                          final int repFactor,
-                                         final DatacenterType datacenterType) {
+                                         final DatacenterType datacenterType,
+                                         final boolean allowArbiters) {
 
         checkNull("datacenterType", datacenterType);
+
         switch (datacenterType) {
         case PRIMARY:
 
@@ -80,21 +85,28 @@ public class Datacenter extends Topology.Component<DatacenterId> {
              * Create an instance of the original Datacenter type, to maintain
              * compatibility as needed during an upgrade.
              */
-            return new Datacenter(name, repFactor);
+            return new Datacenter(name, repFactor, allowArbiters);
 
         case SECONDARY:
-            return new DatacenterV2(name, repFactor, datacenterType);
+            return new DatacenterV2(name, repFactor,
+                                    datacenterType, false);
         default:
             throw new AssertionError();
         }
     }
 
-    private Datacenter(String name, int repFactor) {
+    private Datacenter(String name, int repFactor, boolean allowArbiters) {
         this.name = name;
         this.repFactor = repFactor;
-        if (repFactor < 1) {
+        this.allowArbiters = allowArbiters;
+        int minRepFactor = 1;
+        if (allowArbiters) {
+            minRepFactor = 0;
+        }
+        if (repFactor < minRepFactor) {
             throw new IllegalArgumentException(
-                "Replication factor must be greater than or equal to 1");
+                "Replication factor must be greater than or equal to " +
+                minRepFactor);
         }
     }
 
@@ -136,6 +148,11 @@ public class Datacenter extends Topology.Component<DatacenterId> {
         return DEFAULT_DATACENTER_TYPE;
     }
 
+    public boolean getAllowArbiters() {
+        return allowArbiters;
+    }
+
+
     /* (non-Javadoc)
      * @see oracle.kv.impl.topo.Topology.Component#clone()
      */
@@ -149,6 +166,9 @@ public class Datacenter extends Topology.Component<DatacenterId> {
         final int prime = 31;
         int result = super.hashCode();
         result = prime * result + ((name == null) ? 0 : name.hashCode());
+        result = prime * result + getDatacenterType().hashCode();
+        result = prime * result + getRepFactor();
+        result = prime * result + (getAllowArbiters() ? 0 : 1);
         return result;
     }
 
@@ -160,7 +180,7 @@ public class Datacenter extends Topology.Component<DatacenterId> {
         if (!super.equals(obj)) {
             return false;
         }
-        if (getClass() != obj.getClass()) {
+        if (!(obj instanceof Datacenter)) {
             return false;
         }
         final Datacenter other = (Datacenter) obj;
@@ -172,14 +192,21 @@ public class Datacenter extends Topology.Component<DatacenterId> {
             return false;
         }
 
-        return (repFactor == other.repFactor);
+        if (repFactor == other.repFactor &&
+            getDatacenterType().equals(other.getDatacenterType()) &&
+            allowArbiters == other.allowArbiters) {
+            return true;
+        }
+
+        return false;
     }
 
     @Override
     public String toString() {
         final StringBuilder sb = new StringBuilder();
         sb.append("id=" + getResourceId() + " name=" + name +
-                  " repFactor=" + repFactor + " type=" + getDatacenterType());
+                  " repFactor=" + repFactor + " type=" + getDatacenterType() +
+                  " allowArbiters=" + getAllowArbiters());
         return sb.toString();
     }
 
@@ -237,9 +264,14 @@ public class Datacenter extends Topology.Component<DatacenterId> {
 
         DatacenterV2(final String name,
                      final int repFactor,
-                     final DatacenterType datacenterType) {
-            super(name, repFactor);
+                     final DatacenterType datacenterType,
+                     final boolean allowArbiters) {
+            super(name, repFactor, allowArbiters);
             checkNull("datacenterType", datacenterType);
+            if (allowArbiters && datacenterType == DatacenterType.SECONDARY) {
+                throw new IllegalArgumentException(
+                    "Secondary Zones do not allow Arbiters.");
+            }
             this.datacenterType = datacenterType;
         }
 

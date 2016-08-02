@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -56,8 +56,6 @@ import java.security.AccessController;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
 import java.util.Properties;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import javax.security.auth.Subject;
 import javax.security.auth.kerberos.KerberosPrincipal;
@@ -66,6 +64,10 @@ import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.auth.login.Configuration;
 import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
+
+import org.ietf.jgss.GSSContext;
+import org.ietf.jgss.GSSManager;
+import org.ietf.jgss.GSSName;
 
 import oracle.kv.AuthenticationFailureException;
 import oracle.kv.KVSecurityConstants;
@@ -78,10 +80,6 @@ import oracle.kv.impl.security.login.UserLoginAPI;
 import oracle.kv.impl.security.util.KVStoreLogin;
 import oracle.kv.impl.security.util.KVStoreLogin.PasswordCallbackHandler;
 import oracle.kv.impl.security.util.SecurityUtils;
-
-import org.ietf.jgss.GSSContext;
-import org.ietf.jgss.GSSManager;
-import org.ietf.jgss.GSSName;
 
 /**
  * Kerberos login helper class.<p>
@@ -180,8 +178,8 @@ public class KerberosLoginHelper {
             loginConfEntry = ClientKrbConfiguration.CLIENT_KERBEROS_CONFIG;
         }
 
-        final boolean requireMutualAuth =
-            checkBooleanField(sp.getProperty(AUTH_KRB_MUTUAL_PROPERTY));
+        final boolean requireMutualAuth = KVStoreLogin.checkBooleanField(
+            sp.getProperty(AUTH_KRB_MUTUAL_PROPERTY), false /* default */);
 
         /* Get user principal full name */
         userName = getUserFullName(userName,
@@ -212,7 +210,7 @@ public class KerberosLoginHelper {
             throw new AuthenticationFailureException("Building Kerberos " +
                 "credential failed: cannot obtain TGT for " + userName);
         }
- 
+
         /* Make service principals map if specified */
         final String hostPrincPair = sp.getProperty(AUTH_KRB_SERVICES_PROPERTY);
 
@@ -253,24 +251,6 @@ public class KerberosLoginHelper {
             throw new IllegalArgumentException("The specified path " + path +
                 " does not exist");
         }
-    }
-
-    /*
-     * Check given string to boolean value. Throw IllegalArgumentException
-     * if given string is a invalid boolean value.
-     */
-    private static boolean checkBooleanField(String input) {
-        if (input == null) {
-            return false;
-        }
-        final Pattern pattern =
-            Pattern.compile("true|false", Pattern.CASE_INSENSITIVE);
-        final Matcher matcher = pattern.matcher(input);
-        if (!matcher.matches()) {
-            throw new IllegalArgumentException(
-                "Invalid input for boolean field: " + input);
-        }
-        return Boolean.parseBoolean(input);
     }
 
     /*
@@ -361,10 +341,10 @@ public class KerberosLoginHelper {
     private static class KerberosGSSLoginAction
         implements PrivilegedExceptionAction<LoginResult> {
 
-        private String userName;
-        private String servicePrincipal;
-        private boolean mutualAuthentication;
-        private UserLoginAPI loginAPI;
+        private final String userName;
+        private final String servicePrincipal;
+        private final boolean mutualAuthentication;
+        private final UserLoginAPI loginAPI;
 
         KerberosGSSLoginAction(String userName,
                                String service,
@@ -394,7 +374,7 @@ public class KerberosLoginHelper {
                     GSSContext.DEFAULT_LIFETIME);
                 context.requestMutualAuth(mutualAuthentication);
 
-                final byte[] ticketToken = 
+                final byte[] ticketToken =
                     context.initSecContext(token, 0, token.length);
                 final LoginResult result = loginAPI.login(
                     new KerberosInternalCredentials(userName, ticketToken));

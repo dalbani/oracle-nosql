@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,6 +44,7 @@
 package oracle.kv.impl.admin;
 
 import static oracle.kv.impl.param.ParameterState.ADMIN_TYPE;
+import static oracle.kv.impl.param.ParameterState.ARBNODE_TYPE;
 import static oracle.kv.impl.param.ParameterState.REPNODE_TYPE;
 import static oracle.kv.impl.util.JsonUtils.createObjectNode;
 import static oracle.kv.impl.util.JsonUtils.getArray;
@@ -74,15 +75,19 @@ import oracle.kv.impl.admin.TopologyCheck.RNLocationInput;
 import oracle.kv.impl.admin.TopologyCheck.Remedy;
 import oracle.kv.impl.admin.TopologyCheck.RemoveRNRemedy;
 import oracle.kv.impl.admin.TopologyCheck.TOPO_STATUS;
+import oracle.kv.impl.admin.TopologyCheck.UpdateANParamsRemedy;
 import oracle.kv.impl.admin.TopologyCheck.UpdateAdminParamsRemedy;
 import oracle.kv.impl.admin.TopologyCheck.UpdateRNParamsRemedy;
 import oracle.kv.impl.admin.TopologyCheckUtils.SNServices;
+import oracle.kv.impl.admin.param.GroupNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
-import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.topo.Rules;
 import oracle.kv.impl.admin.topo.Rules.Results;
 import oracle.kv.impl.admin.topo.Validations.RulesProblem;
+import oracle.kv.impl.arb.ArbNodeStatus;
 import oracle.kv.impl.fault.CommandFaultException;
+import oracle.kv.impl.arb.admin.ArbNodeAdminAPI;
+import oracle.kv.impl.arb.admin.ArbNodeAdminFaultException;
 import oracle.kv.impl.param.LoadParameters;
 import oracle.kv.impl.param.ParameterMap;
 import oracle.kv.impl.param.ParameterState;
@@ -94,12 +99,15 @@ import oracle.kv.impl.security.login.LoginManager;
 import oracle.kv.impl.sna.StorageNodeAgentAPI;
 import oracle.kv.impl.sna.StorageNodeStatus;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.RepGroup;
 import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.RepNode;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
+import oracle.kv.impl.topo.ResourceId.ResourceType;
 import oracle.kv.impl.topo.StorageNodeId;
 import oracle.kv.impl.topo.Topology;
 import oracle.kv.impl.util.ConfigurableService.ServiceStatus;
@@ -108,6 +116,7 @@ import oracle.kv.impl.util.registry.RegistryUtils;
 import oracle.kv.util.ErrorMessage;
 import oracle.kv.util.Ping;
 import oracle.kv.util.Ping.AdminStatusFunction;
+import oracle.kv.util.Ping.ArbNodeStatusFunction;
 import oracle.kv.util.Ping.RepNodeStatusFunction;
 import oracle.kv.util.PingDisplay;
 
@@ -356,10 +365,14 @@ public class VerifyConfiguration {
                                                targetVersion,
                                                showProgress, logger));
             } else {
-                /* SN is at or above target. Make sure RNs are up-to-date */
+                /* SN is at or above target. Make sure RNs/ANs are up-to-date */
                 verifyRNUpgrade(snVersion,
                                 topology.getHostedRepNodeIds(snId),
                                 registryUtils);
+                verifyANUpgrade(snVersion,
+                                topology.getHostedArbNodeIds(snId),
+                                registryUtils);
+
             }
         }
 
@@ -404,6 +417,43 @@ public class VerifyConfiguration {
                                            rnStatus, showProgress, logger));
                 } else {
                     throw rnafe;
+                }
+            }
+        }
+    }
+
+    private void verifyANUpgrade(KVVersion snVersion,
+                                 Set<ArbNodeId> hostedArbNodeIds,
+                                 RegistryUtils registryUtils) {
+
+        ServiceStatus anStatus = null;
+
+        for (ArbNodeId anId : hostedArbNodeIds) {
+            try {
+                final ArbNodeAdminAPI ana = registryUtils.getArbNodeAdmin(anId);
+                anStatus = ana.ping().getServiceStatus();
+                final KVVersion anVersion = ana.getInfo().getSoftwareVersion();
+
+                if (anVersion.compareTo(snVersion) != 0) {
+                    warnings.add(new UpgradeNeeded(anId,
+                                                   anVersion,
+                                                   snVersion,
+                                                   showProgress, logger));
+                }
+            } catch (RemoteException re) {
+                violations.add(new RMIFailed(anId, re, "ping()", showProgress,
+                                             logger));
+            } catch (NotBoundException nbe) {
+                violations.add(new RMIFailed(anId, nbe, showProgress, logger));
+            } catch (ArbNodeAdminFaultException anafe) {
+                if (anafe.getFaultClassName().equals(
+                    IllegalRepNodeServiceStateException.class.getName())) {
+
+                    violations.add(
+                        new StatusNotRight(anId, ServiceStatus.RUNNING,
+                                           anStatus, showProgress, logger));
+                } else {
+                    throw anafe;
                 }
             }
         }
@@ -547,6 +597,15 @@ public class VerifyConfiguration {
         RemoteException getParamsRemoteException;
     }
 
+    /** Store ping and getParams results for an AN. */
+    private static class ArbNodeInfo {
+        ArbNodeStatus pingStatus;
+        RemoteException pingRemoteException;
+        NotBoundException pingNotBoundException;
+        LoadParameters getParamsResult;
+        RemoteException getParamsRemoteException;
+    }
+
     /**
      * For each SN in the store, contact each service, conduct check.
      */
@@ -559,10 +618,14 @@ public class VerifyConfiguration {
         /* Collect RN ping and getParams results, and master status info */
         final Map<RepNode, RepNodeInfo> rnInfoMap =
             new HashMap<RepNode, RepNodeInfo>();
+        final Map<ArbNode, ArbNodeInfo> anInfoMap =
+            new HashMap<ArbNode, ArbNodeInfo>();
         final Map<RepGroupId, RepNodeStatus> masterStatusMap =
             new HashMap<RepGroupId, RepNodeStatus>();
         rnPingAndGetParams(
             topology, registryUtils, rnInfoMap, masterStatusMap);
+
+        anPingAndGetParams(topology, registryUtils, anInfoMap);
 
         /* Use rnInfoMap to provide RepNodeStatus values */
         final RepNodeStatusFunction rnfunc = new RepNodeStatusFunction() {
@@ -576,7 +639,19 @@ public class VerifyConfiguration {
             }
         };
 
-        PingDisplay.shardOverviewToJson(topology, rnfunc, jsonTop);
+         /* Use anInfoMap to provide ArbNodeStatus values */
+        final ArbNodeStatusFunction anfunc = new ArbNodeStatusFunction() {
+            @Override
+            public ArbNodeStatus get(ArbNode node) {
+                final ArbNodeInfo info = anInfoMap.get(node);
+                if (info.pingStatus != null) {
+                    return info.pingStatus;
+                }
+                return null;
+            }
+        };
+
+        PingDisplay.shardOverviewToJson(topology, rnfunc, anfunc, jsonTop);
 
         final Map<AdminId, AdminInfo> allAdminInfo =
             collectAdminInfo(currentParams, registryUtils);
@@ -592,7 +667,8 @@ public class VerifyConfiguration {
 
         final ArrayNode jsonZones = jsonTop.putArray("zoneStatus");
         for (final Datacenter dc : topology.getSortedDatacenters()) {
-            jsonZones.add(PingDisplay.zoneOverviewToJson(topology, dc, rnfunc));
+            jsonZones.add(
+                PingDisplay.zoneOverviewToJson(topology, dc, rnfunc, anfunc));
         }
 
         Map<StorageNodeId, SNServices> sortedResources =
@@ -636,6 +712,15 @@ public class VerifyConfiguration {
                                  new RepGroupId(rnId.getGroupId())),
                              jsonRNs);
             }
+
+            /* Check all ArbNodes on this storage node. */
+            final ArrayNode jsonANs =
+                listAll ? jsonSN.putArray("anStatus") : null;
+            for (ArbNodeId anId : nodeInfo.getAllARBs()) {
+                checkArbNode(topology, snId, anId, currentParams,
+                             anInfoMap.get(topology.get(anId)),
+                             jsonANs);
+            }
         }
     }
 
@@ -675,6 +760,42 @@ public class VerifyConfiguration {
                     }
                 }
                 rnInfoMap.put(rn, rnInfo);
+            }
+        }
+    }
+
+    /* Suppress Eclipse warning for ana.getParams call */
+    @SuppressWarnings("null")
+    private static void anPingAndGetParams(
+        Topology topology,
+        RegistryUtils registryUtils,
+        Map<ArbNode, ArbNodeInfo> anInfoMap) {
+
+        for (final RepGroup rg : topology.getRepGroupMap().getAll()) {
+            for (final ArbNode an : rg.getArbNodes()) {
+                final ArbNodeId anId = an.getResourceId();
+                ArbNodeAdminAPI ana = null;
+                final ArbNodeInfo anInfo = new ArbNodeInfo();
+                try {
+                    ana = registryUtils.getArbNodeAdmin(anId);
+                    anInfo.pingStatus = ana.ping();
+                } catch (RemoteException re) {
+                    anInfo.pingRemoteException = re;
+                } catch (NotBoundException e) {
+                    anInfo.pingNotBoundException = e;
+                }
+
+                if (anInfo.pingStatus != null) {
+                    if (ServiceStatus.RUNNING.equals(
+                            anInfo.pingStatus.getServiceStatus())) {
+                        try {
+                            anInfo.getParamsResult = ana.getParams();
+                        } catch (RemoteException re) {
+                            anInfo.getParamsRemoteException = re;
+                        }
+                    }
+                }
+                anInfoMap.put(an, anInfo);
             }
         }
     }
@@ -846,7 +967,7 @@ public class VerifyConfiguration {
                 pingProblem = true;
             } else {
                 /* The RN is configured as being disabled, issue a warning */
-                reportStoppedRN(rnId, snId);
+                reportStopped(rnId, snId);
             }
         } else {
             final NotBoundException e = rnInfo.pingNotBoundException;
@@ -855,7 +976,7 @@ public class VerifyConfiguration {
                 pingProblem = true;
             } else {
                 /* The RN is configured as being disabled, issue a warning */
-                reportStoppedRN(rnId, snId);
+                reportStopped(rnId, snId);
             }
         }
 
@@ -879,24 +1000,85 @@ public class VerifyConfiguration {
     }
 
     /**
-     * Report a RN that is not up.
+     * Check ping and getParams results for this arbNode.
      */
-    private void reportStoppedRN(RepNodeId rnId, StorageNodeId snId) {
-        warnings.add(new ServiceStopped(rnId, snId, showProgress,
+    private void checkArbNode(Topology topology,
+                              StorageNodeId snId,
+                              ArbNodeId anId,
+                              Parameters currentParams,
+                              ArbNodeInfo anInfo,
+                              ArrayNode jsonANs) {
+
+        boolean pingProblem = false;
+        ServiceStatus status = ServiceStatus.UNREACHABLE;
+        ArbNodeStatus anStatus = null;
+
+        boolean isDisabled = currentParams.get(anId).isDisabled();
+        ServiceStatus expected = isDisabled ? ServiceStatus.UNREACHABLE :
+            ServiceStatus.RUNNING;
+
+        if (anInfo.pingStatus != null) {
+            anStatus = anInfo.pingStatus;
+            status = anStatus.getServiceStatus();
+        } else if (anInfo.pingRemoteException != null) {
+            final RemoteException re = anInfo.pingRemoteException;
+            if (!expected.equals(ServiceStatus.UNREACHABLE)) {
+                violations.add(new RMIFailed(anId, re, "ping()", showProgress,
+                                             logger));
+                pingProblem = true;
+            } else {
+                /* The AN is configured as being disabled, issue a warning */
+                reportStopped(anId, snId);
+            }
+        } else {
+            final NotBoundException e = anInfo.pingNotBoundException;
+            if (!expected.equals(ServiceStatus.UNREACHABLE)) {
+                violations.add(new RMIFailed(anId, e, showProgress, logger));
+                pingProblem = true;
+            } else {
+                /* The AN is configured as being disabled, issue a warning */
+                reportStopped(anId, snId);
+            }
+        }
+
+        if (!pingProblem) {
+            if (status.equals(expected)) {
+                if (status.equals(ServiceStatus.RUNNING)) {
+                    checkANParams(anId, topology, currentParams, anInfo);
+                }
+            } else {
+                violations.add(new StatusNotRight(anId, expected, status,
+                                                  showProgress, logger));
+            }
+        }
+
+        if (listAll) {
+            final ObjectNode jsonAN = PingDisplay.arbNodeToJson(
+                topology.get(anId), anStatus, expected);
+            logger.info("Verify: " + PingDisplay.displayArbNode(jsonAN));
+            jsonANs.add(jsonAN);
+        }
+    }
+
+    /**
+     * Report that a RN or AN is not up.
+     */
+    private void reportStopped(ResourceId resId, StorageNodeId snId) {
+        warnings.add(new ServiceStopped(resId, snId, showProgress,
                                         logger, true));
 
         /*
          * If there are no previously detected errors with this RN, and its
          * location is correct, suggest that it should be restarted.
          */
-        final boolean previousRemedy = remedies.remedyExists(rnId);
+        final boolean previousRemedy = remedies.remedyExists(resId);
 
         if (!previousRemedy) {
             remedies.add(
                 new CreateRNRemedy(topoChecker,
                                    new RNLocationInput(TOPO_STATUS.HERE,
                                                        CONFIG_STATUS.HERE),
-                                   snId, rnId, null /* jeHAInfo */));
+                                   snId, resId, null /* jeHAInfo */));
         }
     }
 
@@ -958,59 +1140,7 @@ public class VerifyConfiguration {
         topoChecker.saveSNRemoteParams(snId, remoteParams);
         Set<RepNodeId> rnsToCheck = topoChecker.getPossibleRNs(snId);
         for (RepNodeId rnId: rnsToCheck) {
-            try {
-                final Remedy remedy = topoChecker.checkRNLocation(
-                    admin, snId, rnId, false /* calledByDeployNewRN */,
-                    false /* makeRNEnabled */, null /* oldSNId */,
-                    null /* newMountPoint */);
-
-                if (remedy.canFix()) {
-                    logger.log(Level.INFO, "{0}", new Object[] {remedy});
-                    Problem p;
-                    if (remedy instanceof CreateRNRemedy) {
-                        p = new ServiceStopped(rnId,
-                                               snId,
-                                               showProgress,
-                                               logger,
-                                               false); /* isDisabled */
-                    } else {
-                        p = new ParamMismatch(rnId,
-                                              remedy.problemDescription(),
-                                              showProgress, logger);
-                    }
-
-                    violations.add(p);
-                    remedies.add(remedy);
-                } else {
-
-                    /*
-                     * If checking the RN location did not provide a fix, but
-                     * the RN appears in the current RN parameters, then check
-                     * parameters, and let that be what reports problems and
-                     * provides fixes.  Otherwise, just report the parameter
-                     * mismatch.
-                     */
-                    final RepNodeParams currentRepNodeParams =
-                        currentParams.get(rnId);
-                    if (currentRepNodeParams != null) {
-                        checkParams(rnId, remoteParams,
-                                    currentRepNodeParams.getMap(),
-                                    ParamMismatchLocation.CONFIG);
-                    } else {
-                        violations.add(
-                            new ParamMismatch(rnId,
-                                              remedy.problemDescription(),
-                                              showProgress, logger));
-                    }
-                }
-            } catch (RemoteException e) {
-                violations.add
-                (new RMIFailed(snId, e, "checkRNLocation", showProgress,
-                               logger));
-            } catch (NotBoundException e) {
-                violations.add
-                (new RMIFailed(snId, e, showProgress, logger));
-            }
+            check(snId, rnId, currentParams, remoteParams);
         }
 
         /*
@@ -1038,6 +1168,10 @@ public class VerifyConfiguration {
                           "the admin believes it is",
                           showProgress, logger));
         }
+        Set<ArbNodeId> ansToCheck = topoChecker.getPossibleANs(snId);
+        for (ArbNodeId anId: ansToCheck) {
+            check(snId, anId, currentParams, remoteParams);
+        }
     }
 
     /**
@@ -1060,6 +1194,91 @@ public class VerifyConfiguration {
         }
 
         checkServiceParams(topology.get(rnId).getStorageNodeId(), rnId,
+                           remoteParams, currentParams);
+    }
+
+    private void check(StorageNodeId snId,
+                       ResourceId resId,
+                       Parameters currentParams,
+                       LoadParameters remoteParams) {
+        try {
+            final Remedy remedy = topoChecker.checkLocation(
+                admin, snId, resId, false /* calledByDeployNewRN */,
+                false /* makeRNEnabled */, null /* oldSNId */,
+                null /* newMountPoint */);
+
+            if (remedy.canFix()) {
+                logger.log(Level.INFO, "{0}", new Object[] {remedy});
+                Problem p;
+                if (remedy instanceof CreateRNRemedy) {
+                    p = new ServiceStopped(resId,
+                                           snId,
+                                           showProgress,
+                                           logger,
+                                           false); /* isDisabled */
+                } else {
+                    p = new ParamMismatch(resId,
+                                          remedy.problemDescription(),
+                                          showProgress, logger);
+                }
+
+                violations.add(p);
+                remedies.add(remedy);
+            } else {
+
+                /*
+                 * If checking the RN location did not provide a fix, but
+                 * the RN appears in the current RN parameters, then check
+                 * parameters, and let that be what reports problems and
+                 * provides fixes.  Otherwise, just report the parameter
+                 * mismatch.
+                 */
+                final GroupNodeParams currentNodeParams =
+                        (resId.getType() == ResourceType.REP_NODE) ?
+                        currentParams.get((RepNodeId)resId) :
+                        currentParams.get((ArbNodeId)resId);
+                    if (currentNodeParams != null) {
+
+                        checkParams(resId, remoteParams,
+                                    currentNodeParams.getMap(),
+                                    ParamMismatchLocation.CONFIG);
+                } else {
+                    violations.add(
+                        new ParamMismatch(resId,
+                                          remedy.problemDescription(),
+                                          showProgress, logger));
+                }
+            }
+        } catch (RemoteException e) {
+            violations.add
+            (new RMIFailed(snId, e, "checkLocation", showProgress,
+                           logger));
+        } catch (NotBoundException e) {
+            violations.add
+            (new RMIFailed(snId, e, showProgress, logger));
+        }
+    }
+
+    /**
+     * See if this arbNode's params match those held in the admin db.
+     */
+    private void checkANParams(ArbNodeId anId,
+                               Topology topology,
+                               Parameters currentParams,
+                               ArbNodeInfo anInfo) {
+
+        /* Check results of asking the RN for its params */
+        LoadParameters remoteParams;
+        if (anInfo.getParamsResult != null) {
+            remoteParams = anInfo.getParamsResult;
+        } else {
+            final RemoteException re = anInfo.getParamsRemoteException;
+            violations.add(new RMIFailed(anId, re, "getParams", showProgress,
+                                         logger));
+            return;
+        }
+
+        checkServiceParams(topology.get(anId).getStorageNodeId(), anId,
                            remoteParams, currentParams);
     }
 
@@ -1185,6 +1404,9 @@ public class VerifyConfiguration {
             } else if (referenceParamMap.getType().equals(REPNODE_TYPE)) {
                 remedies.add(new UpdateRNParamsRemedy(topoChecker,
                                                       (RepNodeId) rId));
+            } else if (referenceParamMap.getType().equals(ARBNODE_TYPE)) {
+                remedies.add(new UpdateANParamsRemedy(topoChecker,
+                                                      (ArbNodeId) rId));
             }
             return false;
         }
@@ -1624,7 +1846,7 @@ public class VerifyConfiguration {
         @Override
         public String toString() {
             return "Mismatch between metadata in admin service and " + rId +
-                ":" + eol + mismatch;
+                ":" + mismatch;
         }
 
         @Override
@@ -2001,6 +2223,12 @@ public class VerifyConfiguration {
                         getAsText(jsonRN, "resourceId"), sb);
                     sb.append("Verify: ")
                         .append(PingDisplay.displayRepNode(jsonRN)).append(eol);
+                }
+                for (JsonNode jsonAN : getArray(jsonSN, "anStatus")) {
+                    showProgressProblems(
+                        getAsText(jsonAN, "resourceId"), sb);
+                    sb.append("Verify: ")
+                        .append(PingDisplay.displayArbNode(jsonAN)).append(eol);
                 }
             }
             sb.append(eol);

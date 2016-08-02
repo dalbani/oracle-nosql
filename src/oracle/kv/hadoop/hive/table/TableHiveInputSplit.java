@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -46,6 +46,7 @@ package oracle.kv.hadoop.hive.table;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.util.List;
 
 import oracle.kv.PasswordCredentials;
 import oracle.kv.hadoop.table.TableInputSplit;
@@ -223,6 +224,29 @@ public class TableHiveInputSplit extends FileSplit {
 
     public String getTableName() {
         return v2Split.getTableName();
+    }
+
+    /**
+     * Returns the version 2 split. This method is called by the method
+     * <code>TableHiveInputFormat.getRecordReader</code>; which uses the
+     * version 2 split returned by this method to create the version 2
+     * <code>RecordReader</code> that will be encapsulated by the version 1
+     * <code>RecordReader</code> used in Hive queries.
+     */
+    TableInputSplit getV2Split() {
+        return v2Split;
+    }
+
+    /**
+     * Returns a <code>List</code> whose elements are <code>Set</code>s of
+     * partitions; whose union is the set of all partitions in the store.
+     */
+    List<java.util.Set<Integer>> getPartitionSets() {
+        return v2Split.getPartitionSets();
+    }
+
+    public boolean getSplitOnShards() {
+        return v2Split.getSplitOnShards();
     }
 
     public String getSecurityLogin() {

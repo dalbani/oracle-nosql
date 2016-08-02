@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -61,6 +61,7 @@ import oracle.kv.impl.api.ops.MultiGetBatchTable;
 import oracle.kv.impl.api.ops.MultiGetBatchTableKeys;
 import oracle.kv.impl.api.ops.Result;
 import oracle.kv.impl.api.ops.ResultKeyValueVersion;
+import oracle.kv.impl.api.ops.ResultKey;
 import oracle.kv.table.FieldRange;
 import oracle.kv.table.MultiRowOptions;
 import oracle.kv.table.PrimaryKey;
@@ -125,6 +126,7 @@ class TableMultiGetBatch {
      * Creates a table bulk get iterator returning primary keys.
      */
     TableIterator<PrimaryKey> createKeysIterator() {
+
         final BulkGetIterator<PrimaryKey, PrimaryKey> getIterator =
             new BulkGetIterator<PrimaryKey, PrimaryKey>(store,
                                                         primaryKeyIterators,
@@ -154,16 +156,14 @@ class TableMultiGetBatch {
                 @Override
                 protected void convertResult(Result result,
                                              List<PrimaryKey> elementList) {
-                    final List<byte[]> results = result.getKeyList();
+                    final List<ResultKey> results = result.getKeyList();
                     if (results.size() == 0) {
                         return;
                     }
                     final TableImpl table = getTopTable();
-                    for (byte[] bytes: results) {
-                        final Key key = keySerializer.fromByteArray(bytes);
-                        final PrimaryKey pkey =
-                            table.createPrimaryKeyFromKeyBytes(
-                                key.toByteArray());
+                    for (ResultKey rkey: results) {
+                        final PrimaryKeyImpl pkey =
+                            table.createPrimaryKeyFromResultKey(rkey);
                         if (pkey == null) {
                             throw new IllegalArgumentException("Fail to " +
                             		"convert to primary key");
@@ -171,27 +171,15 @@ class TableMultiGetBatch {
                         elementList.add(pkey);
                     }
                 }
-
-                @Override
-                protected byte[] extractResumeKey
-                    (Result result, List<PrimaryKey> elementList) {
-
-                    int cnt = elementList.size();
-                    if (cnt == 0) {
-                        return null;
-                    }
-                    final PrimaryKey primaryKey = elementList.get(cnt - 1);
-                    final TableImpl table = (TableImpl)primaryKey.getTable();
-                    return table.createKey(primaryKey, true).toByteArray();
-                }
             };
-        return new TableScan.TableIteratorWrapper<PrimaryKey>(getIterator);
+        return getIterator;
     }
 
     /**
      * Creates a table bulk get iterator returning rows.
      */
     TableIterator<Row> createIterator() {
+
         final BulkGetIterator<PrimaryKey, Row> getIterator =
             new BulkGetIterator<PrimaryKey, Row>(store,
                                                  primaryKeyIterators,
@@ -240,24 +228,16 @@ class TableMultiGetBatch {
                             throw new IllegalArgumentException("Fail to " +
                                 "convert to row");
                         }
-                        row = apiImpl.getRowFromValueVersion(vv, row, false);
+                        row = apiImpl.getRowFromValueVersion(
+                            vv,
+                            row,
+                            entry.getExpirationTime(),
+                            false);
                         elementList.add(row);
                     }
                 }
-
-                @Override
-                protected byte[] extractResumeKey(Result result,
-                                                  List<Row> elementList) {
-                    int cnt = elementList.size();
-                    if (cnt == 0) {
-                        return null;
-                    }
-                    final Row row = elementList.get(cnt - 1);
-                    final TableImpl table = (TableImpl)row.getTable();
-                    return table.createKey(row, true).toByteArray();
-                }
             };
-        return new TableScan.TableIteratorWrapper<Row>(getIterator);
+        return getIterator;
     }
 
     /**

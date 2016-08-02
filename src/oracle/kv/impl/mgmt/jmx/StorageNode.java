@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -127,7 +127,8 @@ public class StorageNode
     }
 
     /**
-     * Send a RepNode's or Admin's notifications from the StorageNodeMBean.
+     * Send a RepNode's , ArbNode's or Admin's notifications
+     * from the StorageNodeMBean.
      * This is convenient because RepNodes can come and go, and notification
      * subscriptions on Repnodes do not survive this death and resurrection.  A
      * client can subscribe to StorageNodeMBean events, and receive events for
@@ -171,6 +172,10 @@ public class StorageNode
                 (new String[]{Admin.NOTIFY_ADMIN_STATUS_CHANGE},
                  Notification.class.getName(),
                  "Announce a change in the Admin's service status"),
+            new MBeanNotificationInfo
+                (new String[]{ArbNode.NOTIFY_AN_STATUS_CHANGE},
+                 Notification.class.getName(),
+                 "Announce a change in a ArbNode's service status."),
         };
     }
 

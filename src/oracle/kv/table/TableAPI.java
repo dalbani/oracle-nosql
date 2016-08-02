@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -661,6 +661,11 @@ public interface TableAPI {
      * ReturnRow.Choice} specifies that they should not be returned, the
      * version in this object is set to null and none of the row's fields are
      * available.
+     * <p>
+     * If a non-null {@code ReturnRow} is specified and a previous row
+     * exists, then the expiration time of the previous row can be accessed
+     * by calling {@link Row#getExpirationTime getExpirationTime()} on {@code
+     * prevRow}.
      *
      * @param writeOptions non-default arguments controlling the
      * durability of the operation, or null to get default behavior.
@@ -694,9 +699,15 @@ public interface TableAPI {
      * @param prevRow a {@code ReturnRow} object to contain the previous row
      * value and version associated with the given row, or null if they should
      * not be returned.  If a previous row does not exist, or the {@link
-     * ReturnRow.Choice} specifies that they should not be returned, the
+     * ReturnRow.Choice} specifies that nothing should be returned, the
      * version in this object is set to null and none of the row's fields are
-     * available.
+     * available. This object will only be initialized if the operation fails
+     * because of an existing row.
+     * <p>
+     * If a non-null {@code ReturnRow} is specified and a previous row
+     * exists, then the expiration time of the previous row can be accessed
+     * by calling {@link Row#getExpirationTime getExpirationTime()} on {@code
+     * prevRow}.
      *
      * @param writeOptions non-default arguments controlling the
      * durability of the operation, or null to get default behavior.
@@ -730,9 +741,14 @@ public interface TableAPI {
      * @param prevRow a {@code ReturnRow} object to contain the previous row
      * value and version associated with the given row, or null if they should
      * not be returned.  If a previous row does not exist, or the {@link
-     * ReturnRow.Choice} specifies that they should not be returned, the
+     * ReturnRow.Choice} specifies that nothing should be returned, the
      * version in this object is set to null and none of the row's fields are
      * available.
+     * <p>
+     * If a non-null {@code ReturnRow} is specified and a previous row
+     * exists, then the expiration time of the previous row can be accessed
+     * by calling {@link Row#getExpirationTime getExpirationTime()} on {@code
+     * prevRow}.
      *
      * @param writeOptions non-default arguments controlling the
      * durability of the operation, or null to get default behavior.
@@ -770,9 +786,15 @@ public interface TableAPI {
      * @param prevRow a {@code ReturnRow} object to contain the previous row
      * value and version associated with the given row, or null if they should
      * not be returned.  If a previous row does not exist, or the {@link
-     * ReturnRow.Choice} specifies that they should not be returned, the
+     * ReturnRow.Choice} specifies that nothing should be returned, the
      * version in this object is set to null and none of the row's fields are
-     * available.
+     * available. This object will only be initialized if the operation
+     * fails with a version mismatch.
+     * <p>
+     * If a non-null {@code ReturnRow} is specified and a previous row
+     * exists, then the expiration time of the previous row can be accessed
+     * by calling {@link Row#getExpirationTime getExpirationTime()} on {@code
+     * prevRow}.
      *
      * @param writeOptions non-default arguments controlling the
      * durability of the operation, or null to get default behavior.
@@ -1029,37 +1051,36 @@ public interface TableAPI {
                FaultException;
 
     /**
-     * For internal use only.
-     * @hidden
-     *
      * Loads rows supplied by special purpose streams into the store. The bulk
      * loading of the entries is optimized to make efficient use of hardware
      * resources. As a result, this operation can achieve much higher
-     * throughput when compared with single row put APIs. The sequential
-     * semantics of individual streams are the basis for stream granularity
-     * resumption in the presence of failures.
-     *
+     * throughput when compared with single row put APIs.
+     * <p>
      * Entries are supplied to the loader by a list of EntryStream instances.
      * Each stream is read sequentially, that is, each EntryStream.getNext() is
      * allowed to finish before the next operation is issued. The load
      * operation typically reads from these streams in parallel as determined
      * by {@link BulkWriteOptions#getStreamParallelism}.
-     *
+     * </p>
+     * <p>
      * If an entry is associated with a primary key that's already present in
      * the store, the {@link EntryStream#keyExists} method is invoked on it and
      * the entry is not loaded into the store by this method; the
      * {@link EntryStream#keyExists} method may of course choose to do so
      * itself, if the values differ.
-     *
+     * </p>
+     * <p>
      * If the key is absent, a new entry is created in the store, that is, the
      * load operation has putIfAbsent semantics. The putIfAbsent semantics
      * permit restarting a load of a stream that failed for some reason.
-     *
+     * </p>
+     * <p>
      * The collection of streams defines a partial insertion order, with
-     * insertion of rows containing the same key within a stream being strictly
-     * ordered, but with no ordering constraints being imposed on keys across
-     * streams, or for different keys within the same stream.
-     *
+     * insertion of rows containing the same shard key within a stream being
+     * strictly ordered, but with no ordering constraints being imposed on keys
+     * across streams, or for different keys within the same stream.
+     * </p>
+     * <p>
      * The behavior of the bulk put operation with respect to duplicate entries
      * contained in different streams is thus undefined. If the duplicate
      * entries are just present in a single stream, then the first entry will
@@ -1069,19 +1090,31 @@ public interface TableAPI {
      * streams, then the first entry to win the race is inserted and subsequent
      * duplicates will result in {@link EntryStream#keyExists} being invoked on
      * them.
-     *
+     * </p>
+     * <p>
+     * Load operations tend to be long running. In order to facilitate
+     * resumption of such a long running operation due to a process or client
+     * machine failure, the application may use to checkpoint its progress at
+     * granularity of a stream, using the
+     * {@link oracle.kv.EntryStream#completed} method. The javadoc for this
+     * method provides further details.
+     * </p>
+     * <p>
      * Exceptions encountered during the reading of streams result in the put
      * operation being terminated and the first such exception being thrown
      * from the put method.
-     *
+     * </p>
+     * <p>
      * Exceptions encountered when inserting a row into the store result in the
      * {@link EntryStream#catchException} being invoked.
-     *
+     * </p>
      * @param streams the streams that supply the rows to be inserted. The rows
      * within each stream may be associated with different tables.
      *
      * @param bulkWriteOptions non-default arguments controlling the behavior
      * the bulk write operations
+     *
+     * @since 4.0
      */
     public void put(List<EntryStream<Row>> streams,
                     BulkWriteOptions bulkWriteOptions);

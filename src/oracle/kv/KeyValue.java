@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,14 +44,13 @@
 package oracle.kv;
 
 /**
- * For internal use only.
- * @hidden
- *
  * Represents a key/value pair.
  *
  * <p>The KeyValue is used as element of input argument EntryStream<KeyValue>
  * for {@link KVStore#put put}, the key and value properties will always
  * be non-null.</p>
+ *
+ * @since 4.0
  */
 public class KeyValue {
 

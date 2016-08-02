@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -62,6 +62,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
+import com.sleepycat.je.utilint.PropUtil;
+
 import oracle.kv.AuthenticationFailureException;
 import oracle.kv.AuthenticationRequiredException;
 import oracle.kv.BulkWriteOptions;
@@ -95,7 +97,6 @@ import oracle.kv.StoreIteratorConfig;
 import oracle.kv.Value;
 import oracle.kv.ValueVersion;
 import oracle.kv.Version;
-import oracle.kv.avro.AvroCatalog;
 import oracle.kv.impl.admin.AdminFaultException;
 import oracle.kv.impl.admin.IllegalCommandException;
 import oracle.kv.impl.api.avro.AvroCatalogImpl;
@@ -120,15 +121,23 @@ import oracle.kv.impl.api.ops.PutIfAbsent;
 import oracle.kv.impl.api.ops.PutIfPresent;
 import oracle.kv.impl.api.ops.PutIfVersion;
 import oracle.kv.impl.api.ops.Result;
+import oracle.kv.impl.api.ops.ResultKey;
 import oracle.kv.impl.api.ops.ResultKeyValueVersion;
 import oracle.kv.impl.api.ops.StoreIterate;
 import oracle.kv.impl.api.ops.StoreKeysIterate;
 import oracle.kv.impl.api.parallelscan.ParallelScan;
 import oracle.kv.impl.api.parallelscan.ParallelScanHook;
+import oracle.kv.impl.api.query.DmlFuture;
+import oracle.kv.impl.api.query.InternalStatement;
+import oracle.kv.impl.api.query.PreparedDdlStatementImpl;
+import oracle.kv.impl.api.query.PreparedStatementImpl;
 import oracle.kv.impl.api.table.TableAPIImpl;
 import oracle.kv.impl.client.admin.DdlFuture;
 import oracle.kv.impl.client.admin.DdlStatementExecutor;
 import oracle.kv.impl.client.admin.ExecutionInfo;
+import oracle.kv.impl.fault.WrappedClientException;
+import oracle.kv.impl.query.QueryException;
+import oracle.kv.impl.query.compiler.CompilerAPI;
 import oracle.kv.impl.security.SessionAccessException;
 import oracle.kv.impl.security.login.KerberosClientCreds;
 import oracle.kv.impl.security.login.LoginManager;
@@ -138,10 +147,12 @@ import oracle.kv.impl.topo.PartitionId;
 import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.Topology;
 import oracle.kv.lob.InputStreamVersion;
+import oracle.kv.query.ExecuteOptions;
+import oracle.kv.query.PreparedStatement;
+import oracle.kv.query.Statement;
 import oracle.kv.stats.KVStats;
 import oracle.kv.table.TableAPI;
-
-import com.sleepycat.je.utilint.PropUtil;
+import oracle.kv.table.TimeToLive;
 
 public class KVStoreImpl implements KVStore, Cloneable {
 
@@ -174,7 +185,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
     /** Default Durability, used when Durability param is null. */
     private final Durability defaultDurability;
 
-    /** @see KVStoreConfig#getLOBTimeout() */
+    /** @see KVStoreConfig#getLOBTimeout(TimeUnit) */
     private final long defaultLOBTimeout;
 
     /** @see KVStoreConfig#getLOBSuffix() */
@@ -183,13 +194,13 @@ public class KVStoreImpl implements KVStore, Cloneable {
     /** @see KVStoreConfig#getLOBVerificationBytes() */
     private final long defaultLOBVerificationBytes;
 
-    /** @see KVStoreConfig#getChunksPerPartition() */
+    /** @see KVStoreConfig#getLOBChunksPerPartition() */
     private final int defaultChunksPerPartition;
 
-    /** @see KVStoreConfig#getChunkSize() */
+    /** @see KVStoreConfig#getLOBChunkSize() */
     private final int defaultChunkSize;
 
-    /** @see KVStoreConfig#getCheckIntervalMillis */
+    /** @see KVStoreConfig#getCheckInterval(TimeUnit) */
     private final long checkIntervalMillis;
 
     /** @see KVStoreConfig#getMaxCheckRetries */
@@ -231,7 +242,8 @@ public class KVStoreImpl implements KVStore, Cloneable {
      * shared among handles when the internal copy constructor is used (see
      * KVStoreImpl(KVStoreImpl, boolean)).
      */
-    private final AtomicReference<AvroCatalog> avroCatalogRef;
+    @SuppressWarnings("deprecation")
+    private final AtomicReference<oracle.kv.avro.AvroCatalog> avroCatalogRef;
 
     private final SharedThreadPool sharedThreadPool;
 
@@ -242,6 +254,9 @@ public class KVStoreImpl implements KVStore, Cloneable {
 
     /* The default logger used on the client side. */
     private final Logger logger;
+
+    /* TableAPI instance */
+    private final TableAPIImpl tableAPI;
 
     /**
      * The KVStoreInternalFactory constructor
@@ -259,8 +274,8 @@ public class KVStoreImpl implements KVStore, Cloneable {
     /**
      * The KVStoreFactory constructor
      */
-     public KVStoreImpl(Logger logger,
-                        RequestDispatcher dispatcher,
+    public KVStoreImpl(Logger logger,
+                       RequestDispatcher dispatcher,
                        KVStoreConfig config,
                        LoginManager loginMgr,
                        ReauthenticateHandler reauthHandler) {
@@ -269,6 +284,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
              true /* isDispatcherOwner */);
     }
 
+    @SuppressWarnings("deprecation")
     private KVStoreImpl(Logger logger,
                         RequestDispatcher dispatcher,
                         KVStoreConfig config,
@@ -287,15 +303,15 @@ public class KVStoreImpl implements KVStore, Cloneable {
         this.defaultConsistency = config.getConsistency();
         this.defaultDurability = config.getDurability();
         this.checkIntervalMillis =
-                config.getCheckInterval(TimeUnit.MILLISECONDS);
+            config.getCheckInterval(TimeUnit.MILLISECONDS);
         this.maxCheckRetries = config.getMaxCheckRetries();
         this.keySerializer = KeySerializer.PROHIBIT_INTERNAL_KEYSPACE;
         this.operationFactory =
             new Execute.OperationFactoryImpl(keySerializer);
         this.nPartitions = dispatcher.getTopologyManager().
-                                      getTopology().
-                                      getPartitionMap().
-                                      getNPartitions();
+            getTopology().
+            getPartitionMap().
+            getNPartitions();
 
         this.defaultLOBTimeout = config.getLOBTimeout(TimeUnit.MILLISECONDS);
         this.defaultLOBSuffix = config.getLOBSuffix();
@@ -304,8 +320,10 @@ public class KVStoreImpl implements KVStore, Cloneable {
         this.defaultChunkSize = config.getLOBChunkSize();
         this.largeObjectImpl = new KVLargeObjectImpl();
 
-        this.avroCatalogRef = new AtomicReference<AvroCatalog>(null);
+        this.avroCatalogRef =
+            new AtomicReference<oracle.kv.avro.AvroCatalog>(null);
         this.sharedThreadPool = new SharedThreadPool(logger);
+        this.tableAPI = new TableAPIImpl(this);
 
         /*
          * Only invoke this after all ivs have been initialized, since it
@@ -430,6 +448,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
             this.external = other;
         }
         this.statementExecutor = new DdlStatementExecutor(this);
+        this.tableAPI = other.tableAPI;
     }
 
     public Logger getLogger() {
@@ -497,12 +516,8 @@ public class KVStoreImpl implements KVStore, Cloneable {
                                     TimeUnit timeoutUnit)
         throws FaultException {
 
-        final byte[] keyBytes = keySerializer.toByteArray(key);
-        final PartitionId partitionId = dispatcher.getPartitionId(keyBytes);
-        final Get get = new Get(keyBytes, tableId);
-        final Request req = makeReadRequest(get, partitionId, consistency,
-                                            timeout, timeoutUnit);
-        final Result result = executeRequest(req);
+        final Result result = getInternalResult(key, tableId, consistency,
+                                                timeout, timeoutUnit);
         final Value value = result.getPreviousValue();
         if (value == null) {
             assert !result.getSuccess();
@@ -513,6 +528,21 @@ public class KVStoreImpl implements KVStore, Cloneable {
         ret.setValue(value);
         ret.setVersion(result.getPreviousVersion());
         return ret;
+    }
+
+    public Result getInternalResult(Key key,
+                                    long tableId,
+                                    Consistency consistency,
+                                    long timeout,
+                                    TimeUnit timeoutUnit)
+        throws FaultException {
+
+        final byte[] keyBytes = keySerializer.toByteArray(key);
+        final PartitionId partitionId = dispatcher.getPartitionId(keyBytes);
+        final Get get = new Get(keyBytes, tableId);
+        final Request req = makeReadRequest(get, partitionId, consistency,
+                                            timeout, timeoutUnit);
+        return executeRequest(req);
     }
 
     @Override
@@ -593,10 +623,10 @@ public class KVStoreImpl implements KVStore, Cloneable {
         final Result result = executeRequest(req);
 
         /* Convert byte[] keys to Key objects. */
-        final List<byte[]> byteKeyResults = result.getKeyList();
+        final List<ResultKey> byteKeyResults = result.getKeyList();
         final SortedSet<Key> stringKeySet = new TreeSet<Key>();
-        for (byte[] entry : byteKeyResults) {
-            stringKeySet.add(keySerializer.fromByteArray(entry));
+        for (ResultKey entry : byteKeyResults) {
+            stringKeySet.add(keySerializer.fromByteArray(entry.getKeyBytes()));
         }
         assert result.getSuccess() == (!stringKeySet.isEmpty());
         return stringKeySet;
@@ -752,17 +782,18 @@ public class KVStoreImpl implements KVStore, Cloneable {
 
                 /* Get results and save resume key. */
                 moreElements = result.hasMoreElements();
-                final List<byte[]> byteKeyResults = result.getKeyList();
+                final List<ResultKey> byteKeyResults = result.getKeyList();
                 if (byteKeyResults.size() == 0) {
                     assert (!moreElements);
                     return null;
                 }
-                resumeKey = byteKeyResults.get(byteKeyResults.size() - 1);
+                resumeKey = byteKeyResults.
+                    get(byteKeyResults.size() - 1).getKeyBytes();
 
                 /* Convert byte[] keys to Key objects. */
                 final Key[] stringKeyResults = new Key[byteKeyResults.size()];
                 for (int i = 0; i < stringKeyResults.length; i += 1) {
-                    final byte[] entry = byteKeyResults.get(i);
+                    final byte[] entry = byteKeyResults.get(i).getKeyBytes();
                     stringKeyResults[i] = keySerializer.fromByteArray(entry);
                 }
                 return stringKeyResults;
@@ -950,9 +981,10 @@ public class KVStoreImpl implements KVStore, Cloneable {
                     for (int i = 0; i < stringKeyResults.length; i += 1) {
                         final ResultKeyValueVersion entry =
                             byteKeyResults.get(i);
-                        stringKeyResults[i] = new KeyValueVersion
+                        stringKeyResults[i] = createKeyValueVersion
                             (keySerializer.fromByteArray(entry.getKeyBytes()),
-                             entry.getValue(), entry.getVersion());
+                             entry.getValue(), entry.getVersion(),
+                             entry.getExpirationTime());
                     }
                     return stringKeyResults;
                 }
@@ -1049,18 +1081,20 @@ public class KVStoreImpl implements KVStore, Cloneable {
 
                     /* Get results and save resume key. */
                     moreElements = result.hasMoreElements();
-                    final List<byte[]> byteKeyResults = result.getKeyList();
+                    final List<ResultKey> byteKeyResults = result.getKeyList();
                     if (byteKeyResults.size() == 0) {
                         assert (!moreElements);
                         continue;
                     }
-                    resumeKey = byteKeyResults.get(byteKeyResults.size() - 1);
+                    resumeKey = byteKeyResults.
+                        get(byteKeyResults.size() - 1).getKeyBytes();
 
                     /* Convert byte[] keys to Key objects. */
                     final Key[] stringKeyResults =
                         new Key[byteKeyResults.size()];
                     for (int i = 0; i < stringKeyResults.length; i += 1) {
-                        final byte[] entry = byteKeyResults.get(i);
+                        final byte[] entry =
+                            byteKeyResults.get(i).getKeyBytes();
                         stringKeyResults[i] =
                             keySerializer.fromByteArray(entry);
                     }
@@ -1109,7 +1143,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
 
         if (parentKeyiterator == null) {
             throw new IllegalArgumentException("The parent key iterator " +
-                "argument should not be null.");
+                                               "argument should not be null.");
         }
 
         final List<Iterator<Key>> parentKeyiterators =
@@ -1134,7 +1168,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
 
         if (parentKeyiterator == null) {
             throw new IllegalArgumentException("The parent key iterator " +
-                "argument should not be null.");
+                                               "argument should not be null.");
         }
 
         final List<Iterator<Key>> parentKeyiterators =
@@ -1159,7 +1193,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
 
         if (parentKeyiterators == null || parentKeyiterators.isEmpty()) {
             throw new IllegalArgumentException("The parent key iterators " +
-                "argument should not be null or empty.");
+                                               "argument should not be null or empty.");
         }
 
         return BulkMultiGet.createBulkMultiGetIterator(this, parentKeyiterators,
@@ -1183,7 +1217,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
 
         if (parentKeyIterators == null || parentKeyIterators.isEmpty()) {
             throw new IllegalArgumentException("The parent key iterators " +
-                "should not be null or empty.");
+                                               "should not be null or empty.");
         }
 
         return BulkMultiGet.createBulkMultiGetKeysIterator(this,
@@ -1261,6 +1295,31 @@ public class KVStoreImpl implements KVStore, Cloneable {
                                Durability durability,
                                long timeout,
                                TimeUnit timeoutUnit)
+
+        throws FaultException {
+
+        final Result result = putInternalResult(key,
+                                                value,
+                                                prevValue,
+                                                tableId,
+                                                durability,
+                                                timeout,
+                                                timeoutUnit,
+                                                null, false);
+
+        assert result.getSuccess() == (result.getNewVersion() != null);
+        return result.getNewVersion();
+    }
+
+    public Result putInternalResult(Key key,
+                                    Value value,
+                                    ReturnValueVersion prevValue,
+                                    long tableId,
+                                    Durability durability,
+                                    long timeout,
+                                    TimeUnit timeoutUnit,
+                                    TimeToLive ttl,
+                                    boolean updateTTL)
         throws FaultException {
 
         final byte[] keyBytes = keySerializer.toByteArray(key);
@@ -1268,7 +1327,8 @@ public class KVStoreImpl implements KVStore, Cloneable {
         final ReturnValueVersion.Choice prevValChoice = (prevValue != null) ?
             prevValue.getReturnChoice() :
             ReturnValueVersion.Choice.NONE;
-        final Put put = new Put(keyBytes, value, prevValChoice, tableId);
+        final Put put = new Put(keyBytes, value, prevValChoice, tableId,
+                ttl, updateTTL);
         final Request req = makeWriteRequest(put, partitionId, durability,
                                              timeout, timeoutUnit);
         final Result result = executeRequest(req);
@@ -1276,8 +1336,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
             prevValue.setValue(result.getPreviousValue());
             prevValue.setVersion(result.getPreviousVersion());
         }
-        assert result.getSuccess() == (result.getNewVersion() != null);
-        return result.getNewVersion();
+        return result;
     }
 
     @Override
@@ -1302,12 +1361,36 @@ public class KVStoreImpl implements KVStore, Cloneable {
     }
 
     public Version putIfAbsentInternal(Key key,
-                                       Value value,
-                                       ReturnValueVersion prevValue,
-                                       long tableId,
-                                       Durability durability,
-                                       long timeout,
-                                       TimeUnit timeoutUnit)
+            Value value,
+            ReturnValueVersion prevValue,
+            long tableId,
+            Durability durability,
+            long timeout,
+            TimeUnit timeoutUnit) {
+
+        final Result result = putIfAbsentInternalResult(key,
+                                                        value,
+                                                        prevValue,
+                                                        tableId,
+                                                        durability,
+                                                        timeout,
+                                                        timeoutUnit,
+                                                        null,
+                                                        false);
+
+        assert result.getSuccess() == (result.getNewVersion() != null);
+        return result.getNewVersion();
+    }
+
+    public Result putIfAbsentInternalResult(Key key,
+                                            Value value,
+                                            ReturnValueVersion prevValue,
+                                            long tableId,
+                                            Durability durability,
+                                            long timeout,
+                                            TimeUnit timeoutUnit,
+                                            TimeToLive ttl,
+                                            boolean updateTTL)
         throws FaultException {
 
         final byte[] keyBytes = keySerializer.toByteArray(key);
@@ -1316,7 +1399,8 @@ public class KVStoreImpl implements KVStore, Cloneable {
             prevValue.getReturnChoice() :
             ReturnValueVersion.Choice.NONE;
         final Put put =
-            new PutIfAbsent(keyBytes, value, prevValChoice, tableId);
+            new PutIfAbsent(keyBytes, value, prevValChoice, tableId,
+                    ttl, updateTTL);
         final Request req = makeWriteRequest(put, partitionId, durability,
                                              timeout, timeoutUnit);
         final Result result = executeRequest(req);
@@ -1324,8 +1408,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
             prevValue.setValue(result.getPreviousValue());
             prevValue.setVersion(result.getPreviousVersion());
         }
-        assert result.getSuccess() == (result.getNewVersion() != null);
-        return result.getNewVersion();
+        return result;
     }
 
     @Override
@@ -1345,17 +1428,29 @@ public class KVStoreImpl implements KVStore, Cloneable {
                                 TimeUnit timeoutUnit)
         throws FaultException {
 
-        return putIfPresentInternal(key, value, prevValue, 0,
-                                    durability, timeout, timeoutUnit);
+        final Result result = putIfPresentInternalResult(key,
+                                                         value,
+                                                         prevValue,
+                                                         0,
+                                                         durability,
+                                                         timeout,
+                                                         timeoutUnit,
+                                                         null,
+                                                         false);
+
+        assert result.getSuccess() == (result.getNewVersion() != null);
+        return result.getNewVersion();
     }
 
-    public Version putIfPresentInternal(Key key,
-                                        Value value,
-                                        ReturnValueVersion prevValue,
-                                        long tableId,
-                                        Durability durability,
-                                        long timeout,
-                                        TimeUnit timeoutUnit)
+    public Result putIfPresentInternalResult(Key key,
+                                             Value value,
+                                             ReturnValueVersion prevValue,
+                                             long tableId,
+                                             Durability durability,
+                                             long timeout,
+                                             TimeUnit timeoutUnit,
+                                             TimeToLive ttl,
+                                             boolean updateTTL)
         throws FaultException {
 
         final byte[] keyBytes = keySerializer.toByteArray(key);
@@ -1364,7 +1459,8 @@ public class KVStoreImpl implements KVStore, Cloneable {
             prevValue.getReturnChoice() :
             ReturnValueVersion.Choice.NONE;
         final Put put =
-            new PutIfPresent(keyBytes, value, prevValChoice, tableId);
+            new PutIfPresent(keyBytes, value, prevValChoice, tableId,
+                    ttl, updateTTL);
         final Request req = makeWriteRequest(put, partitionId, durability,
                                              timeout, timeoutUnit);
         final Result result = executeRequest(req);
@@ -1372,8 +1468,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
             prevValue.setValue(result.getPreviousValue());
             prevValue.setVersion(result.getPreviousVersion());
         }
-        assert result.getSuccess() == (result.getNewVersion() != null);
-        return result.getNewVersion();
+        return result;
     }
 
     @Override
@@ -1400,13 +1495,40 @@ public class KVStoreImpl implements KVStore, Cloneable {
     }
 
     public Version putIfVersionInternal(Key key,
-                                        Value value,
-                                        Version matchVersion,
-                                        ReturnValueVersion prevValue,
-                                        long tableId,
-                                        Durability durability,
-                                        long timeout,
-                                        TimeUnit timeoutUnit)
+            Value value,
+            Version matchVersion,
+            ReturnValueVersion prevValue,
+            long tableId,
+            Durability durability,
+            long timeout,
+            TimeUnit timeoutUnit)
+        throws FaultException {
+
+        final Result result = putIfVersionInternalResult(key,
+                                                         value,
+                                                         matchVersion,
+                                                         prevValue,
+                                                         tableId,
+                                                         durability,
+                                                         timeout,
+                                                         timeoutUnit,
+                                                         null,
+                                                         false);
+
+        assert result.getSuccess() == (result.getNewVersion() != null);
+        return result.getNewVersion();
+    }
+
+    public Result putIfVersionInternalResult(Key key,
+                                             Value value,
+                                             Version matchVersion,
+                                             ReturnValueVersion prevValue,
+                                             long tableId,
+                                             Durability durability,
+                                             long timeout,
+                                             TimeUnit timeoutUnit,
+                                             TimeToLive ttl,
+                                             boolean updateTTL)
         throws FaultException {
 
         final byte[] keyBytes = keySerializer.toByteArray(key);
@@ -1415,7 +1537,8 @@ public class KVStoreImpl implements KVStore, Cloneable {
             prevValue.getReturnChoice() :
             ReturnValueVersion.Choice.NONE;
         final Put put = new PutIfVersion(keyBytes, value, prevValChoice,
-                                         matchVersion, tableId);
+                                         matchVersion, tableId,
+                                         ttl, updateTTL);
         final Request req = makeWriteRequest(put, partitionId, durability,
                                              timeout, timeoutUnit);
         final Result result = executeRequest(req);
@@ -1423,8 +1546,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
             prevValue.setValue(result.getPreviousValue());
             prevValue.setVersion(result.getPreviousVersion());
         }
-        assert result.getSuccess() == (result.getNewVersion() != null);
-        return result.getNewVersion();
+        return result;
     }
 
     @Override
@@ -1454,6 +1576,22 @@ public class KVStoreImpl implements KVStore, Cloneable {
                                   long tableId)
         throws FaultException {
 
+        return deleteInternalResult(key,
+                                    prevValue,
+                                    durability,
+                                    timeout,
+                                    timeoutUnit,
+                                    tableId).getSuccess();
+    }
+
+    public Result deleteInternalResult(Key key,
+                                       ReturnValueVersion prevValue,
+                                       Durability durability,
+                                       long timeout,
+                                       TimeUnit timeoutUnit,
+                                       long tableId)
+        throws FaultException {
+
         final byte[] keyBytes = keySerializer.toByteArray(key);
         final PartitionId partitionId = dispatcher.getPartitionId(keyBytes);
         final ReturnValueVersion.Choice prevValChoice = (prevValue != null) ?
@@ -1467,7 +1605,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
             prevValue.setValue(result.getPreviousValue());
             prevValue.setVersion(result.getPreviousVersion());
         }
-        return result.getSuccess();
+        return result;
     }
 
     @Override
@@ -1500,6 +1638,24 @@ public class KVStoreImpl implements KVStore, Cloneable {
                                            long tableId)
         throws FaultException {
 
+        return deleteIfVersionInternalResult(key,
+                                             matchVersion,
+                                             prevValue,
+                                             durability,
+                                             timeout,
+                                             timeoutUnit,
+                                             tableId).getSuccess();
+    }
+
+    public Result deleteIfVersionInternalResult(Key key,
+                                                Version matchVersion,
+                                                ReturnValueVersion prevValue,
+                                                Durability durability,
+                                                long timeout,
+                                                TimeUnit timeoutUnit,
+                                                long tableId)
+        throws FaultException {
+
         final byte[] keyBytes = keySerializer.toByteArray(key);
         final PartitionId partitionId = dispatcher.getPartitionId(keyBytes);
         final ReturnValueVersion.Choice prevValChoice = (prevValue != null) ?
@@ -1514,7 +1670,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
             prevValue.setValue(result.getPreviousValue());
             prevValue.setVersion(result.getPreviousVersion());
         }
-        return result.getSuccess();
+        return result;
     }
 
     @Override
@@ -1661,6 +1817,82 @@ public class KVStoreImpl implements KVStore, Cloneable {
         }
     }
 
+    /*
+     * Internal method to put KeyValueVersion, which may contain expiration
+     * time, to be translated into a TTL. This is used by import.
+     *
+     * @param referenceTime the reference time to be subtracted from the
+     * expiration time (if non-zero) on any KeyValueVersion to generate a TTL
+     * duration. This value must be less than any expiration time to avoid
+     * negative durations.
+     */
+    public void put(List<EntryStream<KeyValueVersion>> kvStreams,
+                    final long referenceTime,
+                    BulkWriteOptions writeOptions) {
+
+        if (kvStreams == null || kvStreams.isEmpty()) {
+            throw new IllegalArgumentException("The input streams argument " +
+                        "should not be null or empty.");
+        }
+
+        final BulkWriteOptions options;
+        if (writeOptions != null) {
+            options = writeOptions;
+        } else {
+            options = new BulkWriteOptions(getDefaultDurability(),
+                                           getDefaultRequestTimeoutMs(),
+                                           TimeUnit.MILLISECONDS);
+        }
+        final BulkPut<KeyValueVersion> bulkPut =
+            new BulkPut<KeyValueVersion>(this, options, kvStreams, getLogger()) {
+
+                @Override
+                public BulkPut<KeyValueVersion>.StreamReader<KeyValueVersion>
+                    createReader(int streamId, EntryStream<KeyValueVersion> stream) {
+
+                    return new StreamReader<KeyValueVersion>(streamId, stream) {
+
+                        @Override
+                        protected Key getKey(KeyValueVersion kv) {
+                            return kv.getKey();
+                        }
+
+                        @Override
+                        protected Value getValue(KeyValueVersion kv) {
+                            return kv.getValue();
+                        }
+
+                        @Override
+                        protected TimeToLive getTTL(KeyValueVersion kv) {
+                            long expirationTime = kv.getExpirationTime();
+                            if (expirationTime == 0) {
+                                return null;
+                            }
+                            if (referenceTime > expirationTime) {
+                                throw new IllegalArgumentException(
+                                    "Reference time must be less than " +
+                                    "expiration time");
+                            }
+                            return TimeToLive.fromExpirationTime(
+                                kv.getExpirationTime(), referenceTime);
+                        }
+                    };
+                }
+
+                @Override
+                protected KeyValueVersion convertToEntry(Key key, Value value) {
+                    return new KeyValueVersion(key, value);
+                }
+        };
+
+        try {
+            bulkPut.execute();
+        } catch (InterruptedException e) {
+            throw new IllegalStateException("Unexpected interrupt during " +
+                    "putBulk()", e);
+        }
+    }
+
     /**
      * TODO: Support to configure the checkpoint delay time.
      * Sam said that a large part of JE overhead (as much as 20% of throughput)
@@ -1744,7 +1976,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
         final String msg =
             "Operation: " + op.getOpCode() +
             " Illegal LOB key argument: " +
-             Key.fromByteArray(keyBytes) +
+            Key.fromByteArray(keyBytes) +
             ". Use LOB-specific APIs to modify a LOB key/value pair.";
 
         throw new IllegalArgumentException(msg);
@@ -1788,19 +2020,19 @@ public class KVStoreImpl implements KVStore, Cloneable {
             requestTimeoutMs = PropUtil.durationToMillis(timeout, timeoutUnit);
             if (requestTimeoutMs > readTimeoutMs) {
                 String format = "Request timeout parameter: %,d ms exceeds " +
-                                "socket read timeout: %,d ms";
+                    "socket read timeout: %,d ms";
                 throw new IllegalArgumentException
                     (String.format(format, requestTimeoutMs, readTimeoutMs));
             }
         }
 
         return (partitionId != null) ?
-          new Request
+            new Request
             (op, partitionId, write, durability, consistency, DEFAULT_TTL,
              getTopology().getSequenceNumber(),
              dispatcher.getDispatcherId(), requestTimeoutMs,
              !write ? dispatcher.getReadZoneIds() : null) :
-          new Request
+            new Request
             (op, repGroupId, write, durability, consistency, DEFAULT_TTL,
              getTopology().getSequenceNumber(),
              dispatcher.getDispatcherId(), requestTimeoutMs,
@@ -1840,11 +2072,12 @@ public class KVStoreImpl implements KVStore, Cloneable {
         return new KVStats(clear, dispatcher);
     }
 
+    @SuppressWarnings("deprecation")
     @Override
-    public AvroCatalog getAvroCatalog() {
+    public oracle.kv.avro.AvroCatalog getAvroCatalog() {
 
         /* First check for an existing catalog without any synchronization. */
-        AvroCatalog catalog = avroCatalogRef.get();
+        oracle.kv.avro.AvroCatalog catalog = avroCatalogRef.get();
         if (catalog != null) {
             return catalog;
         }
@@ -2081,7 +2314,11 @@ public class KVStoreImpl implements KVStore, Cloneable {
 
     @Override
     public TableAPI getTableAPI() {
-        return new TableAPIImpl(this);
+        return tableAPI;
+    }
+
+    public TableAPIImpl getTableAPIImpl() {
+        return tableAPI;
     }
 
     @Override
@@ -2190,13 +2427,56 @@ public class KVStoreImpl implements KVStore, Cloneable {
 
     @Override
     public ExecutionFuture execute(String statement)
-            throws IllegalArgumentException, FaultException {
+        throws IllegalArgumentException, FaultException {
+
+        return execute(statement, null);
+    }
+
+    @Override
+    public ExecutionFuture execute(String statement, ExecuteOptions options)
+        throws FaultException, IllegalArgumentException {
+
+        PreparedStatement ps = prepare(statement);
+
+        if (ps instanceof PreparedDdlStatementImpl) {
+            return executeDdl((PreparedDdlStatementImpl) ps);
+        }
+
+        return executeDml((PreparedStatementImpl) ps, options);
+    }
+
+    /**
+     * Executes a DDL statement in an async fashion, returning an
+     * ExecutionFuture.
+     *
+     * Because this method communicates directly with the admin it needs to
+     * handle exceptions carefully.
+     */
+    private ExecutionFuture executeDdl(PreparedDdlStatementImpl statement)
+        throws IllegalArgumentException, FaultException {
 
         try {
             ExecutionInfo info = statementExecutor.getClientAdminService().
-                execute(statement);
-            return new DdlFuture(statement, info, statementExecutor,
+                execute(statement.getQuery());
+            return new DdlFuture(statement.getQuery(), info, statementExecutor,
                                  getLogger());
+        } catch (IllegalArgumentException iae) {
+            /* pass through */
+            throw iae;
+        } catch (WrappedClientException wce) {
+            /*
+             * These are query exceptions in the form of IAE and illegal
+             * state exceptions in the form of QueryStateException.
+             */
+            if (wce.getCause() instanceof IllegalStateException) {
+                /*
+                 * Log the exception if a logger is available
+                 */
+                if (logger != null) {
+                    logger.warning(wce.getCause().toString());
+                }
+            }
+            throw (RuntimeException) wce.getCause();
         } catch (AdminFaultException e) {
             if (e.getFaultClassName().equals
                 (IllegalCommandException.class.getName())) {
@@ -2215,6 +2495,7 @@ public class KVStoreImpl implements KVStore, Cloneable {
             /* This should be passed along directly */
             throw e;
         } catch (Exception e) {
+
             /*
              * Other types of exceptions should get wrapped as a fault exception
              */
@@ -2222,11 +2503,39 @@ public class KVStoreImpl implements KVStore, Cloneable {
         }
     }
 
+    /**
+     * Executes a DML statement in an async fashion, returning an
+     * ExecutionFuture. In this path there is no async protocol at this time,
+     * so the query is executed and the results are always immediately
+     * available.
+     */
+    private ExecutionFuture executeDml(PreparedStatementImpl statement,
+                                       ExecuteOptions options)
+        throws IllegalArgumentException, FaultException {
+
+        try {
+            StatementResult result = executeSync(statement, options);
+            return new DmlFuture(result);
+        } catch (QueryException qe) {
+
+            /* A QueryException thrown at the client; rethrow as IAE */
+            throw qe.getIllegalArgument();
+        }
+    }
+
     @Override
     public StatementResult executeSync(String statement)
         throws FaultException {
 
-        ExecutionFuture f = execute(statement);
+        return executeSync(statement, null);
+    }
+
+    @Override
+    public StatementResult executeSync(String statement,
+                                       ExecuteOptions options)
+        throws FaultException, IllegalArgumentException {
+
+        ExecutionFuture f = execute(statement, options);
         try {
             StatementResult r = f.get();
             return r;
@@ -2252,5 +2561,50 @@ public class KVStoreImpl implements KVStore, Cloneable {
     public ExecutionFuture getFuture(byte[] futureBytes) {
 
         return new DdlFuture(futureBytes, statementExecutor, getLogger());
+    }
+
+    @Override
+    public PreparedStatement prepare(String query)
+        throws FaultException, IllegalArgumentException {
+
+        try {
+            return CompilerAPI.prepare(tableAPI, query);
+        } catch (QueryException qe) {
+            /* rethrow as IAE */
+            throw qe.getIllegalArgument();
+        }
+    }
+
+    @Override
+    public StatementResult executeSync(final Statement statement)
+        throws FaultException {
+
+        return executeSync(statement, null);
+    }
+
+    @Override
+    public StatementResult executeSync(Statement statement,
+                                       ExecuteOptions options)
+        throws FaultException {
+
+        return ((InternalStatement)statement).executeSync(this, options);
+    }
+
+    /**
+     * Utility method to create a KeyValueVersion. If expiration time is
+     * non-zero it creates KeyValueVersionInternal to hold it. This allows
+     * space optimization for the more common case where there is no
+     * expiration time.
+     */
+    public static KeyValueVersion createKeyValueVersion(
+        final Key key,
+        final Value value,
+        final Version version,
+        final long expirationTime) {
+
+        if (expirationTime == 0) {
+            return new KeyValueVersion(key, value, version);
+        }
+        return new KeyValueVersionInternal(key, value, version, expirationTime);
     }
 }

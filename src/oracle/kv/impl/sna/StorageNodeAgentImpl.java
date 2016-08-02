@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -51,7 +51,11 @@ import java.util.List;
 import java.util.Set;
 import java.util.logging.Logger;
 
+import org.codehaus.jackson.node.ObjectNode;
+
+import oracle.kv.impl.admin.CommandResult;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.GlobalParams;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.SecurityParams.KrbPrincipalInfo;
@@ -67,9 +71,10 @@ import oracle.kv.impl.security.annotations.PublicMethod;
 import oracle.kv.impl.security.annotations.SecureAPI;
 import oracle.kv.impl.security.annotations.SecureAutoMethod;
 import oracle.kv.impl.security.annotations.SecureR2Method;
-import oracle.kv.impl.sna.StorageNodeAgent.SNAParserResults;
+import oracle.kv.impl.sna.StorageNodeAgent.SNAParser;
 import oracle.kv.impl.test.RemoteTestInterface;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNode;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
@@ -78,9 +83,13 @@ import oracle.kv.impl.topo.StorageNodeId;
 import oracle.kv.impl.topo.Topology;
 import oracle.kv.impl.util.CommandParser;
 import oracle.kv.impl.util.ConfigUtils;
+import oracle.kv.impl.util.JsonUtils;
+import oracle.kv.impl.util.ConfigurableService.ServiceStatus;
 import oracle.kv.impl.util.SerialVersion;
 import oracle.kv.impl.util.registry.VersionedRemoteImpl;
 import oracle.kv.impl.util.server.LoggerUtils;
+import oracle.kv.util.ErrorMessage;
+import oracle.kv.util.shell.Shell;
 
 /**
  * The class that implements the StorageNodeAgentInterface (SNA) interface used
@@ -145,7 +154,7 @@ public final class StorageNodeAgentImpl
         return sna.getLogger();
     }
 
-    public SNAParserResults parseArgs(String args[]) {
+    public SNAParser parseArgs(String args[]) {
         return sna.parseArgs(args);
     }
 
@@ -1085,7 +1094,6 @@ public final class StorageNodeAgentImpl
         try {
             new Main().doMain(args);
         } catch (Throwable e) {
-            System.err.println(e.getMessage());
             System.exit(1);
         }
     }
@@ -1103,16 +1111,11 @@ public final class StorageNodeAgentImpl
          * operation fails.
          */
         void doMain(String... args) {
-            String command = "start SNA";
             try {
-                final SNAParserResults parsedArgs = sna.parseArgs(args);
+                sna.parseArgs(args);
                 final File configPath = new File(sna.getBootstrapDir(),
                                                  sna.getBootstrapFile());
-                if (parsedArgs.shutdown) {
-                    command = parsedArgs.disableServices ?
-                        "stop SNA and disable services" :
-                        "stop SNA";
-
+                if (sna.getSNAParser().getShutdown()) {
                     if (!configPath.exists()) {
                         throw new IllegalStateException(
                             "Bootstrap config file " + configPath +
@@ -1147,13 +1150,39 @@ public final class StorageNodeAgentImpl
                             (rootPath, null, sna.getLogger());
                     }
 
-                    if (parsedArgs.disableServices) {
+                    if (sna.getSNAParser().getDisableServices()) {
                         printlnVerbose("Disabling services");
                         sna.disableServices();
                     }
 
+                } else if (sna.getSNAParser().getStatus()) {
+                    ServiceStatus status = sna.getRunningAgentStatus();
+
+                    String message;
+                    CommandResult result;
+
+                    if (status == ServiceStatus.UNREACHABLE) {
+                        message = "Cannot contact SNA";
+                        result = new CommandResult.CommandFails
+                            (message, ErrorMessage.NOSQL_5300,
+                             CommandResult.NO_CLEANUP_JOBS);
+                    } else {
+                        ObjectNode returnValue = JsonUtils.createObjectNode();
+                        returnValue.put("sna_status", status.name());
+                        message = "SNA Status : " + status.name();
+                        result = new CommandResult.CommandSucceeds
+                            (returnValue.toString());
+                    }
+
+                    if (sna.getJson()) {
+                        System.out.println
+                            (Shell.toJsonReport(sna.getSNAParser().getCommand(),
+                                                result));
+                    } else {
+                        System.out.println(message);
+                    }
                 } else {
-                    if (parsedArgs.disableServices) {
+                    if (sna.getSNAParser().getDisableServices()) {
                         printlnVerbose("Disabling services before starting");
                         sna.disableServices();
                     }
@@ -1162,22 +1191,36 @@ public final class StorageNodeAgentImpl
                     sna.start();
                 }
             } catch (Throwable e) {
-                final String message =
-                    "Failed to " + command + ": " + e.getMessage();
+                String command = sna.getSNAParser().getCommand();
+                String message = "Failed to " + command + ": " + e.getMessage();
+
                 if (sna.getLogger() != null) {
                     sna.getLogger().severe(
                         message + "\n" + LoggerUtils.getStackTrace(e));
                 }
+
+                if (sna.getJson()) {
+                    CommandResult result =
+                        new CommandResult.CommandFails
+                        (message, ErrorMessage.NOSQL_5300,
+                         CommandResult.NO_CLEANUP_JOBS);
+                    System.err.println(Shell.toJsonReport(command, result));
+                } else {
+                    System.err.println(message);
+                }
+
                 throw new RuntimeException(message, e);
             }
         }
 
         /**
          * Print a message to standard error if verbose output is enabled.
-         * Can be overridden for testing.
+         * Can be overridden for testing. Disabled when the -json flag is
+         * specified, because the verbose text output would result in invalid
+         * json output.
          */
         void printlnVerbose(String message) {
-            if (sna.verbose()) {
+            if (sna.verbose() && !sna.getJson()) {
                 System.err.println(message);
             }
         }
@@ -1338,5 +1381,150 @@ public final class StorageNodeAgentImpl
                     overloadedNeighbor(storageNodeId, authCtx, serialVersion);
             }
         });
+    }
+
+    /**
+     * Does this ArbNode exist in the configuration file?
+     */
+    @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.INTLOPER })
+    public synchronized boolean arbNodeExists(final ArbNodeId arbNodeId,
+                                              AuthContext authCtx,
+                                              short serialVersion)
+        throws RemoteException {
+
+        return faultHandler.execute
+            (new ProcessFaultHandler.
+             Operation<Boolean, RemoteException>() {
+                @Override
+                public Boolean execute()
+                    throws RemoteException {
+                    checkRegistered("arbNodeExists");
+                    if (sna.lookupArbNode(arbNodeId) != null) {
+                        return true;
+                    }
+                    return false;
+                }
+            });
+    }
+
+    /**
+     * Create a new ArbNode instance based on the configuration information.
+     */
+    @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.INTLOPER })
+    public synchronized boolean
+        createArbNode(final ParameterMap params,
+                      AuthContext authCtx,
+                      short serialVersion)
+        throws RemoteException {
+
+        return faultHandler.execute
+            (new ProcessFaultHandler.Operation<Boolean, RemoteException>() {
+                @Override
+                public Boolean execute()
+                    throws RemoteException {
+
+                    checkRegistered("createArbNode");
+                    ArbNodeParams arbNodeParams = new ArbNodeParams(params);
+                    return sna.createArbNode(arbNodeParams);
+                }
+            });
+    }
+
+    @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.INTLOPER })
+    public boolean startArbNode(final ArbNodeId arbNodeId, AuthContext authCtx,
+            short serialVersion) throws RemoteException {
+        return faultHandler.execute
+                (new ProcessFaultHandler.Operation<Boolean, RemoteException>() {
+                    @Override
+                    public Boolean execute()
+                        throws RemoteException {
+
+                        checkRegistered("startArbNode");
+                        return sna.startArbNode(arbNodeId);
+                    }
+                });
+    }
+
+    @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.INTLOPER })
+    public boolean stopArbNode(final ArbNodeId arbNodeId, final boolean force,
+            AuthContext authCtx, short serialVersion) throws RemoteException {
+
+        return faultHandler.execute
+                (new ProcessFaultHandler.Operation<Boolean, RemoteException>() {
+                    @Override
+                    public Boolean execute()
+                        throws RemoteException {
+
+                        checkRegistered("stopArbNode");
+                        return sna.stopArbNode(arbNodeId, force);
+                    }
+                });
+    }
+
+    /**
+     * Stop and destroy a ArbNode.  After this it will be necessary to
+     * re-create the instance using createArbNode().
+     */
+    @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.INTLOPER })
+    public synchronized boolean destroyArbNode(final ArbNodeId anid,
+                                               final boolean deleteData,
+                                               AuthContext authCtx,
+                                               short serialVersion)
+        throws RemoteException {
+
+        return faultHandler.execute
+            (new ProcessFaultHandler.Operation<Boolean, RemoteException>() {
+                @Override
+                public Boolean execute()
+                    throws RemoteException {
+
+                    checkRegistered("destroyArbNode");
+                    String serviceName = anid.getFullName();
+                    logInfo(serviceName + ": destroyArbNode called");
+
+                    /**
+                     * Ignore the return value from stopArbNode. The node may
+                     * be running or not, it doesn't matter.
+                     */
+                    boolean retval = true;
+                    try {
+                        sna.stopArbNode(anid, true);
+                    } finally {
+                        retval =
+                            sna.removeConfigurable(anid, null, deleteData);
+                    }
+                    return retval;
+                }
+            });
+    }
+
+    @Override
+    @SecureAutoMethod(privileges = { KVStorePrivilegeLabel.INTLOPER })
+    public void newArbNodeParameters(final ParameterMap params,
+            AuthContext authCtx, short serialVersion) throws RemoteException {
+        faultHandler.execute
+        (new ProcessFaultHandler.Procedure<RemoteException>() {
+            @Override
+            public void execute()
+                throws RemoteException {
+
+                checkRegistered("newArbNodeParameters");
+                ArbNodeParams arbNodeParams = new ArbNodeParams(params);
+                String serviceName =
+                    arbNodeParams.getArbNodeId().getFullName();
+                logInfo(serviceName + ": newArbNodeParameters called");
+
+                /**
+                 * Change the config file so the AN can see the state.
+                 */
+                sna.replaceArbNodeParams(arbNodeParams);
+            }
+        });
+
     }
 }

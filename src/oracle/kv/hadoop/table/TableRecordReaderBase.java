@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -47,6 +47,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
@@ -62,13 +63,14 @@ import oracle.kv.KVStoreFactory;
 import oracle.kv.ParamConstant;
 import oracle.kv.impl.api.table.TableAPIImpl;
 import oracle.kv.impl.security.util.KVStoreLogin;
+import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.table.FieldDef;
 import oracle.kv.table.FieldRange;
+import oracle.kv.table.IndexKey;
 import oracle.kv.table.MultiRowOptions;
 import oracle.kv.table.PrimaryKey;
 import oracle.kv.table.Row;
 import oracle.kv.table.Table;
-import oracle.kv.table.TableAPI;
 import oracle.kv.table.TableIterator;
 import oracle.kv.table.TableIteratorOptions;
 
@@ -100,17 +102,28 @@ abstract class TableRecordReaderBase<K, V> extends RecordReader<K, V> {
     private static String[] requiredRangeNames = {"name", "start", "end"};
 
     private KVStore kvstore;
+    private Table kvTable;
 
     /* Iterator input parameters, set in initialize() */
     private PrimaryKey primaryKey;
+    private IndexKey indexKey;
     private MultiRowOptions rowOpts;
     private TableIteratorOptions itrOpts = null;
 
-    /* List of remaining partitions to read from */
+    /* List of remaining partitions to read from if partitionSet iteration. */
     private List<Set<Integer>> partitionSets;
 
-    /* Initial number of partitions */
+    /* Initial number of partitionSets if using partitionSet iteration. */
     private int startNPartitionSets;
+
+    /* Flag indicating iteration is on partitionSets or an index key. */
+    private boolean splitOnShards;
+
+    /* Set referencing ids of the shards (RepGroups) for index iteratation. */
+    private Set<RepGroupId> shardSet;
+
+    /* Initial number of shards when using index (shard) iteration. */
+    private int startNShards;
 
     /* The current iterator */
     private TableIterator<Row> iter;
@@ -175,21 +188,21 @@ abstract class TableRecordReaderBase<K, V> extends RecordReader<K, V> {
             }
         }
 
-        final TableAPI tableApi = kvstore.getTableAPI();
-        final Table table = tableApi.getTable(tableName);
-        if (table == null) {
+        this.kvTable = kvstore.getTableAPI().getTable(tableName);
+        if (kvTable == null) {
             final String msg =
                 "Store does not contain table [name=" + tableName + "]";
             LOG.error(msg);
             throw new RuntimeException(msg);
         }
         primaryKey =
-            getPrimaryKey(table, tableInputSplit.getPrimaryKeyProperty());
+            getPrimaryKey(kvTable, tableInputSplit.getPrimaryKeyProperty());
 
         /* Construct MultiRowOptions */
         rowOpts =
             new MultiRowOptions(
-                getFieldRange(table, tableInputSplit.getFieldRangeProperty()));
+                getFieldRange(kvTable,
+                              tableInputSplit.getFieldRangeProperty()));
 
         /* Construct TableIteratorOptions */
         final Direction direction = tableInputSplit.getDirection();
@@ -206,6 +219,11 @@ abstract class TableRecordReaderBase<K, V> extends RecordReader<K, V> {
         }
         partitionSets = tableInputSplit.getPartitionSets();
         startNPartitionSets = partitionSets.size();
+
+        splitOnShards = tableInputSplit.getSplitOnShards();
+
+        shardSet = tableInputSplit.getShardSet();
+        startNShards = shardSet.size();
     }
 
     /**
@@ -229,7 +247,7 @@ abstract class TableRecordReaderBase<K, V> extends RecordReader<K, V> {
                 current = null;
                 iter = getNextIterator();
             }
-            LOG.debug("all iterations complete: return false");
+            LOG.trace("exit loop: return false");
             return false;
 
         } catch (Exception e) {
@@ -239,16 +257,34 @@ abstract class TableRecordReaderBase<K, V> extends RecordReader<K, V> {
     }
 
     private TableIterator<Row> getNextIterator() {
+
+        if (indexKey != null) {
+
+            /* Iterate over only the rows associated with the indexKey. */
+            if (shardSet.isEmpty()) {
+                return null;
+            }
+
+            /* For IndexKey, use only 1 iterator. */
+            final Set<RepGroupId> repGroupIds =
+                new HashSet<RepGroupId>(shardSet);
+            shardSet.clear();
+            return ((TableAPIImpl) kvstore.getTableAPI()).tableIterator(
+                        indexKey, rowOpts, itrOpts, repGroupIds);
+        }
+
+        /*
+         * Use partion sets to either iterate over all the rows of the table,
+         * or over only the rows associated with the primaryKey.
+         */
         if (partitionSets.isEmpty()) {
             return null;
         }
+
         final Set<Integer> partitions = partitionSets.remove(0);
         assert partitions.size() > 0;
         return ((TableAPIImpl) kvstore.getTableAPI()).tableIterator(
-                                                          primaryKey,
-                                                          rowOpts,
-                                                          itrOpts,
-                                                          partitions);
+                                   primaryKey, rowOpts, itrOpts, partitions);
     }
 
     /**
@@ -259,6 +295,11 @@ abstract class TableRecordReaderBase<K, V> extends RecordReader<K, V> {
      */
     @Override
     public float getProgress() {
+        if (splitOnShards) {
+            return (shardSet == null) ? 0 :
+                    (float) (startNShards - shardSet.size()) /
+                                                   (float) startNShards;
+        }
         return (partitionSets == null) ? 0 :
                     (float) (startNPartitionSets - partitionSets.size()) /
                                                    (float) startNPartitionSets;
@@ -270,7 +311,7 @@ abstract class TableRecordReaderBase<K, V> extends RecordReader<K, V> {
     @Override
     public void close()
         throws IOException {
-        LOG.debug("close table iterator and kvstore");
+        LOG.trace("close iterator and store");
         if (iter != null) {
             iter.close();
         }
@@ -663,5 +704,23 @@ abstract class TableRecordReaderBase<K, V> extends RecordReader<K, V> {
         trustFlnmFos.close();
 
         return loginFd.toString();
+    }
+
+    public Table getKvTable() {
+        return kvTable;
+    }
+
+    public void setIndexKey(final IndexKey key) {
+        indexKey = key;
+        primaryKey = null;
+    }
+
+    public void setPrimaryKey(final PrimaryKey key) {
+        primaryKey = key;
+        indexKey = null;
+    }
+
+    public void setMultiRowOptions(final FieldRange fieldRange) {
+        rowOpts = new MultiRowOptions(fieldRange);
     }
 }

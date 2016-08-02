@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -69,8 +69,8 @@ import com.sleepycat.persist.model.Persistent;
  * - if this plan has never executed, the PreRunState field
  * - if this plan has executed, the most recent PlanRun.
  *
- * Synchronization of changes to this execution state are the responsibility 
- * of the caller; the execution state doesn't attempt to take any mutexes. 
+ * Synchronization of changes to this execution state are the responsibility
+ * of the caller; the execution state doesn't attempt to take any mutexes.
  * ExecutionState methods generally only modify fields within this class.
  */
 @Persistent
@@ -95,7 +95,7 @@ public class ExecutionState implements Serializable {
 
     public ExecutionState(String planName) {
         this.planName = planName;
-        history = new ArrayList<PlanRun>();
+        history = new ArrayList<>();
         preRunState = Plan.State.PENDING;
     }
 
@@ -106,7 +106,7 @@ public class ExecutionState implements Serializable {
 
     public Plan.State getLatestState() {
 
-        if (history.size() == 0) {
+        if (history.isEmpty()) {
             /* Never been run before. */
             return preRunState;
         }
@@ -116,7 +116,7 @@ public class ExecutionState implements Serializable {
     }
 
     public Date getLatestStartTime() {
-        if (history.size() == 0) {
+        if (history.isEmpty()) {
             return null;
         }
 
@@ -124,7 +124,7 @@ public class ExecutionState implements Serializable {
     }
 
     public Date getLatestEndTime() {
-        if (history.size() == 0) {
+        if (history.isEmpty()) {
             return null;
         }
 
@@ -178,7 +178,7 @@ public class ExecutionState implements Serializable {
     String showRuns() {
         StringBuilder sb = new StringBuilder();
         for (PlanRun run : history) {
-            sb.append(run + "\n");
+            sb.append(run).append("\n");
         }
         return sb.toString();
     }
@@ -195,7 +195,7 @@ public class ExecutionState implements Serializable {
                       Plan plan,
                       Plan.State newState,
                       String msg) {
-        if (history.size() == 0) {
+        if (history.isEmpty()) {
             preRunState = changeState(planner, plan, preRunState,
                                       newState, 0, msg);
             return;
@@ -229,7 +229,7 @@ public class ExecutionState implements Serializable {
     }
 
     public PlanRun getLatestPlanRun() {
-        if (history.size() == 0) {
+        if (history.isEmpty()) {
             return null;
         }
         return history.get(history.size()-1);
@@ -290,11 +290,7 @@ public class ExecutionState implements Serializable {
         public static ExceptionTransfer newInstance(Throwable t,
                                                     String msg,
                                                     ErrorMessage errorMsg,
-                                                    String[] cleanupJobs,
-                                                    boolean hasDPLPlanStore) {
-            if (hasDPLPlanStore) {
-                return new ExceptionTransfer(t, msg);
-            } 
+                                                    String[] cleanupJobs) {
             return new ExceptionTransferV2(t, msg, errorMsg, cleanupJobs);
         }
 

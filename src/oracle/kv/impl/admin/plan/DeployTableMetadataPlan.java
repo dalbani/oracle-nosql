@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -134,11 +134,6 @@ public class DeployTableMetadataPlan extends MetadataPlan<TableMetadata> {
         getPerTaskLocks();
     }
 
-    @Override
-    void stripForDisplay() {
-
-    }
-
     /**
      * Returns the real table name for the table name, making it insensitive to
      * case.  If the table does not exist, return the argument and allow the
@@ -208,10 +203,10 @@ public class DeployTableMetadataPlan extends MetadataPlan<TableMetadata> {
         private final String tableName;
         private final boolean toRemoveIndex;
 
-        RemoveTablePlan(AtomicInteger idGen, 
+        RemoveTablePlan(AtomicInteger idGen,
                         String planName,
                         String tableName,
-                        boolean removeData, 
+                        boolean removeData,
                         Planner planner) {
             super(idGen, planName, planner);
 
@@ -260,7 +255,7 @@ public class DeployTableMetadataPlan extends MetadataPlan<TableMetadata> {
          * table is dropped
          */
         void checkPrivilegesOnTable() {
-            final SecurityMetadata secMd = 
+            final SecurityMetadata secMd =
                 planner.getAdmin().getMetadata(SecurityMetadata.class,
                                                MetadataType.SECURITY);
             if (secMd == null) {

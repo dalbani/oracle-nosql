@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -54,9 +54,12 @@ import com.sleepycat.persist.model.Persistent;
 import org.codehaus.jackson.util.CharTypes;
 
 @Persistent(version=1)
-class StringValueImpl extends FieldValueImpl implements StringValue {
+public class StringValueImpl extends FieldValueImpl implements StringValue {
+
     private static final long serialVersionUID = 1L;
-    private final String value;
+
+    protected String value;
+
     private static final char MIN_VALUE_CHAR = ((char) 1);
 
     StringValueImpl(String value) {
@@ -69,23 +72,18 @@ class StringValueImpl extends FieldValueImpl implements StringValue {
         value = null;
     }
 
-    public static StringValueImpl create(String value) {
-        return new StringValueImpl(value);
-    }
-
-    @Override
-    public String get() {
-        return value;
-    }
-
-    @Override
-    public FieldDef.Type getType() {
-        return FieldDef.Type.STRING;
-    }
+    /*
+     * Public api methods from Object and FieldValue
+     */
 
     @Override
     public StringValueImpl clone() {
         return new StringValueImpl(value);
+    }
+
+    @Override
+    public int hashCode() {
+        return value.hashCode();
     }
 
     @Override
@@ -97,21 +95,68 @@ class StringValueImpl extends FieldValueImpl implements StringValue {
     }
 
     @Override
-    public int hashCode() {
-        return value.hashCode();
-    }
-
-    @Override
     public int compareTo(FieldValue other) {
         if (other instanceof StringValueImpl) {
             return value.compareTo(((StringValueImpl)other).value);
         }
-        throw new ClassCastException
-            ("Object is not an StringValue");
+        throw new ClassCastException("Object is not an StringValue");
     }
 
     @Override
-    public String formatForKey(FieldDef field) {
+    public String toString() {
+        return value;
+    }
+
+    @Override
+    public FieldDef.Type getType() {
+        return FieldDef.Type.STRING;
+    }
+
+    @Override
+    public StringDefImpl getDefinition() {
+        return FieldDefImpl.stringDef;
+    }
+
+    @Override
+    public StringValue asString() {
+        return this;
+    }
+
+    @Override
+    public boolean isString() {
+        return true;
+    }
+
+    @Override
+    public boolean isAtomic() {
+        return true;
+    }
+
+    /*
+     * Public api methods from StringValue
+     */
+
+    @Override
+    public String get() {
+        return value;
+    }
+
+    /*
+     * FieldValueImpl internal api methods
+     */
+
+    @Override
+    public String getString() {
+        return value;
+    }
+
+    @Override
+    public void setString(String v) {
+        value = v;
+    }
+
+    @Override
+    public String castAsString() {
         return value;
     }
 
@@ -120,14 +165,19 @@ class StringValueImpl extends FieldValueImpl implements StringValue {
      * minimum character (1) added.
      */
     @Override
-    public FieldValueImpl getNextValue() {
+    FieldValueImpl getNextValue() {
         return new StringValueImpl(incrementString(value));
     }
 
     @Override
-    public FieldValueImpl getMinimumValue() {
+    FieldValueImpl getMinimumValue() {
         throw new IllegalStateException
             ("StringValue.getMinimumValue should never be called");
+    }
+
+    @Override
+    public String formatForKey(FieldDef field, int storageSize) {
+        return value;
     }
 
     @Override
@@ -147,19 +197,12 @@ class StringValueImpl extends FieldValueImpl implements StringValue {
         sb.append('\"');
     }
 
-    @Override
-    public StringValue asString() {
-        return this;
-    }
+    /*
+     * Local methods
+     */
 
-    @Override
-    public boolean isString() {
-        return true;
-    }
-
-    @Override
-    public String toString() {
-        return value;
+    public static StringValueImpl create(String value) {
+        return new StringValueImpl(value);
     }
 
     static String incrementString(String value) {

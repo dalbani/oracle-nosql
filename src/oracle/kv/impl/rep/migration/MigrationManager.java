@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -130,10 +130,9 @@ public class MigrationManager implements Localizer {
     /* The maximum number of target streams which can run concurrently. */
     private final int concurrentTargetLimit;
 
-    private final Map<PartitionId, MigrationTarget> targets =
-                                new HashMap<PartitionId, MigrationTarget>();
+    private final Map<PartitionId, MigrationTarget> targets = new HashMap<>();
 
-    private MigrationService migrationService = null;
+    private volatile MigrationService migrationService = null;
 
     private TargetExecutor targetExecutor = null;
 
@@ -189,7 +188,7 @@ public class MigrationManager implements Localizer {
         }
 
         final HashSet<PartitionMigrationStatus> status =
-            new HashSet<PartitionMigrationStatus>(targets.size());
+            new HashSet<>(targets.size());
 
         /* Get the targets */
         for (MigrationTarget target : targets.values()) {
@@ -1161,14 +1160,21 @@ public class MigrationManager implements Localizer {
                         pMigrations.persist(db, txn, false);
                         txn.commit();
                         txn = null;
-                        return true;
+                        /*
+                         * Return a Boolean object, rather than depending on
+                         * autoboxing to convert a boolean primitive, in order
+                         * to work around an obscure linking problem that may
+                         * involve the Eclipse incremental compiler.  Same with
+                         * similar cases below.
+                         */
+                        return Boolean.TRUE;
                     } finally {
                         TxnUtil.abort(txn);
                     }
                 }
         }, false);
 
-        return (success == null) ? false : success;
+        return (success == null) ? Boolean.FALSE : success;
     }
 
     /**
@@ -1325,26 +1331,24 @@ public class MigrationManager implements Localizer {
                 Transaction txn = null;
                 try {
                     txn = db.getEnvironment().beginTransaction(null, txnConfig);
-
                     final PartitionMigrations pMigrations =
                         PartitionMigrations.fetch(db, txn);
-
                     MigrationRecord record = pMigrations.remove(partitionId);
 
                     if (record == null) {
                         logger.log(Level.FINE,
                                    "removeRecord: No record for {0}",
                                    partitionId);
-                        return false;
+                        return Boolean.FALSE;
                     }
 
                     if (record.getId() != recordId) {
-                        return false;
+                        return Boolean.FALSE;
                     }
                     pMigrations.persist(db, txn, affectsTopo);
                     txn.commit();
                     txn = null;
-                    return true;
+                    return Boolean.TRUE;
                 } finally {
                     TxnUtil.abort(txn);
                 }

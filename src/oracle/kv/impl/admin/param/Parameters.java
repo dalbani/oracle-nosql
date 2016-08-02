@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,6 +43,8 @@
 
 package oracle.kv.impl.admin.param;
 
+import java.io.IOException;
+import java.io.ObjectInputStream;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -59,6 +61,7 @@ import oracle.kv.impl.api.ClientId;
 import oracle.kv.impl.param.Parameter;
 import oracle.kv.impl.param.ParameterMap;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.PartitionId;
 import oracle.kv.impl.topo.RepGroupId;
@@ -67,10 +70,6 @@ import oracle.kv.impl.topo.ResourceId;
 import oracle.kv.impl.topo.StorageNodeId;
 import oracle.kv.impl.topo.Topology;
 
-import com.sleepycat.je.LockMode;
-import com.sleepycat.je.Transaction;
-import com.sleepycat.persist.EntityStore;
-import com.sleepycat.persist.PrimaryIndex;
 import com.sleepycat.persist.model.Persistent;
 
 /**
@@ -92,8 +91,11 @@ import com.sleepycat.persist.model.Persistent;
  * keyed by the same ResourceId as their corresponding topology components.
  * <p>
  * The Parameters object and all of its referents are stored in the GADB.
+ *
+ * version 0: original
+ * version 1: added arbNodeParams field
  */
-@Persistent
+@Persistent(version=1)
 public class Parameters implements Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -108,6 +110,9 @@ public class Parameters implements Serializable {
 
     private Map<AdminId, AdminParams> adminParams;
     private int nextAdminId;
+
+    private Map<ArbNodeId, ArbNodeParams> arbNodeParams;
+
 
     private Map<String, StorageNodePool> storageNodePools;
 
@@ -126,13 +131,14 @@ public class Parameters implements Serializable {
 
         globalParams = new GlobalParams(kvsName);
 
-        repNodeParams = new HashMap<RepNodeId, RepNodeParams>();
-        storageNodeParams = new HashMap<StorageNodeId, StorageNodeParams>();
-        datacenterParams = new HashMap<DatacenterId, DatacenterParams>();
-        adminParams = new HashMap<AdminId, AdminParams>();
+        repNodeParams = new HashMap<>();
+        storageNodeParams = new HashMap<>();
+        datacenterParams = new HashMap<>();
+        adminParams = new HashMap<>();
+        arbNodeParams = new HashMap<>();
         nextAdminId = 1;
 
-        storageNodePools = new HashMap<String, StorageNodePool>();
+        storageNodePools = new HashMap<>();
         addStorageNodePool(DEFAULT_POOL_NAME);
 
         policyParams = ParameterMap.createDefaultPolicyMap();
@@ -147,17 +153,14 @@ public class Parameters implements Serializable {
      */
     public Parameters(Parameters orig) {
         globalParams = new GlobalParams(orig.globalParams.getMap().copy());
-        repNodeParams = 
-            new HashMap<RepNodeId, RepNodeParams>(orig.repNodeParams);
-        storageNodeParams = 
-            new HashMap<StorageNodeId, StorageNodeParams>(orig.storageNodeParams);
-        datacenterParams = 
-            new HashMap<DatacenterId, DatacenterParams>(orig.datacenterParams);
-        adminParams = new HashMap<AdminId, AdminParams>(orig.adminParams);
+        repNodeParams = new HashMap<>(orig.repNodeParams);
+        storageNodeParams = new HashMap<>(orig.storageNodeParams);
+        datacenterParams = new HashMap<>(orig.datacenterParams);
+        adminParams = new HashMap<>(orig.adminParams);
         nextAdminId = orig.nextAdminId;
-        storageNodePools = 
-            new HashMap<String, StorageNodePool>(orig.storageNodePools);
+        storageNodePools = new HashMap<>(orig.storageNodePools);
         policyParams = orig.policyParams.copy();
+        arbNodeParams = new HashMap<>(orig.arbNodeParams);
     }
 
     /**
@@ -399,7 +402,7 @@ public class Parameters implements Serializable {
                           "topology cannot be null when dcid is non-null");
         }
 
-        final Set<AdminId> adminIds = new HashSet<AdminId>();
+        final Set<AdminId> adminIds = new HashSet<>();
         for (Map.Entry<AdminId, AdminParams> entry : adminParams.entrySet()) {
             final AdminId aid = entry.getKey();
             final AdminParams params = entry.getValue();
@@ -432,6 +435,8 @@ public class Parameters implements Serializable {
             params = get((RepNodeId) resourceId);
         } else if (resourceId instanceof StorageNodeId) {
             params = get((StorageNodeId) resourceId);
+        } else if (resourceId instanceof ArbNodeId) {
+            params = get((ArbNodeId) resourceId);
         } else {
             assert resourceId instanceof ClientId ||
                 resourceId instanceof DatacenterId ||
@@ -523,38 +528,6 @@ public class Parameters implements Serializable {
     }
 
     /**
-     * Store the Parameters objects in the BDB environment. Parameters is
-     * stored in the given EntityStore with the well-known key
-     * <code>PARAMETERS_KEY</code>.  Like Topology, the entire set of
-     * Parameters objects is stored as a single value.
-     *
-     * @param estore the EntityStore that holds the Parameters
-     * @param txn the transaction in progress
-     */
-    public void persist(EntityStore estore, Transaction txn) {
-        final PrimaryIndex<String, ParametersHolder> ti =
-            estore.getPrimaryIndex(String.class, ParametersHolder.class);
-        ti.put(txn, new ParametersHolder(this));
-    }
-
-    /**
-     * Fetches a previously <code>persisted</code> Parameters from the
-     * BDB environment.
-     *
-     * @param estore the EntityStore containing the Parameters
-     * @param txn the transaction to be used to fetch the Parameters
-     *
-     */
-    static public Parameters fetch(EntityStore estore, Transaction txn) {
-        final PrimaryIndex<String, ParametersHolder> ti =
-            estore.getPrimaryIndex(String.class, ParametersHolder.class);
-        final ParametersHolder holder =
-            ti.get(txn, ParametersHolder.getKey(), LockMode.READ_COMMITTED);
-
-        return (holder == null) ? null : holder.getParameters();
-    }
-
-    /**
      * Creates a list of rep node parameters for all nodes. For debug use.
      */
     public String printRepNodeParams() {
@@ -564,14 +537,82 @@ public class Parameters implements Serializable {
             sb.append("\n-- Parameters for ").append(e.getKey());
             sb.append(" --\n");
             ParameterMap pMap = e.getValue().getMap();
-            List<String> sortedParamKeys = new ArrayList<String>(pMap.keys());
+            List<String> sortedParamKeys = new ArrayList<>(pMap.keys());
             Collections.sort(sortedParamKeys);
-            
+
             for (String k : sortedParamKeys) {
                 Parameter p = pMap.get(k);
                 sb.append(k).append(" = ").append(p).append("\n");
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * Return a set of all StorageNodeParams in the system.
+     */
+    public Collection<StorageNodeParams> getStorageNodeParams() {
+        return storageNodeParams.values();
+    }
+
+    /**
+     * Returns the ArbNodeParams object associated with the given Id.
+     */
+    public ArbNodeParams get(ArbNodeId id) {
+        return arbNodeParams.get(id);
+    }
+
+    /**
+     * Add a new ArbNodeParams created elsewhere. This should be the first
+     * instance of a ArbNodeParams.
+     */
+    public void add(ArbNodeParams anp) {
+        update(anp, true);
+    }
+
+    /**
+     * Update a ArbNodeParams.
+     */
+    public void update(ArbNodeParams anp) {
+        update(anp, false);
+    }
+
+    /**
+     * Removes the ArbNodeParams object associated with the given ResourceId.
+     */
+    public ArbNodeParams remove(ArbNodeId id) {
+        ArbNodeParams ov = arbNodeParams.remove(id);
+        if (ov == null) {
+            throw new NonfatalAssertionException
+                ("Attempt to remove a nonexistent ArbNodesParams with id " +
+                 id);
+        }
+        return ov;
+    }
+
+    /**
+     * Return a set of all ArbNodeParams in the system.
+     */
+    public Collection<ArbNodeParams> getArbNodeParams() {
+        return arbNodeParams.values();
+    }
+
+    private void update(ArbNodeParams anp, boolean shouldBeFirst) {
+        ArbNodeId anid = anp.getArbNodeId();
+        ArbNodeParams ov = arbNodeParams.put(anid, anp);
+        if ((shouldBeFirst) && (ov != null)) {
+            throw new NonfatalAssertionException
+                ("Attempt to add a duplicate ArbNodesParams" +
+                 " with id " + anid);
+        }
+    }
+
+    private void readObject(ObjectInputStream in)
+            throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+
+        if (arbNodeParams == null) {
+            arbNodeParams = new HashMap<>();
+        }
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,9 +44,12 @@
 package oracle.kv.table;
 
 /**
- * FieldValue represents a value of a single field.  A value may be simple or
- * complex (single-valued vs multi-valued).  FieldValue is the building block
- * of row values in a table.
+ * FieldValue represents an item, that is, a value and its associated type.
+ * Values can be atomic or complex. An atomic value is a single, indivisible
+ * unit of data. A complex value is a value that contains or consists of other
+ * values and provides access to its nested values.
+ *<p>
+ * FieldValue is the building block of row values in a table.
  *<p>
  * The FieldValue interface defines casting and interrogation methods common to
  * all implementing classes.  Each implementing type has its own interface
@@ -69,24 +72,32 @@ package oracle.kv.table;
 public interface FieldValue extends Comparable<FieldValue> {
 
     /**
-     * Get the type of the value.
+     * Create a deep copy of this object.
      *
-     * @return the type of the instance
+     * @return a new copy
+     */
+    FieldValue clone();
+
+    /**
+     * Returns the kind of the type associated with this value. The method will
+     * never return any of the "wildcard" types (ANY, ANY_ATOMIC, ANY_RECORD).
+     *
+     * @return the type of this value
+     *
+     * @throws UnsupportedOperationException if this is the NullValue
      */
     FieldDef.Type getType();
 
     /**
-     * Create a JSON representation of the value.
+     * Returns the type associated with this value.
      *
-     * @param prettyPrint set to true for a nicely formatted JSON string,
-     * with indentation and carriage returns, otherwise the string will be a
-     * single line
+     * @return the FieldDef
      *
-     * @return a JSON representation of the value
+     * @throws UnsupportedOperationException if this is the NullValue
      */
-    String toJsonString(boolean prettyPrint);
+    FieldDef getDefinition();
 
-    /**
+     /**
      * Returns true if this is a {@link BooleanValue}.
      *
      * @return true if this is a BooleanValue, false otherwise
@@ -202,11 +213,31 @@ public interface FieldValue extends Comparable<FieldValue> {
     boolean isNull();
 
     /**
-     * Create a deep copy of this object.
+     * Returns true if this is an atomic value.
      *
-     * @return a new copy
+     * @return true if this is a scalar value, false otherwise
+     *
+     * @since 4.0
      */
-    FieldValue clone();
+    boolean isAtomic();
+
+    /**
+     * Returns true if this is numeric value.
+     *
+     * @return true if this is a numeric value, false otherwise
+     *
+     * @since 4.0
+     */
+    boolean isNumeric();
+
+    /**
+     * Returns true if this is a complex value.
+     *
+     * @return true if this is a complex value, false otherwise
+     *
+     * @since 4.0
+     */
+    boolean isComplex();
 
     /**
      * Casts to BinaryValue.
@@ -342,7 +373,16 @@ public interface FieldValue extends Comparable<FieldValue> {
      * @throws ClassCastException if this is not an IndexKey
      */
     IndexKey asIndexKey();
+
+   /**
+     * Create a JSON representation of the value.
+     *
+     * @param prettyPrint set to true for a nicely formatted JSON string,
+     * with indentation and carriage returns, otherwise the string will be a
+     * single line
+     *
+     * @return a JSON representation of the value
+     */
+    String toJsonString(boolean prettyPrint);
+
 }
-
-
-

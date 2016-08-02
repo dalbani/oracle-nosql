@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -57,11 +57,13 @@ import com.sleepycat.persist.model.Persistent;
  * accessed by applications.
  */
 @Persistent(version=1)
-class NullValueImpl extends FieldValueImpl {
+public class NullValueImpl extends FieldValueImpl {
+
     private static final long serialVersionUID = 1L;
+
     private static NullValueImpl instanceValue = new NullValueImpl();
 
-    static NullValueImpl getInstance() {
+    public static NullValueImpl getInstance() {
         return instanceValue;
     }
 
@@ -71,6 +73,12 @@ class NullValueImpl extends FieldValueImpl {
 
     @Override
     public FieldDef.Type getType() {
+        throw new UnsupportedOperationException
+            ("Cannot get type from NullNode");
+    }
+
+    @Override
+    public EnumDefImpl getDefinition() {
         throw new UnsupportedOperationException
             ("Cannot get type from NullNode");
     }

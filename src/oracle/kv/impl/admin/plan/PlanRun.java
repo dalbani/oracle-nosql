@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -223,11 +223,10 @@ public class PlanRun implements Serializable {
                      String problem,
                      ErrorMessage errorMsg,
                      String[] cleanupJobs,
-                     Logger logger,
-                     boolean hasDPLPlanStore) {
+                     Logger logger) {
 
         final ExceptionTransfer failure = ExceptionTransfer.newInstance(
-            t, problem, errorMsg, cleanupJobs, hasDPLPlanStore);
+            t, problem, errorMsg, cleanupJobs);
         transferList.add(failure);
 
         /* Log all failures, for help in troubleshooting */

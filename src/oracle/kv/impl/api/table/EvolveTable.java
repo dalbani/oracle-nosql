@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,25 +43,29 @@
 
 package oracle.kv.impl.api.table;
 
+import oracle.kv.table.TimeToLive;
+
 
 /**
- * A TableChange that evolves an existing
+ * A TableChange that evolves an existing table.
  */
 class EvolveTable extends TableChange {
     private static final long serialVersionUID = 1L;
 
     private final String tableName;
     private final FieldMap fields;
+    private final TimeToLive ttl;
 
     EvolveTable(TableImpl table, int seqNum) {
         super(seqNum);
         tableName = table.getFullName();
         fields = table.getFieldMap();
+        ttl = table.getDefaultTTL();
     }
 
     @Override
     public boolean apply(TableMetadata md) {
-        md.evolveTable(tableName, fields);
+        md.evolveTable(tableName, fields, ttl);
         return true;
     }
 }

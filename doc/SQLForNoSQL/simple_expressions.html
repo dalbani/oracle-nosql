@@ -1,0 +1,552 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <title>Simple Select-From-Where Queries</title>
+    <link rel="stylesheet" href="gettingStarted.css" type="text/css" />
+    <meta name="generator" content="DocBook XSL Stylesheets V1.73.2" />
+    <link rel="start" href="index.html" title="Getting Started with SQL for Oracle NoSQL Database" />
+    <link rel="up" href="sfw_expression.html" title="Chapter 2. SQL for Oracle NoSQL Database Queries" />
+    <link rel="prev" href="sfw_expression.html" title="Chapter 2. SQL for Oracle NoSQL Database Queries" />
+    <link rel="next" href="complextypes.html" title="Working with complex data" />
+  </head>
+  <body>
+    <div xmlns="" class="navheader">
+      <div class="libver">
+        <p>Library Version 12.1.4.0</p>
+      </div>
+      <table width="100%" summary="Navigation header">
+        <tr>
+          <th colspan="3" align="center">Simple Select-From-Where
+            Queries</th>
+        </tr>
+        <tr>
+          <td width="20%" align="left"><a accesskey="p" href="sfw_expression.html">Prev</a> </td>
+          <th width="60%" align="center">Chapter 2. SQL for Oracle NoSQL Database Queries</th>
+          <td width="20%" align="right"> <a accesskey="n" href="complextypes.html">Next</a></td>
+        </tr>
+      </table>
+      <hr />
+    </div>
+    <div class="sect1" lang="en" xml:lang="en">
+      <div class="titlepage">
+        <div>
+          <div>
+            <h2 class="title" style="clear: both"><a id="simple_expressions"></a>Simple Select-From-Where
+            Queries</h2>
+          </div>
+        </div>
+      </div>
+      <div class="toc">
+        <dl>
+          <dt>
+            <span class="sect2">
+              <a href="simple_expressions.html#selecting_columns">Selecting columns</a>
+            </span>
+          </dt>
+          <dt>
+            <span class="sect2">
+              <a href="simple_expressions.html#renaming_columns">Renaming columns</a>
+            </span>
+          </dt>
+          <dt>
+            <span class="sect2">
+              <a href="simple_expressions.html#computing_columns">Computing new columns</a>
+            </span>
+          </dt>
+          <dt>
+            <span class="sect2">
+              <a href="simple_expressions.html#identifying_tables">Identifying tables and their columns</a>
+            </span>
+          </dt>
+          <dt>
+            <span class="sect2">
+              <a href="simple_expressions.html#filtering_results">Filtering results</a>
+            </span>
+          </dt>
+          <dt>
+            <span class="sect2">
+              <a href="simple_expressions.html#ordering_results">Ordering Results</a>
+            </span>
+          </dt>
+          <dt>
+            <span class="sect2">
+              <a href="simple_expressions.html#using_variables">Using External Variables</a>
+            </span>
+          </dt>
+        </dl>
+      </div>
+      <p> 
+            In this section we walk you through examples of queries over
+            simple, relational data. If you want to follow along the examples,
+            you can run the <code class="literal">SQLBasicExamples</code> script found in
+            the Examples folder, which creates the table and imports the data
+            used.
+        </p>
+      <p> 
+            The script <code class="literal">SQLBasicExamples</code> creates the
+            following table: 
+        </p>
+      <pre class="programlisting">create table Users (
+  id integer,
+  firstname string,
+  lastname string,
+  age integer,
+  income integer,
+  primary key (id)
+); </pre>
+      <p> 
+            The script also populates the Users table with the following rows
+            (shown here in JSON format): 
+        </p>
+      <pre class="programlisting">{
+  "id":1,
+  "firstname":"David",
+  "lastname":"Morrison",
+  "age":25,
+  "income":100000
+};
+
+{
+  "id":2,
+  "firstname":"John",
+  "lastname":"Anderson",
+  "age":35,
+  "income":100000
+};
+
+{
+  "id":3,
+  "firstname":"John",
+  "lastname":"Morgan",
+  "age":38,
+  "income":200000
+};
+
+{
+  "id":4,
+  "firstname":"Peter",
+  "lastname":"Smith",
+  "age":38,
+  "income":80000
+};
+
+{
+  "id":5,
+  "firstname":"Dana",
+  "lastname":"Scully",
+  "age":47,
+  "income":400000
+}; </pre>
+      <p> 
+            To run the queries, start the shell:
+        </p>
+      <pre class="programlisting">java -jar KVHOME/lib/onql.jar
+-helper-hosts node01:5000 -store kvstore
+onql-&gt; </pre>
+      <p> 
+            To learn more about the shell and its available commands,
+            see <a class="xref" href="appendixshell.html" title="Appendix A. Introduction to the SQL for Oracle NoSQL Database shell">Introduction to the SQL for Oracle NoSQL Database shell</a>. 
+        </p>
+      <div class="sect2" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h3 class="title"><a id="selecting_columns"></a>Selecting columns</h3>
+            </div>
+          </div>
+        </div>
+        <p>
+                You can select columns from a table by specifying the table
+                name in the FROM clause of a SFW expression, and listing the
+                names of the desired columns in the SELECT clause of the same
+                SFW expression. You can also request all the columns of a table
+                by using the short-hand "star" notation in the SELECT clause.
+                For example:
+            </p>
+        <p> To select all the columns of the table Users: 
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT * FROM Users; </pre>
+        <p>
+                The result as shown by the shell is:
+            </p>
+        <pre class="programlisting">+----+-----------+----------+-----+--------+
+ | id | firstname | lastname | age | income |
+ +----+-----------+----------+-----+--------+
+ |  4 | Peter     | Smith    |  38 |  80000 |
+ |  3 | John      | Morgan   |  38 | 200000 |
+ |  2 | John      | Anderson |  35 | 100000 |
+ |  1 | David     | Morrison |  25 | 100000 |
+ |  5 | Dana      | Scully   |  47 | 400000 |
+ +----+-----------+----------+-----+--------+
+
+5 rows returned </pre>
+        <p>
+                To select specific column(s) from the table Users, include
+                them as a comma separated list in the SELECT clause:
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT firstname, lastname, age FROM Users;
+ +-----------+----------+-----+
+ | firstname | lastname | age |
+ +-----------+----------+-----+
+ | John      | Morgan   |  38 |
+ | David     | Morrison |  25 |
+ | Dana      | Scully   |  47 |
+ | Peter     | Smith    |  38 |
+ | John      | Anderson |  35 |
+ +-----------+----------+-----+
+
+5 rows returned </pre>
+      </div>
+      <div class="sect2" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h3 class="title"><a id="renaming_columns"></a>Renaming columns</h3>
+            </div>
+          </div>
+        </div>
+        <p> 
+                To select lastname and rename it as Surname, use the
+                    <code class="literal">AS</code> keyword in the SELECT clause.
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT lastname AS Surname FROM Users; 
+ +----------+
+ | Surname  |
+ +----------+
+ | Scully   |
+ | Smith    |
+ | Morgan   |
+ | Anderson |
+ | Morrison |
+ +----------+
+
+5 rows returned </pre>
+      </div>
+      <div class="sect2" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h3 class="title"><a id="computing_columns"></a>Computing new columns</h3>
+            </div>
+          </div>
+        </div>
+        <p> 
+                The SELECT clause can also contain expressions that
+                compute/create new values from existing data. In fact, any kind
+                of expression that returns at most one item can be used in the
+                SELECT list. Here we show two examples demonstrating arithmetic
+                expressions. The usual arithmetic operators: +, -,
+                *, and / are supported.
+            </p>
+        <p>
+                To select the income column and perform a division operation
+                which calculates <code class="literal">monthlysalary</code>:
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT id, lastname, income, income/12
+AS monthlysalary FROM users;
+ +----+----------+--------+---------------+
+ | id | lastname | income | monthlysalary |
+ +----+----------+--------+---------------+
+ |  2 | Anderson | 100000 |          8333 |
+ |  1 | Morrison | 100000 |          8333 |
+ |  5 | Scully   | 400000 |         33333 |
+ |  4 | Smith    |  80000 |          6666 |
+ |  3 | Morgan   | 200000 |         16666 |
+ +----+----------+--------+---------------+
+
+5 rows returned </pre>
+        <p>
+                To select the income column and perform an addition operation
+                which calculates <code class="literal">salarywithbonus</code>: 
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT id, lastname, income, income+5000
+AS salarywithbonus FROM users;
+ +----+----------+--------+-----------------+
+ | id | lastname | income | salarywithbonus |
+ +----+----------+--------+-----------------+
+ |  4 | Smith    |  80000 |           85000 |
+ |  1 | Morrison | 100000 |          105000 |
+ |  5 | Scully   | 400000 |          405000 |
+ |  3 | Morgan   | 200000 |          205000 |
+ |  2 | Anderson | 100000 |          105000 |
+ +----+----------+--------+-----------------+
+
+5 rows returned </pre>
+      </div>
+      <div class="sect2" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h3 class="title"><a id="identifying_tables"></a>Identifying tables and their columns</h3>
+            </div>
+          </div>
+        </div>
+        <p> 
+                Currently, the FROM clause can contain one table only (joins
+                are not supported). The table is specified by its name, which
+                may be followed by an optional alias. The table can be
+                referenced in the other clauses either by its name or its alias.
+                As we will see later, sometimes the use of the table name or alias
+                is mandatory. However, for table columns, the use of the table
+                name or alias is optional.
+                For example, here are 3 ways of writing the same query:
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT Users.lastname, age FROM Users;
+ +----------+-----+
+ | lastname | age |
+ +----------+-----+
+ | Scully   |  47 |
+ | Smith    |  38 |
+ | Morgan   |  38 |
+ | Anderson |  35 |
+ | Morrison |  25 |
+ +----------+-----+
+
+5 rows returned </pre>
+        <p> 
+                To identify the table Users with the alias
+                    <code class="literal">u</code>:
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT lastname, u.age FROM Users u ; </pre>
+        <p> 
+                The keyword AS can optionally be used before an alias. For example,
+                to identify the table Users with the alias <code class="literal">People</code>: 
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT People.lastname, People.age FROM Users AS People; </pre>
+      </div>
+      <div class="sect2" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h3 class="title"><a id="filtering_results"></a>Filtering results</h3>
+            </div>
+          </div>
+        </div>
+        <p>
+                You can filter the result by specifying a filter condition in
+                the WHERE clause. Typically, a filter condition is an expression
+                that consists of one or more comparison expressions connected
+                through the logical operators AND and/or OR. The usual comparison 
+		operators: =, !=, &gt;, &gt;=, &lt;, and &lt;= are supported. For example: 
+            </p>
+        <p> 
+                To return users whose firstname is John:
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT id, firstname, lastname FROM Users WHERE firstname = "John";
+ +----+-----------+----------+
+ | id | firstname | lastname |
+ +----+-----------+----------+
+ |  3 | John      | Morgan   |
+ |  2 | John      | Anderson |
+ +----+-----------+----------+
+
+2 rows returned </pre>
+        <p> 
+                To return the users whose calculated
+                    <code class="literal">monthlysalary</code> is greater than 6000: 
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT id, lastname, income, income/12 AS monthlysalary
+FROM Users WHERE income/12 &gt; 6000;
+ +----+----------+--------+---------------+
+ | id | lastname | income | monthlysalary |
+ +----+----------+--------+---------------+
+ |  5 | Scully   | 400000 |         33333 |
+ |  3 | Morgan   | 200000 |         16666 |
+ |  4 | Smith    |  80000 |          6666 |
+ |  2 | Anderson | 100000 |          8333 |
+ |  1 | Morrison | 100000 |          8333 |
+ +----+----------+--------+---------------+
+
+5 rows returned </pre>
+        <p> 
+                To return the users whose age is between 30 and 40 or their
+                income is greater than 100,000: 
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT lastname, age, income FROM Users 
+WHERE 30 &lt;= age and age &lt;=40 or income &gt; 100000;
+ +----------+-----+--------+
+ | lastname | age | income |
+ +----------+-----+--------+
+ | Smith    |  38 |  80000 |
+ | Morgan   |  38 | 200000 |
+ | Anderson |  35 | 100000 |
+ | Scully   |  47 | 400000 |
+ +----------+-----+--------+
+
+4 rows returned </pre>
+        <p> 
+                You can use parenthesized expressions to alter the default
+                precedence among operators. For example:
+            </p>
+        <p>
+                To return the users whose age is greater than 40 and either
+                their age is less than 30 or their income is greater or equal
+                than 100,000: 
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT id, lastName FROM Users WHERE
+(income &gt;= 100000 or age &lt; 30) and age &gt; 40; 
+ +----+----------+
+ | id | lastName |
+ +----+----------+
+ |  5 | Scully   |
+ +----+----------+
+
+1 row returned </pre>
+      </div>
+      <div class="sect2" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h3 class="title"><a id="ordering_results"></a>Ordering Results</h3>
+            </div>
+          </div>
+        </div>
+        <p> 
+                You can order the result by a primary key column or a
+                non-primary key column (if you first create an index) using the
+                ORDER BY clause. For example: 
+            </p>
+        <p>
+                To order by using a primary key column (id), specify the sort
+                column in the ORDER BY clause:
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT id, lastname FROM Users ORDER BY id;
+ +----+----------+
+ | id | lastname |
+ +----+----------+
+ |  1 | Morrison |
+ |  2 | Anderson |
+ |  3 | Morgan   |
+ |  4 | Smith    |
+ |  5 | Scully   |
+ +----+----------+
+
+5 rows returned </pre>
+        <p>
+                To order by a non-primary key column, you need to first
+                create an index. To create an index and then order by lastname:
+            </p>
+        <pre class="programlisting">onql-&gt; create index idx1 on Users(lastname);
+Statement completed successfully
+onql-&gt; SELECT id, lastname FROM Users ORDER BY lastname;
+ +----+----------+
+ | id | lastname |
+ +----+----------+
+ |  2 | Anderson |
+ |  3 | Morgan   |
+ |  1 | Morrison |
+ |  5 | Scully   |
+ |  4 | Smith    |
+ +----+----------+
+
+5 rows returned </pre>
+        <p> 
+                You can order by more than one column, if you create an index
+                on those columns. For example, to order users by age and income: 
+            </p>
+        <pre class="programlisting">onql-&gt; create index idx2 on Users(age, income);
+Statement completed successfully
+onql-&gt; SELECT id, lastname, age, income FROM Users ORDER BY age, income;
+ +----+----------+-----+--------+
+ | id | lastname | age | income |
+ +----+----------+-----+--------+
+ |  1 | Morrison |  25 | 100000 |
+ |  2 | Anderson |  35 | 100000 |
+ |  4 | Smith    |  38 |  80000 |
+ |  3 | Morgan   |  38 | 200000 |
+ |  5 | Scully   |  47 | 400000 |
+ +----+----------+-----+--------+
+
+5 rows returned </pre>
+        <p>
+                The idx2 index can also be used to order by age only (but not
+                by income only, nor by income first and age second).
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT id, lastname, age from Users ORDER BY age;
+ +----+----------+-----+
+ | id | lastname | age |
+ +----+----------+-----+
+ |  1 | Morrison |  25 |
+ |  2 | Anderson |  35 |
+ |  4 | Smith    |  38 |
+ |  3 | Morgan   |  38 |
+ |  5 | Scully   |  47 |
+ +----+----------+-----+
+
+5 rows returned </pre>
+        <p>
+        To learn more about indexes see <a class="xref" href="indexes.html" title="Working With Indexes">Working With Indexes</a>. 
+        </p>
+        <p>
+                By default, sorting is done in ascending order. To sort in
+                descending order use the DESC keyword in the ORDER BY: 
+            </p>
+        <pre class="programlisting">onql-&gt; SELECT id, lastname FROM Users ORDER BY id DESC;
+ +----+----------+
+ | id | lastname |
+ +----+----------+
+ |  5 | Scully   |
+ |  4 | Smith    |
+ |  3 | Morgan   |
+ |  2 | Anderson |
+ |  1 | Morrison |
+ +----+----------+
+
+5 rows returned </pre>
+      </div>
+      <div class="sect2" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h3 class="title"><a id="using_variables"></a>Using External Variables</h3>
+            </div>
+          </div>
+        </div>
+        <p> 
+                Use of external variables allows a query to be written and
+                compiled once, and then run multiple times with different values
+                for the external variables. Binding the external variables to
+                specific values is done through APIs (see <em class="citetitle">Getting
+                    Started with the Table API</em>), which must be used
+                before the query is executed. External variables must be
+                declared in the query before they can be referenced in the SFW
+                expression. For example: 
+            </p>
+        <pre class="programlisting">DECLARE $age integer;
+SELECT firstname, lastname, age
+FROM Users
+WHERE age &gt; $age </pre>
+        <p>
+                If the variable $age is bound to the value 39, the result of
+                the above query is: 
+            </p>
+        <pre class="programlisting">+-----------+----------+-----+
+| firstname | lastname | age |
++-----------+----------+-----+
+| Dana      | Scully   |  47 |
++-----------+----------+-----+ </pre>
+      </div>
+    </div>
+    <div class="navfooter">
+      <hr />
+      <table width="100%" summary="Navigation footer">
+        <tr>
+          <td width="40%" align="left"><a accesskey="p" href="sfw_expression.html">Prev</a> </td>
+          <td width="20%" align="center">
+            <a accesskey="u" href="sfw_expression.html">Up</a>
+          </td>
+          <td width="40%" align="right"> <a accesskey="n" href="complextypes.html">Next</a></td>
+        </tr>
+        <tr>
+          <td width="40%" align="left" valign="top">Chapter 2. SQL for Oracle NoSQL Database Queries </td>
+          <td width="20%" align="center">
+            <a accesskey="h" href="index.html">Home</a>
+          </td>
+          <td width="40%" align="right" valign="top"> Working with complex data</td>
+        </tr>
+      </table>
+    </div>
+  </body>
+</html>

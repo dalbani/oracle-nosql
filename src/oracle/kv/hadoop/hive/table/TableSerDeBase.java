@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -79,6 +79,7 @@ import org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe;
 import org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe.SerDeParameters;
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
 import org.apache.hadoop.hive.serde2.typeinfo.StructTypeInfo;
+import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
 import org.apache.hadoop.io.MapWritable;
 import org.apache.hadoop.io.Writable;
 
@@ -250,29 +251,59 @@ abstract class TableSerDeBase implements SerDe {
 
     @Override
     public String toString() {
-        return "[" +
-          "kvStoreName=" + getKvStoreName() +
-          ":" +
-          "kvHelperHosts=" + Arrays.asList(getKvHelperHosts()) +
-          ":" +
-          "kvHadoopHosts=" + Arrays.asList(getKvHadoopHosts()) +
-          ":" +
-          "kvTableName=" + getKvTableName() +
-          ":" +
-          "kvFieldNames=" + getKvFieldNames() +
-          ":" +
-          "kvFieldTypes=" + getKvFieldTypes() +
-          ":" +
-          "hiveTableName=" + getHiveTableName() +
-          ":" +
-          "hiveSeparators=" + getSeparatorsStr(serdeParams) +
-          ":" +
-          "hiveColumnNames=" + ((StructTypeInfo) serdeParams.getRowTypeInfo())
-              .getAllStructFieldNames() +
-          ":" +
-          "hiveColumnTypes=" + ((StructTypeInfo) serdeParams.getRowTypeInfo())
-              .getAllStructFieldTypeInfos() +
-          "]";
+
+        /* Perform defensive coding to avoid NullPoinerException. */
+
+        final String[] helperHosts = getKvHelperHosts();
+        String helperHostsStr = null;
+        if (helperHosts != null) {
+            helperHostsStr = (Arrays.asList(helperHosts)).toString();
+        }
+
+        final String[] hadoopHosts = getKvHadoopHosts();
+        String hadoopHostsStr = null;
+        if (hadoopHosts != null) {
+            hadoopHostsStr = (Arrays.asList(hadoopHosts)).toString();
+        }
+
+        String hiveColumnNamesStr = null;
+        String hiveColumnTypesStr = null;
+        if (serdeParams != null) {
+            final TypeInfo typeInfo = serdeParams.getRowTypeInfo();
+            if (typeInfo != null) {
+                hiveColumnNamesStr =
+                    (((StructTypeInfo) typeInfo).getAllStructFieldNames())
+                                                    .toString();
+                hiveColumnTypesStr =
+                    (((StructTypeInfo) typeInfo).getAllStructFieldTypeInfos())
+                                                    .toString();
+            }
+        }
+
+        final StringBuilder buf = new StringBuilder("[");
+
+        buf.append("kvStoreName=" + getKvStoreName());
+        buf.append(":");
+        buf.append("kvHelperHosts=" + helperHostsStr);
+        buf.append(":");
+        buf.append("kvHadoopHosts=" + hadoopHostsStr);
+        buf.append(":");
+        buf.append("kvTableName=" + getKvTableName());
+        buf.append(":");
+        buf.append("kvFieldNames=" + getKvFieldNames());
+        buf.append(":");
+        buf.append("kvFieldTypes=" + getKvFieldTypes());
+        buf.append(":");
+        buf.append("hiveTableName=" + getHiveTableName());
+        buf.append(":");
+        buf.append("hiveSeparators=" + getSeparatorsStr(serdeParams));
+        buf.append(":");
+        buf.append("hiveColumnNames=" + hiveColumnNamesStr);
+        buf.append(":");
+        buf.append("hiveColumnTypes=" + hiveColumnTypesStr);
+        buf.append("]");
+
+        return buf.toString();
     }
 
     String getKvStoreName() {
@@ -510,19 +541,26 @@ abstract class TableSerDeBase implements SerDe {
          * instead of a non-secure connection. To address this, FaultException
          * is caught and the connection attempt is retried with no security
          * information.
+         *
+         * Also, to support testing using a KVStore mock, the kvstore is
+         * tested for null. Where if kvstore is NOT null, then it is assumed
+         * that a mock of the kvstore has been created by a test, and the
+         * attempt to find and connect to the real kvstore is by-passed.
          */
-        try {
-            kvStore = KVStoreFactory.getStore(
-                          kvStoreConfig, passwordCreds, null);
-        } catch (FaultException e) {
-            if (passwordCreds != null) {
-                final KVStoreConfig kvStoreConfigNonSecure =
-                    new KVStoreConfig(kvStoreName, kvHelperHosts);
-                kvStoreConfigNonSecure.setSecurityProperties(
-                    KVStoreLogin.createSecurityProperties(null));
-                kvStore = KVStoreFactory.getStore(kvStoreConfigNonSecure);
-            } else {
-                throw e;
+        if (kvStore == null) {
+            try {
+                kvStore = KVStoreFactory.getStore(
+                              kvStoreConfig, passwordCreds, null);
+            } catch (FaultException e) {
+                if (passwordCreds != null) {
+                    final KVStoreConfig kvStoreConfigNonSecure =
+                        new KVStoreConfig(kvStoreName, kvHelperHosts);
+                    kvStoreConfigNonSecure.setSecurityProperties(
+                        KVStoreLogin.createSecurityProperties(null));
+                    kvStore = KVStoreFactory.getStore(kvStoreConfigNonSecure);
+                } else {
+                    throw e;
+                }
             }
         }
 
@@ -561,25 +599,53 @@ abstract class TableSerDeBase implements SerDe {
     }
 
     /*
-     * Convenience method for debugging.
+     * Convenience method for debugging. Performs defensive coding to avoid
+     * NullPoinerException.
      */
     private void displayInitParams(SerDeParameters params) {
+        final String[] helperHosts = getKvHelperHosts();
+        String helperHostsStr = null;
+        if (helperHosts != null) {
+            helperHostsStr = (Arrays.asList(helperHosts)).toString();
+        }
+
+        final String[] hadoopHosts = getKvHadoopHosts();
+        String hadoopHostsStr = null;
+        if (hadoopHosts != null) {
+            hadoopHostsStr = (Arrays.asList(hadoopHosts)).toString();
+        }
+
+        String hiveColumnNamesStr = null;
+        String hiveColumnTypesStr = null;
+        String nullSequenceStr = null;
+        String isLastColumnTakesRestStr = null;
+        String isEscapedStr = null;
+        String escapeCharStr = null;
+        if (params != null) {
+            hiveColumnNamesStr = (params.getColumnNames()).toString();
+            hiveColumnTypesStr = (params.getColumnTypes()).toString();
+            nullSequenceStr = (params.getNullSequence()).toString();
+            isLastColumnTakesRestStr =
+                Boolean.toString(params.isLastColumnTakesRest());
+            isEscapedStr = Boolean.toString(params.isEscaped());
+            escapeCharStr = Byte.toString(params.getEscapeChar());
+        }
+
         LOG.debug("kvStoreName = " + getKvStoreName());
-        LOG.debug("kvHelperHosts = " + Arrays.asList(getKvHelperHosts()));
-        LOG.debug("kvHadoopHosts = " + Arrays.asList(getKvHadoopHosts()));
+        LOG.debug("kvHelperHosts = " + helperHostsStr);
+        LOG.debug("kvHadoopHosts = " + hadoopHostsStr);
         LOG.debug("kvTableName = " + getKvTableName());
         LOG.debug("kvFieldNames = " + getKvFieldNames());
         LOG.debug("kvFieldTypes = " + getKvFieldTypes());
         LOG.debug("hiveTableName = " + getHiveTableName());
         LOG.debug("hiveSeparators = " + getSeparatorsStr(params));
-        LOG.debug("hiveColumnNames = " + params.getColumnNames());
-        LOG.debug("hiveColumnTypes = " + params.getColumnTypes());
-        LOG.debug("nullSequence = " + params.getNullSequence());
-        LOG.debug("lastColumnTakesRest = " + params.isLastColumnTakesRest());
-        LOG.debug("isEscaped = " + params.isEscaped());
-        LOG.debug("escapeChar = " + params.getEscapeChar());
+        LOG.debug("hiveColumnNames = " + hiveColumnNamesStr);
+        LOG.debug("hiveColumnTypes = " + hiveColumnTypesStr);
+        LOG.debug("nullSequence = " + nullSequenceStr);
+        LOG.debug("lastColumnTakesRest = " + isLastColumnTakesRestStr);
+        LOG.debug("isEscaped = " + isEscapedStr);
+        LOG.debug("escapeChar = " + escapeCharStr);
     }
-
 
     private String createLocalKVSecurity(final String loginFlnm,
                                          final String trustFlnm)
@@ -765,5 +831,12 @@ abstract class TableSerDeBase implements SerDe {
             }
         }
         return passwordCredentials;
+    }
+
+    /**
+     * For testing only; to support the use of a mocked store.
+     */
+    protected void setStore(final KVStore testStore) {
+        this.kvStore = testStore;
     }
 }

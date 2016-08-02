@@ -14,7 +14,7 @@
   <body>
     <div xmlns="" class="navheader">
       <div class="libver">
-        <p>Library Version 12.1.3.5</p>
+        <p>Library Version 12.1.4.0</p>
       </div>
       <table width="100%" summary="Navigation header">
         <tr>
@@ -134,14 +134,15 @@
         <h3 class="title">Note</h3>
         <p>
           New users should use one of the Table drivers unless they
-          require a feature only available in the Key/Value API. The 
-          Key/Value API will eventually be deprecated.
+          require a feature only available in the Key/Value API (such as
+          Large Object or Avro support). The Key/Value API will no longer
+          be enhanced in future releases of Oracle NoSQL Database.
       </p>
       </div>
       <p>
       The Java and C Key/Value driver provides access to store data using
-      key/value pairs. All other drivers provide access using tables. In
-      addition, the Java Key/Value driver provides Large Object (LOB) support
+      key/value pairs. All other drivers provide access using tables. Also,
+      the Java Key/Value driver provides Large Object (LOB) support
       that as of this release does not appear in the other drivers. However,
       users of the Java Tables driver can access the LOB API, even though the
       LOB API is accessed using the Key/Value interface.
@@ -175,9 +176,6 @@
   </p>
       <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
         <h3 class="title">Note</h3>
-        <p>
-          Oracle NoSQL Database is tested with Java 7.
-      </p>
       </div>
       <div class="sect1" lang="en" xml:lang="en">
         <div class="titlepage">

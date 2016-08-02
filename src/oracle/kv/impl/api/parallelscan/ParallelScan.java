@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -64,6 +64,7 @@ import oracle.kv.KeyRange;
 import oracle.kv.KeyValueVersion;
 import oracle.kv.ParallelScanIterator;
 import oracle.kv.StoreIteratorConfig;
+import oracle.kv.table.TableIterator;
 import oracle.kv.impl.api.KVStoreImpl;
 import oracle.kv.impl.api.KeySerializer;
 import oracle.kv.impl.api.Request;
@@ -72,6 +73,7 @@ import oracle.kv.impl.api.ops.InternalOperation;
 import oracle.kv.impl.api.ops.MultiKeyIterate;
 import oracle.kv.impl.api.ops.Result;
 import oracle.kv.impl.api.ops.ResultKeyValueVersion;
+import oracle.kv.impl.api.ops.ResultKey;
 import oracle.kv.impl.api.ops.StoreIterate;
 import oracle.kv.impl.api.ops.StoreKeysIterate;
 import oracle.kv.impl.topo.Datacenter;
@@ -152,7 +154,8 @@ public class ParallelScan {
 
             @Override
             protected void convertResult(Result result, List<Key> elementList) {
-                final List<byte[]> byteKeyResults = result.getKeyList();
+
+                final List<ResultKey> byteKeyResults = result.getKeyList();
 
                 int cnt = byteKeyResults.size();
                 if (cnt == 0) {
@@ -160,19 +163,10 @@ public class ParallelScan {
                     return;
                 }
                 for (int i = 0; i < cnt; i += 1) {
-                    final byte[] entry = byteKeyResults.get(i);
-                    elementList.add(keySerializer.fromByteArray(entry));
+                    final byte[] entry = byteKeyResults.get(i).getKeyBytes();
+                    elementList.add(storeImpl.getKeySerializer().
+                                    fromByteArray(entry));
                 }
-            }
-
-            @Override
-            protected byte[] extractResumeKey(Result result,
-                                              List<Key> elementList) {
-                int cnt = elementList.size();
-                if (cnt == 0) {
-                    return null;
-                }
-                return elementList.get(cnt - 1).toByteArray();
             }
 
             @Override
@@ -274,6 +268,7 @@ public class ParallelScan {
             @Override
             protected void convertResult(Result result,
                                          List<KeyValueVersion> elementList) {
+
                 final List<ResultKeyValueVersion> byteKeyResults =
                     result.getKeyValueVersionList();
 
@@ -284,21 +279,13 @@ public class ParallelScan {
                 }
                 for (int i = 0; i < cnt; i += 1) {
                     final ResultKeyValueVersion entry = byteKeyResults.get(i);
-                    elementList.add(new KeyValueVersion
-                        (keySerializer.fromByteArray(entry.getKeyBytes()),
-                         entry.getValue(), entry.getVersion()));
+                    KeySerializer keySerializer = storeImpl.getKeySerializer();
+                    elementList.add(KVStoreImpl.createKeyValueVersion(
+                        keySerializer.fromByteArray(entry.getKeyBytes()),
+                        entry.getValue(),
+                        entry.getVersion(),
+                        entry.getExpirationTime()));
                 }
-            }
-
-            @Override
-            protected byte[]
-                extractResumeKey(Result result,
-                                 List<KeyValueVersion> elementList) {
-                int cnt = elementList.size();
-                if (cnt == 0) {
-                    return null;
-                }
-                return elementList.get(cnt - 1).getKey().toByteArray();
             }
 
             @Override
@@ -317,28 +304,27 @@ public class ParallelScan {
      * Iterator) so that we can eventually use them in try-with-resources
      * constructs.
      */
-    public static abstract class ParallelScanIteratorImpl<K> extends
-        BaseParallelScanIteratorImpl<K> {
+    public static abstract class ParallelScanIteratorImpl<K>
+        extends BaseParallelScanIteratorImpl<K>
+        implements TableIterator<K> {
 
         /* Indexed by partition id. */
         private final Map<Integer, DetailedMetricsImpl> partitionMetrics;
+
         private final Map<RepGroupId, DetailedMetricsImpl> shardMetrics;
 
         protected final StoreIteratorParams storeIteratorParams;
-        protected final KeySerializer keySerializer;
 
-        public ParallelScanIteratorImpl
-            (final KVStoreImpl store,
+        public ParallelScanIteratorImpl(
+             final KVStoreImpl store,
              final StoreIteratorConfig storeIteratorConfig,
              final StoreIteratorParams storeIteratorParams) {
+
             this.storeImpl = store;
+            this.logger = store.getLogger();
             this.storeIteratorParams = storeIteratorParams;
             this.itrDirection = storeIteratorParams.getDirection();
-            this.keySerializer = store.getKeySerializer();
-            this.logger = store.getLogger();
-            this.partitionMetrics =
-          new HashMap<Integer, DetailedMetricsImpl>(storeImpl.getNPartitions());
-            this.shardMetrics = new HashMap<RepGroupId, DetailedMetricsImpl>();
+
             long timeout = storeIteratorParams.getTimeout();
             requestTimeoutMs = store.getDefaultRequestTimeoutMs();
             if (timeout > 0) {
@@ -353,6 +339,11 @@ public class ParallelScan {
                                        store.getReadTimeoutMs()));
                 }
             }
+
+            this.partitionMetrics = new HashMap<Integer, DetailedMetricsImpl>(
+                storeImpl.getNPartitions());
+
+            this.shardMetrics = new HashMap<RepGroupId, DetailedMetricsImpl>();
 
             createAndSubmitStreams(storeIteratorConfig);
         }
@@ -374,6 +365,7 @@ public class ParallelScan {
 
             final Map<RepGroupId, Set<Integer>> partitionsByShard =
                 getPartitionTopology(storeIteratorParams.getPartitions());
+
             int nShards = partitionsByShard.size();
             if (nShards < 1) {
                 throw new IllegalStateException
@@ -388,8 +380,8 @@ public class ParallelScan {
             final int RNThreads = 2 *
                 ((getConsistency() == Consistency.ABSOLUTE) ?
                  nShards :
-                 TopologyUtil.getNumRepNodesForRead
-                     (storeImpl.getTopology(),
+                 TopologyUtil.getNumRepNodesForRead(
+                      storeImpl.getTopology(),
                       storeImpl.getDispatcher().getReadZoneIds()));
 
             final int nThreads = storeIteratorConfig.getMaxConcurrentRequests();
@@ -398,21 +390,27 @@ public class ParallelScan {
                                                Math.min(nThreads, RNThreads);
 
             taskExecutor = storeImpl.getTaskExecutor(useNThreads);
+
             streams = new TreeSet<Stream>();
+
             /*
              * Submit the partition streams in round robin order by shard to
              * achieve poor man's balancing across shards.
              */
             final Map<RepGroupId, List<PartitionStream>> streamsByShard =
                 generatePartitionStreams(partitionsByShard);
+
             final Collection<List<PartitionStream>> streamsByShardColl =
                 streamsByShard.values();
+
             @SuppressWarnings("unchecked")
             final List<PartitionStream>[] streamsByShardArr =
                 streamsByShardColl.toArray(new List[0]);
+
             boolean didSomething;
             do {
                 didSomething = false;
+
                 for (int idx = 0; idx < nShards; idx++) {
                     List<PartitionStream> tasks = streamsByShardArr[idx];
                     if(tasks.size() > 0) {
@@ -426,26 +424,31 @@ public class ParallelScan {
             } while (didSomething);
         }
 
-        private Map<RepGroupId, List<PartitionStream>>
-            generatePartitionStreams(final Map<RepGroupId,
-                                     Set<Integer>> partitionsByShard) {
+        private Map<RepGroupId, List<PartitionStream>> generatePartitionStreams(
+            final Map<RepGroupId,
+            Set<Integer>> partitionsByShard) {
 
             logger.fine("Generating Partition Streams");
             final Map<RepGroupId, List<PartitionStream>> ret =
                 new HashMap<RepGroupId, List<PartitionStream>>(
                     partitionsByShard.size());
+
             for (Map.Entry<RepGroupId, Set<Integer>> ent :
                      partitionsByShard.entrySet()) {
+
                 final RepGroupId rgid = ent.getKey();
                 final Set<Integer> parts = ent.getValue();
+
                 for (Integer part : parts) {
-                    final PartitionStream pis =
-                        new PartitionStream(rgid, part, null);
+                    final PartitionStream pis = createStream(rgid, part);
+
                     List<PartitionStream> partitionStreams = ret.get(rgid);
+
                     if (partitionStreams == null) {
                         partitionStreams = new ArrayList<PartitionStream>();
                         ret.put(rgid, partitionStreams);
                     }
+
                     partitionStreams.add(pis);
                 }
             }
@@ -457,20 +460,22 @@ public class ParallelScan {
          * Extracts the rep factor of the topology and creates a map of shard to
          * the set of partitions in the shard.
          */
-        private Map<RepGroupId, Set<Integer>>
-                        getPartitionTopology(final Set<Integer> partitions) {
+        private Map<RepGroupId, Set<Integer>> getPartitionTopology(
+            final Set<Integer> partitions) {
+
             final Topology topology =
                 storeImpl.getDispatcher().getTopologyManager().getTopology();
 
             /* Determine Rep Factor. */
             Collection<Datacenter> datacenters =
                 topology.getDatacenterMap().getAll();
+
             if (datacenters.size() < 1) {
                 throw new IllegalStateException("No zones in topology?");
             }
 
             final Map<RepGroupId, Set<Integer>> shardPartitions =
-                    new HashMap<RepGroupId, Set<Integer>>();
+                new HashMap<RepGroupId, Set<Integer>>();
 
             /*
              * If the set of partitions was specified, create a map using them
@@ -512,6 +517,15 @@ public class ParallelScan {
             return shardPartitions;
         }
 
+        /*
+         * May be overriden by sublasses.
+         */
+        protected PartitionStream createStream(
+            RepGroupId groupId,
+            int partitionId) {
+            return new PartitionStream(groupId, partitionId, null);
+        }
+
         /* -- Metrics from ParallelScanIterator -- */
 
         @Override
@@ -537,11 +551,7 @@ public class ParallelScan {
         /**
          * Returns the generated op for this iterator.
          */
-        protected abstract
-            InternalOperation generateGetterOp(byte[] resumeKey);
-
-        protected abstract byte[] extractResumeKey
-            (Result result, List<K> elementList);
+        protected abstract InternalOperation generateGetterOp(byte[] resumeKey);
 
         /**
          * Close the iterator, recording the specified remote exception. If
@@ -552,6 +562,7 @@ public class ParallelScan {
          */
         @Override
         protected void close(Exception reason) {
+
             synchronized (this) {
                 if (closed) {
                     return;
@@ -563,6 +574,7 @@ public class ParallelScan {
 
             final List<Runnable> unfinishedBusiness =
                 taskExecutor.shutdownNow();
+
             if (!unfinishedBusiness.isEmpty()) {
                 logger.log(Level.FINE,
                            "ParallelScan executor didn''t shutdown cleanly. " +
@@ -572,15 +584,21 @@ public class ParallelScan {
             next = null;
         }
 
+
         /**
          * Reading records of a single partition.
          */
-        private class PartitionStream extends Stream {
+        protected class PartitionStream extends Stream {
+
             protected final RepGroupId groupId;
+
             protected final int partitionId;
+
             private byte[] resumeKey = null;
 
-            PartitionStream(RepGroupId rgi, int part, byte[] resumeKey) {
+            protected PartitionStream(RepGroupId rgi,
+                                      int part,
+                                      byte[] resumeKey) {
                 this.groupId = rgi;
                 this.partitionId = part;
                 this.resumeKey = resumeKey;
@@ -632,11 +650,8 @@ public class ParallelScan {
             }
 
             @Override
-            protected void setResumeKey(Result result, List<K> elementList) {
-                final boolean hasMore = result.hasMoreElements();
-                resumeKey = (hasMore) ?
-                    extractResumeKey(result, elementList) :
-                    null;
+            protected void setResumeKey(Result result) {
+                resumeKey = result.getPrimaryResumeKey();
             }
 
             @Override

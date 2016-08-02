@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,21 +43,14 @@
 
 package oracle.kv.impl.api.ops;
 
+import static oracle.kv.impl.util.SerialVersion.TABLE_API_VERSION;
+
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
-import java.util.Collections;
-import java.util.List;
 
 import oracle.kv.ReturnValueVersion;
 import oracle.kv.impl.api.lob.KVLargeObjectImpl;
-import oracle.kv.impl.security.KVStorePrivilege;
-import oracle.kv.impl.security.SystemPrivilege;
-import oracle.kv.impl.security.TablePrivilege;
-import oracle.kv.impl.topo.PartitionId;
-import oracle.kv.impl.util.SerialVersion;
-
-import com.sleepycat.je.Transaction;
 
 /**
  * The delete operation deletes the key/value pair associated with the key.
@@ -105,7 +98,7 @@ public class Delete extends SingleKeyOperation {
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    Delete(ObjectInput in, short serialVersion)
+    Delete(DataInput in, short serialVersion)
         throws IOException {
 
         this(OpCode.DELETE, in, serialVersion);
@@ -114,12 +107,12 @@ public class Delete extends SingleKeyOperation {
     /**
      * For subclasses, allows passing OpCode.
      */
-    Delete(OpCode opCode, ObjectInput in, short serialVersion)
+    Delete(OpCode opCode, DataInput in, short serialVersion)
         throws IOException {
 
         super(opCode, in, serialVersion);
         prevValChoice = ReturnValueVersion.getChoice(in.readUnsignedByte());
-        if (serialVersion >= SerialVersion.V4) {
+        if (serialVersion >= TABLE_API_VERSION) {
 
             /*
              * Read table id.  If there is no table the value is 0.
@@ -135,12 +128,12 @@ public class Delete extends SingleKeyOperation {
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
         out.writeByte(prevValChoice.ordinal());
-        if (serialVersion >= SerialVersion.V4) {
+        if (serialVersion >= TABLE_API_VERSION) {
 
             /*
              * Write the table id.  If this is not a table operation the
@@ -148,7 +141,7 @@ public class Delete extends SingleKeyOperation {
              */
             out.writeLong(tableId);
         } else if (tableId != 0) {
-            throwTablesRequired(serialVersion);
+            throwVersionRequired(serialVersion, TABLE_API_VERSION);
         }
     }
 
@@ -159,25 +152,9 @@ public class Delete extends SingleKeyOperation {
     /**
      * Returns the tableId, which is 0 if this is not a table operation.
      */
+    @Override
     long getTableId() {
         return tableId;
-    }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          OperationHandler operationHandler) {
-
-        verifyDataAccess(operationHandler, getTableId());
-
-        final ReturnResultValueVersion prevVal =
-            new ReturnResultValueVersion(prevValChoice);
-
-        final boolean result = operationHandler.delete
-            (txn, partitionId, getKeyBytes(), prevVal);
-
-        return new Result.DeleteResult(getOpCode(), prevVal.getValueVersion(),
-                                       result);
     }
 
     @Override
@@ -198,22 +175,5 @@ public class Delete extends SingleKeyOperation {
         }
         sb.append(super.toString());
         return sb.toString();
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> schemaAccessPrivileges() {
-        return SystemPrivilege.schemaWritePrivList;
-    }
-
-    @Override
-    List<? extends KVStorePrivilege> generalAccessPrivileges() {
-        return SystemPrivilege.writeOnlyPrivList;
-    }
-
-    @Override
-    public List<? extends KVStorePrivilege>
-        tableAccessPrivileges(long tableId1) {
-        return Collections.singletonList(
-            new TablePrivilege.DeleteTable(tableId1));
     }
 }

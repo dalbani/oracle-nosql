@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -72,6 +72,36 @@ public interface RecordDef extends FieldDef {
     FieldDef getField(String name);
 
     /**
+     * Get the field at the specified location.
+     *
+     * @param index the index in the list of fields of the field to return
+     *
+     * @return the FieldDef for the index, or null if the field at that location
+     * is unassigned.
+     *
+     * @throws IndexOutOfBoundsException if the index is out of bounds for the
+     * record (index < 0 || index >= getFields().size())
+     *
+     * @since 4.0
+     */
+    FieldDef getField(int index);
+
+    /**
+     * Get the name of the field at the specified location.
+     *
+     * @param index the index in the list of field names
+     *
+     * @return the name of the field
+     *
+     * @throws IndexOutOfBoundsException if the index is out of bounds for the
+     * record (index < 0 || index >= getFields().size())
+     *
+     * @since 4.0
+     */
+    String getFieldName(int index);
+
+
+    /**
      * Get the name of the record.  Records require names even if they are
      * nested or used as an array or map element.
      *
@@ -106,4 +136,3 @@ public interface RecordDef extends FieldDef {
     @Override
     public RecordDef clone();
 }
-

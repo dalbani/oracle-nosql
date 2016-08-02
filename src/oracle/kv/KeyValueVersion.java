@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -58,6 +58,8 @@ public class KeyValueVersion {
     private final Version version;
 
     /**
+     * Internal use only
+     * @hidden
      * Creates a KeyValueVersion with non-null properties.
      */
     public KeyValueVersion(final Key key,
@@ -69,6 +71,20 @@ public class KeyValueVersion {
         this.key = key;
         this.value = value;
         this.version = version;
+    }
+
+    /**
+     * Internal use only
+     * @hidden
+     * Creates a KeyValueVersion with non-null values for key and value
+     */
+    public KeyValueVersion(final Key key,
+                           final Value value) {
+        assert key != null;
+        assert value != null;
+        this.key = key;
+        this.value = value;
+        this.version = null;
     }
 
     /**
@@ -90,6 +106,18 @@ public class KeyValueVersion {
      */
     public Version getVersion() {
         return version;
+    }
+
+    /**
+     * Internal use only
+     * @hidden
+     * Returns the expiration time of the record.This default method always
+     * returns 0 (no expiration). A subclass may return a non-zero value.
+     * See impl/api/KeyValueVersionInternal.
+     * @since 4.0
+     */
+    public long getExpirationTime() {
+        return 0L;
     }
 
     @Override

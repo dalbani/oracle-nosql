@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -61,6 +61,7 @@ import oracle.kv.impl.admin.CommandResult.CommandSucceeds;
 import oracle.kv.impl.admin.CommandServiceAPI;
 import oracle.kv.impl.admin.IllegalCommandException;
 import oracle.kv.impl.admin.param.AdminParams;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
@@ -75,6 +76,7 @@ import oracle.kv.impl.security.util.PasswordReader;
 import oracle.kv.impl.security.util.SecurityUtils;
 import oracle.kv.impl.security.util.ShellPasswordReader;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.DatacenterType;
@@ -82,6 +84,7 @@ import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
 import oracle.kv.impl.topo.StorageNodeId;
 import oracle.kv.impl.topo.Topology;
+import oracle.kv.impl.util.HostPort;
 import oracle.kv.impl.util.JsonUtils;
 import oracle.kv.util.shell.CommandWithSubs;
 import oracle.kv.util.shell.Shell;
@@ -91,6 +94,9 @@ import oracle.kv.util.shell.ShellUsageException;
 /** Subcommands of plan */
 class PlanCommand extends CommandWithSubs {
 
+    /*
+     * TODO need to add command for start/stop all arbiters
+     */
     private static final List<? extends SubCommand> subs = Arrays.asList(
         new AddIndexSub(),              /* add-index */
         new AddTableSub(),              /* add-table */
@@ -121,7 +127,10 @@ class PlanCommand extends CommandWithSubs {
         new RepairTopologySub(),        /* repair-topology */
         new RevokeSub(),                /* revoke */
         new StartServiceSub(),          /* start-service */
-        new StopServiceSub());          /* stop-service */
+        new StopServiceSub(),           /* stop-service */
+        new RegisterEsCluster(),        /* register-es */
+        new DeregisterEsCluster()       /* deregister-es */
+                                                                         );
 
     private static final String PLAN_COMMAND_NAME = "plan";
 
@@ -403,11 +412,12 @@ class PlanCommand extends CommandWithSubs {
 
         final String incompatibleAllError =
             "Invalid argument combination: Only one of the flags " +
-            "-all-rns, -all-sns, -all-admins and -security may be used.";
+            "-all-rns, -all-sns, -all-admins, -all-ans " +
+            "and -security may be used.";
 
         final String serviceAllError =
             "Invalid argument combination: -service flag cannot be used " +
-            "with -all-rns, -all-admins or -security flags";
+            "with -all-rns, -all-admins, -all-ans or -security flags";
 
         final String serviceDcError =
             "Invalid argument combination: -service flag cannot be used " +
@@ -416,6 +426,7 @@ class PlanCommand extends CommandWithSubs {
         final String commandSyntax =
             "plan change-parameters -security | -service <id> | " +
             "-all-rns [-zn <id> | -znname <name>] | " +
+            "-all-ans [-zn <id> | -znname <name>] | " +
             "-all-admins [-zn <id> | -znname <name>] [-dry-run]" +
             genericFlags + " -params [name=value]*";
 
@@ -470,7 +481,8 @@ class PlanCommand extends CommandWithSubs {
         StorageNodeId snid;
         RepNodeId rnid;
         AdminId aid;
-        boolean allAdmin, allRN, allSN, security;
+        ArbNodeId anid;
+        boolean allAdmin, allRN, allSN, security, allAN;
 
         boolean dryRun;
 
@@ -490,7 +502,8 @@ class PlanCommand extends CommandWithSubs {
             snid = null;
             aid = null;
             rnid = null;
-            allAdmin = allRN = allSN = dryRun = security = false;
+            anid = null;
+            allAdmin = allRN = allSN = dryRun = security = allAN = false;
 
             boolean showHidden = cmd.showHidden();
             int i;
@@ -511,6 +524,8 @@ class PlanCommand extends CommandWithSubs {
                     allAdmin = true;
                 } else if ("-all-sns".equals(arg)) {
                     allSN = true;
+                } else if ("-all-ans".equals(arg)) {
+                    allAN = true;
                 } else if (CommandUtils.isDatacenterIdFlag(arg)) {
                     dcid = DatacenterId.parse(Shell.nextArg(args, i++, this));
                     if (CommandUtils.isDeprecatedDatacenterId(arg, args[i])) {
@@ -538,13 +553,14 @@ class PlanCommand extends CommandWithSubs {
 
             /* Verify argument combinations */
             if (serviceName == null) {
-                if (!(allAdmin || allRN || allSN || security)) {
+                if (!(allAdmin || allRN || allSN || security || allAN)) {
                     shell.requiredArg(null, this);
                 } else {
                     /* check whether multiple incompatible options are given. */
                     if (((allAdmin ? 1 : 0) +
                          (allRN ? 1 : 0) +
                          (allSN ? 1 : 0) +
+                         (allAN ? 1 : 0) +
                          (security ? 1 : 0)) > 1) {
 
                         throw new ShellUsageException
@@ -555,7 +571,7 @@ class PlanCommand extends CommandWithSubs {
                     }
                 }
             } else {
-                if (allAdmin || allRN || allSN || security) {
+                if (allAdmin || allRN || allSN || security || allAN) {
                     throw new ShellUsageException(serviceAllError, this);
                 }
                 if (dcid != null || dcName != null) {
@@ -602,6 +618,19 @@ class PlanCommand extends CommandWithSubs {
                 } else if (snid != null) {
                     shell.verboseOutput("Changing parameters for " + snid);
                     planId = cs.createChangeParamsPlan(planName, snid, map);
+                }  else if (anid != null) {
+                    shell.verboseOutput("Changing parameters for " + anid);
+                    planId = cs.createChangeParamsPlan(planName, anid, map);
+                } else if (allAN) {
+                    shell.verboseOutput(
+                        "Changing parameters for all ArbNodes" +
+                        (dcName != null ?
+                         " deployed to the " + dcName + " zone" :
+                        (dcid != null ?
+                         " deployed to the zone with id = " + dcid :
+                         "")));
+                    planId =
+                        cs.createChangeAllANParamsPlan(planName, dcid, map);
                 } else if (allAdmin) {
                     shell.verboseOutput(
                         "Changing parameters for all Admins" +
@@ -679,8 +708,19 @@ class PlanCommand extends CommandWithSubs {
                                 ("No such service: " + serviceName, this);
                         }
                     } catch (IllegalArgumentException ignored2) {
-                        throw new ShellUsageException
-                            ("Invalid service name: " + serviceName, this);
+                        try {
+                            anid = ArbNodeId.parse(serviceName);
+                            final ArbNodeParams ap = p.get(anid);
+                            if (ap != null) {
+                                map = ap.getMap();
+                            } else {
+                                throw new ShellUsageException
+                                    ("No such service: " + serviceName, this);
+                            }
+                        } catch (IllegalArgumentException ignored3) {
+                            throw new ShellUsageException
+                                ("Invalid service name: " + serviceName, this);
+                        }
                     }
                 }
             }
@@ -1407,8 +1447,9 @@ class PlanCommand extends CommandWithSubs {
             final CommandServiceAPI cs = cmd.getAdmin();
 
             String dcName = null;
-            int rf = 0;
+            int rf = -1;
             DatacenterType type = DatacenterType.PRIMARY;
+            boolean allowArbiters = false;
 
             for (int i = 1; i < args.length; i++) {
                 final String arg = args[i];
@@ -1417,22 +1458,36 @@ class PlanCommand extends CommandWithSubs {
                 } else if ("-rf".equals(arg)) {
                     final String argString = Shell.nextArg(args, i++, this);
                     rf = parseUnsignedInt(argString);
-                    if (rf == 0) {
-                        invalidArgument(argString);
-                    }
                 } else if ("-type".equals(arg)) {
                     final String typeValue = Shell.nextArg(args, i++, this);
                     type = parseDatacenterType(typeValue);
+                } else if (CommandShell.enableArbiters &&
+                           "-arbiters".equals(arg)) {
+                    allowArbiters = true;
+                } else if (CommandShell.enableArbiters &&
+                           "-no-arbiters".equals(arg)) {
+                    allowArbiters = false;
                 } else {
                     i += checkGenericArg(arg, args, i);
                 }
             }
-            if (dcName == null || rf == 0) {
-                shell.requiredArg(null, this);
+            if (rf == 0 && !allowArbiters) {
+                throw new ShellUsageException("Zone " + dcName +
+                    " was specified with RF equal to zero and no-arbiters.",
+                    this);
             }
+
+            if (rf == -1) {
+                shell.requiredArg("rf", this);
+            }
+
+            if (dcName == null) {
+                shell.requiredArg("name", this);
+            }
+
             try {
                 final int planId = cs.createDeployDatacenterPlan(
-                    planName, dcName, rf, type);
+                    planName, dcName, rf, type, allowArbiters);
                 return executePlan(planId, cs, shell);
             } catch (RemoteException re) {
                 cmd.noAdmin(re);
@@ -1445,6 +1500,9 @@ class PlanCommand extends CommandWithSubs {
             return "plan " + name + " -name <zone name>" +
                 eolt + "-rf <replication factor>" +
                 eolt + "[-type {primary | secondary}]" +
+                (CommandShell.enableArbiters ?
+                 (eolt +"[-arbiters | -no-arbiters]") :
+                 "") +
                 eolt + "[-json]" +
                 genericFlags;
         }
@@ -2130,6 +2188,7 @@ class PlanCommand extends CommandWithSubs {
         protected String getCommandSyntax() {
             return "plan start-service" +
                 " {-service <id> | -all-rns [-zn <id> | -znname <name>]" +
+                " | -all-ans [-zn <id> | -znname <name>]" +
                 " | -zn <id> | -znname <name>}" + genericFlags;
         }
 
@@ -2149,6 +2208,7 @@ class PlanCommand extends CommandWithSubs {
         protected String getCommandSyntax() {
             return "plan stop-service" +
                 " {-service <id> | -all-rns [-zn <id> | -znname <name>]" +
+                " | -all-ans [-zn <id> | -znname <name>]" +
                 " | -zn <id> | -znname <name>}" + genericFlags;
         }
 
@@ -2205,6 +2265,48 @@ class PlanCommand extends CommandWithSubs {
         }
 
         /*
+         * Adds all the ArbNode IDs given the zoneId (datacenterId)
+         */
+        private void getArbNodesByZoneId(Topology topology, String zoneId)
+            throws ShellException {
+
+            final DatacenterId dcId = parseDatacenterId(zoneId);
+
+            if (topology.get(dcId) == null) {
+                throw new IllegalArgumentException("The specified zone id " +
+                                                   "does not exist");
+            }
+            for (ArbNodeId anId : topology.getArbNodeIds(dcId)) {
+                addService(anId);
+            }
+        }
+
+        /*
+         * Adds all the ArbNode IDs given the zoneName (datacenterName)
+         */
+        private void getArbNodesByZoneName(Topology topology,
+                                           String zoneName) {
+
+            final Datacenter zone = topology.getDatacenter(zoneName);
+            if (zone == null) {
+                throw new IllegalArgumentException("The specified zone name " +
+                                                   "does not exist");
+            }
+            for (ArbNodeId rnId : topology.getArbNodeIds(zone.getResourceId())){
+                addService(rnId);
+            }
+        }
+
+        /*
+         * Adds all the ArbNode IDs
+         */
+        private void getAllArbNodes(Topology topology) {
+            for (ArbNodeId anId : topology.getArbNodeIds(null)) {
+                addService(anId);
+            }
+        }
+
+        /*
          * Adds all the Admin IDs given the zoneId (datacenterId)
          */
         private void getAdminsByZoneId(CommandServiceAPI cs,
@@ -2250,6 +2352,7 @@ class PlanCommand extends CommandWithSubs {
             String zoneId = null;
             String zoneName = null;
             boolean allRNs = false;
+            boolean allANs = false;
 
             try {
                 for (int i = 1; i < args.length; i++) {
@@ -2260,6 +2363,8 @@ class PlanCommand extends CommandWithSubs {
                         addService(serviceName, cs);
                     } else if ("-all-rns".equals(arg)) {
                         allRNs = true;
+                    } else if ("-all-ans".equals(arg)) {
+                        allANs = true;
                     }  else if ("-zn".equals(arg)) {
                         zoneId = Shell.nextArg(args, i++, this);
 
@@ -2281,6 +2386,11 @@ class PlanCommand extends CommandWithSubs {
                             "Cannot use -service and -all-rns flags together",
                             this);
                     }
+                    if (allANs) {
+                        throw new ShellUsageException(
+                            "Cannot use -service and -all-ans flags together",
+                            this);
+                    }
                     if ((zoneId != null) || (zoneName != null)) {
                         throw new ShellUsageException(
                             "Cannot use -zn or -znname flags with the" +
@@ -2296,7 +2406,6 @@ class PlanCommand extends CommandWithSubs {
                     } else if (zoneName != null) {
                         getRepNodesByZoneName(cs.getTopology(), zoneName);
                     } else {
-
                         /* Special case all RNs and only RNs of the store */
                         final int planId = isStart ?
                                     cs.createStartAllRepNodesPlan(planName) :
@@ -2304,17 +2413,30 @@ class PlanCommand extends CommandWithSubs {
 
                         return executePlan(planId, cs, shell);
                     }
+                } else if (allANs) {
+                    /* All ANs (and only ANs) in a zone or the store */
+                    if (zoneId != null) {
+                        getArbNodesByZoneId(cs.getTopology(), zoneId);
+                    } else if (zoneName != null) {
+                        getArbNodesByZoneName(cs.getTopology(), zoneName);
+                    } else {
+                        /* All ANs and only ANs of the store */
+                        getAllArbNodes(cs.getTopology());
+                    }
                 } else if (zoneId != null) {
                     /* All services in the zone */
                     getRepNodesByZoneId(cs.getTopology(), zoneId);
                     getAdminsByZoneId(cs, DatacenterId.parse(zoneId));
+                    getArbNodesByZoneId(cs.getTopology(), zoneId);
                 } else if (zoneName != null) {
                     /* All services in the zone */
                     getRepNodesByZoneName(cs.getTopology(), zoneName);
                     getAdminsByZoneName(cs, zoneName);
+                    getArbNodesByZoneName(cs.getTopology(), zoneName);
                 } else {
                     /* Nothing was specified! */
-                    shell.requiredArg("-service|-all-rns|-zn|-znname", this);
+                    shell.requiredArg("-service|-all-rns|-all-ans|-zn|-znname",
+                                      this);
                 }
 
                 /*
@@ -2349,6 +2471,14 @@ class PlanCommand extends CommandWithSubs {
                 addService(rnId);
                 return;
             } catch (ShellException ignore) { }
+
+            try {
+                final ArbNodeId anId = parseAnid(serviceName);
+                CommandUtils.ensureArbNodeExists(anId, cs, this);
+                addService(anId);
+                return;
+            } catch (ShellException ignore) { }
+
             try {
                 final AdminId adminId = parseAdminid(serviceName);
                 final Parameters p = cs.getParameters();
@@ -2363,12 +2493,8 @@ class PlanCommand extends CommandWithSubs {
                                      serviceName);
         }
 
-        private void addService(RepNodeId rnId) {
-            serviceIds.add(rnId);
-        }
-
-        private void addService(AdminId adminId) {
-            serviceIds.add(adminId);
+        private void addService(ResourceId resId) {
+            serviceIds.add(resId);
         }
     }
 
@@ -2595,7 +2721,9 @@ class PlanCommand extends CommandWithSubs {
                                            tb.getParent().getFullName():null),
                                           tb.getFieldMap(),
                                           tb.getPrimaryKey(),
+                                          tb.getPrimaryKeySizes(),
                                           tb.getShardKey(),
+                                          tb.getDefaultTTL(),
                                           tb.isR2compatible(),
                                           tb.getSchemaId(),
                                           tb.getDescription());
@@ -2672,7 +2800,8 @@ class PlanCommand extends CommandWithSubs {
                     cs.createEvolveTablePlan(planName,
                                              te.getTable().getFullName(),
                                              te.getTableVersion(),
-                                             te.getFieldMap());
+                                             te.getFieldMap(),
+                                             te.getDefaultTTL());
                 shell.removeVariable(tableName);
                 return executePlan(planId, cs, shell);
             } catch (RemoteException re) {
@@ -3007,6 +3136,128 @@ class PlanCommand extends CommandWithSubs {
             return "Remove an index from a table.  The table name is a " +
                 "dot-separated name" + eolt + "with the format " +
                 "tableName[.childTableName]*.";
+        }
+    }
+
+    static final class RegisterEsCluster extends PlanSubCommand {
+        static final String COMMAND_SYNTAX=
+            "plan register-es -clustername <es-cluster-name> " + eol +
+            "-host <es-node-host> -port <es-node-transport-port>";
+
+        static final String COMMAND_DESC =
+            "Registers an Elasticsearch cluster with the store." + eol +
+            "It is only necessary to register one node of the cluster, " + eol +
+            "as the other nodes in the cluster will be found automatically.";
+
+        RegisterEsCluster() {
+            super("register-es", 5);
+        }
+
+        @Override
+        public String exec(String[] args, Shell shell)
+            throws ShellException {
+
+            Shell.checkHelp(args, this);
+            final CommandShell cmd = (CommandShell) shell;
+            final CommandServiceAPI cs = cmd.getAdmin();
+
+            String clusterName = null;
+            String hostName = null;
+            int port = 0;
+
+            for (int i = 1; i < args.length; i++) {
+                final String arg = args[i];
+                if ("-clustername".equals(arg)) {
+                    clusterName = Shell.nextArg(args, i++, this);
+                } else if ("-host".equals(arg)) {
+                    hostName = Shell.nextArg(args, i++, this);
+                } else if ("-port".equals(arg)) {
+                    final String argString = Shell.nextArg(args, i++, this);
+                    port = parseUnsignedInt(argString);
+                } else {
+                    i += checkGenericArg(arg, args, i);
+                }
+            }
+
+            if (clusterName == null) {
+                shell.requiredArg("-clustername", this);
+            }
+            if (hostName == null) {
+                shell.requiredArg("-hostName", this);
+            }
+            if (port == 0) {
+                shell.requiredArg("-port", this);
+            }
+
+            final HostPort hp = new HostPort(hostName, port);
+            try {
+                final int planId =
+                    cs.createRegisterESClusterPlan(planName,
+                                                   clusterName,
+                                                   hp.toString(),
+                                                   force);
+                return executePlan(planId, cs, shell);
+            } catch (RemoteException re) {
+                cmd.noAdmin(re);
+            }
+
+            return "";
+        }
+
+        @Override
+        protected String getCommandSyntax() {
+            return COMMAND_SYNTAX;
+        }
+
+        @Override
+        protected String getCommandDescription() {
+            return COMMAND_DESC;
+        }
+    }
+
+    static final class DeregisterEsCluster extends PlanSubCommand {
+        static final String COMMAND_SYNTAX=
+            "plan deregister-es";
+
+        static final String COMMAND_DESC =
+            "Deregisters an Elasticsearch cluster from the store." + eol +
+            "This can be done only if all full text indexes are first removed.";
+
+        DeregisterEsCluster() {
+            super("deregister-es", 5);
+        }
+
+        @Override
+        public String exec(String[] args, Shell shell)
+            throws ShellException {
+
+            Shell.checkHelp(args, this);
+            final CommandShell cmd = (CommandShell) shell;
+            final CommandServiceAPI cs = cmd.getAdmin();
+
+            for (int i = 1; i < args.length; i++) {
+                i += checkGenericArg(args[i], args, i);
+            }
+
+            try {
+                final int planId =
+                    cs.createDeregisterESClusterPlan(planName);
+                return executePlan(planId, cs, shell);
+            } catch (RemoteException re) {
+                cmd.noAdmin(re);
+            }
+
+            return "";
+        }
+
+        @Override
+        protected String getCommandSyntax() {
+            return COMMAND_SYNTAX;
+        }
+
+        @Override
+        protected String getCommandDescription() {
+            return COMMAND_DESC;
         }
     }
 }

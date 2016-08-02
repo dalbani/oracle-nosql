@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -99,7 +99,7 @@ public class TaskRun implements Serializable {
     private String cleanupFailure;
 
     private Task task;
-    
+
     /*
      * Task and details were added in AdminSchemaVersion 3, for plan status
      * report support. CustomInfo holds key->value pairs that can be store
@@ -119,7 +119,7 @@ public class TaskRun implements Serializable {
         setState(Task.State.RUNNING, logger);
         startTime = System.currentTimeMillis();
         this.taskNum = taskNum;
-        details = new HashMap<String, String>();
+        details = new HashMap<>();
     }
 
     /** For DPL */
@@ -165,11 +165,10 @@ public class TaskRun implements Serializable {
                      String problem,
                      ErrorMessage errorMsg,
                      String[] cleanupJobs,
-                     Logger logger,
-                     boolean hasDPLPlanStore) {
+                     Logger logger) {
 
         transfer = ExceptionTransfer.newInstance(t, problem, errorMsg,
-                                                 cleanupJobs, hasDPLPlanStore);
+                                                 cleanupJobs);
 
         if (t == null) {
             logger.log(Level.SEVERE,
@@ -267,8 +266,8 @@ public class TaskRun implements Serializable {
         taskNum = tnum;
         task = t;
     }
-    
-    /* 
+
+    /*
      * Provide a customized display of task execution for this task, if it
      * collected extra info, and supports such a display.
      * @return null if there is no detailed information.

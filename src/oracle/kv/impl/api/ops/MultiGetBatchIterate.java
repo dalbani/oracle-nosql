@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,22 +44,16 @@
 package oracle.kv.impl.api.ops;
 
 import java.io.IOException;
-import java.io.ObjectInput;
+import java.io.DataInput;
 import java.util.List;
 
-import com.sleepycat.je.Transaction;
-
 import oracle.kv.Depth;
-import oracle.kv.Direction;
 import oracle.kv.KeyRange;
-import oracle.kv.impl.api.ops.OperationHandler.KVAuthorizer;
-import oracle.kv.impl.topo.PartitionId;
 
 /**
  * A multi-get-batch iterate operation.
  */
-public class MultiGetBatchIterate
-    extends MultiGetBatchIterateOperation<ResultKeyValueVersion> {
+public class MultiGetBatchIterate extends MultiGetBatchIterateOperation {
 
     /**
      * Construct a multi-get-batch operation.
@@ -87,39 +81,9 @@ public class MultiGetBatchIterate
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    protected MultiGetBatchIterate(ObjectInput in, short serialVersion)
+    protected MultiGetBatchIterate(DataInput in, short serialVersion)
         throws IOException {
 
         super(OpCode.MULTI_GET_BATCH, in, serialVersion);
-    }
-
-    @Override
-    public boolean iterate(Transaction txn,
-                           PartitionId partitionId,
-                           OperationHandler operationHandler,
-                           byte[] parentKey,
-                           int subBatchSize,
-                           byte[] resumeSubKey,
-                           List<ResultKeyValueVersion> results) {
-
-        final KVAuthorizer kvAuth = checkPermission(operationHandler,
-                                                    parentKey);
-        return operationHandler.iterate(txn, partitionId, parentKey,
-                                        true /*majorPathComplete*/,
-                                        getSubRange(), getDepth(),
-                                        Direction.FORWARD, subBatchSize,
-                                        resumeSubKey,
-                                        OperationHandler.CURSOR_DEFAULT,
-                                        results, kvAuth);
-    }
-
-    @Override
-    public Result createIterateResult(List<ResultKeyValueVersion> results,
-                                      boolean hasMore,
-                                      int resumeParentKeyIndex) {
-
-        return new Result.BulkGetIterateResult(getOpCode(),
-                                               results, hasMore,
-                                               resumeParentKeyIndex);
     }
 }

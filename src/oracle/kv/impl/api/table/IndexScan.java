@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -51,6 +51,7 @@ import static oracle.kv.impl.api.table.TableAPIImpl.getTimeoutUnit;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +60,8 @@ import java.util.TreeSet;
 import java.util.logging.Level;
 
 import oracle.kv.Consistency;
+import oracle.kv.Direction;
+import oracle.kv.Key;
 import oracle.kv.ValueVersion;
 import oracle.kv.impl.api.KVStoreImpl;
 import oracle.kv.impl.api.Request;
@@ -70,8 +73,8 @@ import oracle.kv.impl.api.ops.InternalOperation;
 import oracle.kv.impl.api.ops.Result;
 import oracle.kv.impl.api.ops.ResultIndexKeys;
 import oracle.kv.impl.api.ops.ResultIndexRows;
-import oracle.kv.impl.api.parallelscan.DetailedMetricsImpl;
 import oracle.kv.impl.api.parallelscan.BaseParallelScanIteratorImpl;
+import oracle.kv.impl.api.parallelscan.DetailedMetricsImpl;
 import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.Topology;
 import oracle.kv.stats.DetailedMetrics;
@@ -98,7 +101,10 @@ import oracle.kv.table.TableIteratorOptions;
  * {@code byte[]}. This means that the start/end/resume keys are always
  * inclusive on the server side.
  */
-class IndexScan {
+public class IndexScan {
+
+    static final Comparator<byte[]> KEY_BYTES_COMPARATOR =
+        new Key.BytesComparator();
 
     /* Prevent construction */
     private IndexScan() {}
@@ -112,22 +118,41 @@ class IndexScan {
      *
      * @return a table iterator
      */
-    static TableIterator<Row> createTableIterator
-        (final TableAPIImpl apiImpl,
-         final IndexKeyImpl indexKey,
-         final MultiRowOptions getOptions,
-         final TableIteratorOptions iterateOptions) {
+    static TableIterator<Row> createTableIterator(
+        final TableAPIImpl tableAPI,
+        final IndexKeyImpl indexKey,
+        final MultiRowOptions mro,
+        final TableIteratorOptions tio) {
+
+       return createTableIterator(tableAPI, indexKey, mro, tio, null);
+    }
+
+    static TableIterator<Row> createTableIterator(
+        final TableAPIImpl tableAPI,
+        final IndexKeyImpl indexKey,
+        final MultiRowOptions mro,
+        final TableIteratorOptions tio,
+        final Set<RepGroupId> shardSet) {
 
         final TargetTables targetTables =
-            TableAPIImpl.makeTargetTables(indexKey.getTable(), getOptions);
+            TableAPIImpl.makeTargetTables(indexKey.getTable(), mro);
 
-        return new IndexScanIterator<Row>(apiImpl.getStore(),
-                                          indexKey,
-                                          getOptions,
-                                          iterateOptions) {
+        final IndexImpl index = (IndexImpl) indexKey.getIndex();
+        final TableImpl table = (TableImpl) index.getTable();
+        final IndexRange range = new IndexRange(indexKey, mro, tio);
+
+        return new IndexScanIterator<Row>(tableAPI.getStore(), tio, shardSet) {
+
             @Override
-            protected InternalOperation createOp(byte[] resumeSecondaryKey,
-                                                 byte[] resumePrimaryKey) {
+            protected ShardIndexStream createStream(RepGroupId groupId) {
+                return new IndexRowScanStream(groupId, null, null);
+            }
+
+            @Override
+            protected InternalOperation createOp(
+                byte[] resumeSecondaryKey,
+                byte[] resumePrimaryKey) {
+
                 return new IndexIterate(index.getName(),
                                         targetTables,
                                         range,
@@ -138,13 +163,13 @@ class IndexScan {
 
             @Override
             protected void convertResult(Result result, List<Row> rows) {
+
                 final List<ResultIndexRows> indexRowList =
                     result.getIndexRowList();
+
                 for (ResultIndexRows indexRow : indexRowList) {
                     Row converted = convert(indexRow);
-                    if (converted != null) {
-                        rows.add(converted);
-                    }
+                    rows.add(converted);
                 }
             }
 
@@ -159,22 +184,30 @@ class IndexScan {
                 final TableImpl startingTable =
                     targetTables.hasAncestorTables() ?
                     table.getTopLevelTable() : table;
-                final RowImpl fullKey = startingTable.createRowFromKeyBytes
-                    (rowResult.getKeyBytes());
+
+                final RowImpl fullKey = startingTable.createRowFromKeyBytes(
+                    rowResult.getKeyBytes());
+
                 if (fullKey == null) {
                     throw new IllegalStateException
                         ("Unable to deserialize a row from an index result");
                 }
+
                 final ValueVersion vv =
                     new ValueVersion(rowResult.getValue(),
                                      rowResult.getVersion());
-                return apiImpl.getRowFromValueVersion(vv, fullKey, false);
 
+                RowImpl row =
+                    tableAPI.getRowFromValueVersion(
+                        vv,
+                        fullKey,
+                        rowResult.getExpirationTime(),
+                        false);
+                return row;
             }
 
             @Override
-            protected byte[] extractResumeSecondaryKey(Result result,
-                                                       List<Row> rowList) {
+            protected byte[] extractResumeSecondaryKey(Result result) {
 
                 /*
                  * The resume key is the last index key in the ResultIndexRows
@@ -185,64 +218,121 @@ class IndexScan {
                  * index includes a multi-key component such as map or array.
                  * That is why new code was introduced in 3.2.
                  */
-
-                final List<ResultIndexRows> indexRowList =
-                    result.getIndexRowList();
-                byte[] bytes = indexRowList.get(indexRowList.size() - 1)
-                    .getIndexKeyBytes();
+                byte[] bytes = result.getSecondaryResumeKey();
 
                 /* this will only be null if talking to a pre-3.2 server */
-                if (bytes != null) {
+                if (bytes != null || !result.hasMoreElements()) {
                     return bytes;
                 }
 
                 /* compatibility code for pre-3.2 servers */
+                List<Row> rowList = new ArrayList<Row>();
+                convertResult(result, rowList);
                 Row lastRow = rowList.get(rowList.size() - 1);
                 return index.serializeIndexKey(index.createIndexKey(lastRow));
             }
 
             @Override
-            protected byte[] extractResumePrimaryKey(List<Row> rowList) {
-                Row row = rowList.get(rowList.size() - 1);
-                TableKey key =
-                    TableKey.createKey(((RowImpl) row).getTableImpl(),
-                                       row, false);
-                return key.getKeyBytes();
+            protected int compare(Row one, Row two) {
+                throw new IllegalStateException("Unexpected call");
             }
 
-             /**
-             * Compares with a primary and secondary sort, where the
-             * primary sort is based on index key and if the index key
-             * values are equal, sort by primary key.  Both should never
-             * match unless somehow the same row is retrieved from multiple
+            /**
+             * IndexRowScanStream subclasses ShardIndexStream in order to
+             * implement correct ordering of the streams used by an
+             * IndexRowScanIterator. Specifically, the problem is that
+             * IndexRowScanIterator returns Row objs, and as a result
+             * IndexRowScanIterator.compare(), which compares Rows, does not
+             * do correct ordering. Instead we must compare index keys. If
+             * two index keys (from different shards) are equal, then the
+             * associated primary keys are also compared, to make sure that 2
+             * streams will never have the same order magnitude (the only way
+             * that 2 streams may both return the same index-key, primary-key
+             * pair is when both streams retrieve the same row from multiple
              * shards in the event of partition migration.
              */
-            @Override
-            protected int compare(Row one, Row two) {
-                final RowImpl oneImpl = (RowImpl) one;
-                final RowImpl twoImpl = (RowImpl) two;
-                int value = oneImpl.compare(twoImpl,
-                                            indexKey.getFieldsInternal());
-                if (value == 0) {
-                    value = oneImpl.compare(twoImpl,
-                                            oneImpl.getTableImpl().
-                                            getPrimaryKeyInternal());
+            class IndexRowScanStream extends ShardIndexStream {
+
+                IndexRowScanStream(
+                    RepGroupId groupId,
+                    byte[] resumeSecondaryKey,
+                    byte[] resumePrimaryKey) {
+
+                    super(groupId, resumeSecondaryKey, resumePrimaryKey);
                 }
-                return value;
+
+                @Override
+                protected int compareInternal(Stream o) {
+
+                    IndexRowScanStream other = (IndexRowScanStream)o;
+
+                    ResultIndexRows res1 =
+                        currentResultSet.getIndexRowList().
+                        get(currentResultPos);
+
+                    ResultIndexRows res2 =
+                        other.currentResultSet.getIndexRowList().
+                        get(other.currentResultPos);
+
+                    byte[] key1 = res1.getIndexKeyBytes();
+                    byte[] key2 = res2.getIndexKeyBytes();
+
+                    int cmp = compareUnsignedBytes(key1, key2);
+
+                    if (cmp == 0) {
+                        cmp = KEY_BYTES_COMPARATOR.compare(res1.getKeyBytes(),
+                                                           res2.getKeyBytes());
+                    }
+
+                    return itrDirection == Direction.FORWARD ? cmp : (cmp * -1);
+                }
+
+                /**
+                 * Compare using a default unsigned byte comparison.
+                 *
+                 * WARNING!!!!!!!!!!
+                 * This is code copied out from JE (see
+                 * src/com/sleepycat/je/tree/Key.java). It is extremely
+                 * unlikely that JE will modify this code, but if it happens,
+                 * the changes should be applied here as well.
+                 */
+                private int compareUnsignedBytes(byte[] key1, byte[] key2) {
+                    return compareUnsignedBytes(key1, 0, key1.length,
+                                                key2, 0, key2.length);
+                }
+
+                private int compareUnsignedBytes(
+                    byte[] key1,
+                    int off1,
+                    int len1,
+                    byte[] key2,
+                    int off2,
+                    int len2) {
+
+                    int limit = Math.min(len1, len2);
+
+                    for (int i = 0; i < limit; i++) {
+                        byte b1 = key1[i + off1];
+                        byte b2 = key2[i + off2];
+                        if (b1 == b2) {
+                            continue;
+                        }
+                        /*
+                         * Remember, bytes are signed, so convert to shorts
+                         * so that we effectively do an unsigned byte
+                         * comparison.
+                         */
+                        return (b1 & 0xff) - (b2 & 0xff);
+                    }
+
+                    return (len1 - len2);
+                }
             }
         };
     }
 
     /**
      * Creates a table iterator returning ordered key pairs.
-     *
-     * @param store
-     * @param indexKey
-     * @param indexRange
-     * @param batchSize
-     * @param consistency
-     * @param timeout
-     * @param timeoutUnit
      *
      * @return a table iterator
      */
@@ -254,11 +344,14 @@ class IndexScan {
 
         final TargetTables targetTables =
             TableAPIImpl.makeTargetTables(indexKey.getTable(), getOptions);
+        final IndexImpl index = (IndexImpl) indexKey.getIndex();
+        final TableImpl table = (TableImpl) index.getTable();
+        final IndexRange range =
+            new IndexRange(indexKey, getOptions, iterateOptions);
 
         return new IndexScanIterator<KeyPair>(apiImpl.getStore(),
-                                              indexKey,
-                                              getOptions,
-                                              iterateOptions) {
+                                              iterateOptions,
+                                              null) {
             @Override
             protected InternalOperation createOp(byte[] resumeSecondaryKey,
                                                  byte[] resumePrimaryKey) {
@@ -280,43 +373,23 @@ class IndexScan {
             @Override
             protected void convertResult(Result result,
                                          List<KeyPair> elementList) {
+
                 final List<ResultIndexKeys> results =
                     result.getIndexKeyList();
+
                 for (ResultIndexKeys res : results) {
+
                     final IndexKeyImpl indexKeyImpl =
                         convertIndexKey(res.getIndexKeyBytes());
-                    if (indexKeyImpl != null) {
-                        final PrimaryKeyImpl pkey =
-                            convertPrimaryKey(res.getPrimaryKeyBytes());
-                        if (pkey != null) {
-                            elementList.add(new KeyPair(pkey, indexKeyImpl));
-                        }
+
+                    final PrimaryKeyImpl pkey = convertPrimaryKey(res);
+
+                    if (indexKeyImpl != null && pkey != null) {
+                        elementList.add(new KeyPair(pkey, indexKeyImpl));
+                    } else {
+                        elementList.add(null);
                     }
                 }
-            }
-
-            @Override
-            protected byte[] extractResumeSecondaryKey
-                (Result result, List<KeyPair> elementList) {
-
-                /*
-                 * The resumeKey is the byte[] value of the IndexKey from
-                 * the last Row returned.
-                 */
-                IndexKeyImpl ikey = (IndexKeyImpl)
-                    elementList.get(elementList.size() - 1).getIndexKey();
-                return index.serializeIndexKey(ikey);
-            }
-
-            @Override
-            protected byte[] extractResumePrimaryKey
-                (List<KeyPair> elementList) {
-
-                PrimaryKeyImpl pkey = (PrimaryKeyImpl)
-                    elementList.get(elementList.size() - 1).getPrimaryKey();
-                TableKey key =
-                    TableKey.createKey(pkey.getTableImpl(), pkey, false);
-                return key.getKeyBytes();
             }
 
             @Override
@@ -325,10 +398,15 @@ class IndexScan {
             }
 
             private IndexKeyImpl convertIndexKey(byte[] bytes) {
-                return index.rowFromIndexKey(bytes, false);
+                IndexKeyImpl ikey = index.createIndexKey();
+                index.rowFromIndexKey(bytes,
+                                      ikey,
+                                      false, /*allowPartial*/
+                                      false  /*createTableRow*/);
+                return ikey;
             }
 
-            private PrimaryKeyImpl convertPrimaryKey(byte[] bytes) {
+            private PrimaryKeyImpl convertPrimaryKey(ResultIndexKeys res) {
                 /*
                  * If ancestor table returns may be involved, start at the
                  * top level table of this hierarchy.
@@ -336,17 +414,20 @@ class IndexScan {
                 final TableImpl startingTable =
                     targetTables.hasAncestorTables() ?
                     table.getTopLevelTable() : table;
-                return startingTable.createPrimaryKeyFromKeyBytes(bytes);
+                final PrimaryKeyImpl pkey = startingTable.
+                    createPrimaryKeyFromKeyBytes(res.getPrimaryKeyBytes());
+                pkey.setExpirationTime(res.getExpirationTime());
+                return pkey;
             }
         };
     }
 
     /**
-     * Base class for building index iterators.
+     * Base class for building shard iterators.
      *
      * @param <K> the type of elements returned by the iterator
      */
-    private static abstract class IndexScanIterator<K>
+    public static abstract class IndexScanIterator<K>
         extends BaseParallelScanIteratorImpl<K>
         implements TableIterator<K>,
                    PostUpdateListener {
@@ -371,40 +452,49 @@ class IndexScan {
          */
         private final int partitionMapHashCode;
 
-        protected final IndexRange range;
         protected final int batchSize;
-        protected final IndexImpl index;
-        protected final TableImpl table;
 
         /* Per shard metrics provided through ParallelScanIterator */
         private final Map<RepGroupId, DetailedMetricsImpl> shardMetrics =
-                                new HashMap<RepGroupId, DetailedMetricsImpl>();
+            new HashMap<RepGroupId, DetailedMetricsImpl>();
 
-        private IndexScanIterator(KVStoreImpl store,
-                                  IndexKeyImpl indexKey,
-                                  MultiRowOptions getOptions,
-                                  TableIteratorOptions iterateOptions) {
+        public IndexScanIterator(
+            KVStoreImpl store,
+            TableIteratorOptions iterateOptions,
+            Set<RepGroupId> shardSet) {
+
+            /*
+             * BaseParallelScanIterator needs itrDirection to be set in order to
+             * sort properly. If not set, index scans default to FORWARD.
+             */
+            itrDirection = iterateOptions != null ?
+                iterateOptions.getDirection() : Direction.FORWARD;
             storeImpl = store;
-            range = new IndexRange(indexKey, getOptions, iterateOptions);
-            itrDirection = range.getDirection();
             consistency = getConsistency(iterateOptions);
+
             final long timeout = getTimeout(iterateOptions);
+
             requestTimeoutMs = (timeout == 0) ?
                 store.getDefaultRequestTimeoutMs() :
                 getTimeoutUnit(iterateOptions).toMillis(timeout);
+
             if (requestTimeoutMs <= 0) {
                 throw new IllegalArgumentException("Timeout must be > 0 ms");
             }
+
             batchSize = getBatchSize(iterateOptions);
-            index = indexKey.getIndexImpl();
-            table = index.getTableImpl();
             logger = store.getLogger();
 
             /* Collect group information from the current topology. */
             final TopologyManager topoManager =
                                     store.getDispatcher().getTopologyManager();
             final Topology topology = topoManager.getTopology();
-            final Set<RepGroupId> groups = topology.getRepGroupIds();
+            Set<RepGroupId> groups;
+            if (shardSet == null) {
+                groups = topology.getRepGroupIds();
+            } else {
+                groups = shardSet;
+            }
             nGroups = groups.size();
             if (nGroups == 0) {
                 throw new IllegalStateException("Store not yet initialized");
@@ -420,8 +510,7 @@ class IndexScan {
             streams = new TreeSet<Stream>();
             /* For each shard, create a stream and start reading */
             for (RepGroupId groupId : groups) {
-                final ShardIndexStream stream =
-                    new ShardIndexStream(groupId, null, null);
+                final ShardIndexStream stream = createStream(groupId);
                 streams.add(stream);
                 stream.submit();
             }
@@ -433,6 +522,14 @@ class IndexScan {
              * iterator.
              */
             topoManager.addPostUpdateListener(this, true);
+        }
+
+        /*
+         * Sbclasses override this if they need to use a subclass of
+         * ShardIndexStream in their implementation.
+         */
+        protected ShardIndexStream createStream(RepGroupId groupId) {
+            return new ShardIndexStream(groupId, null, null);
         }
 
         /* -- Metrics from ParallelScanIterator -- */
@@ -467,20 +564,11 @@ class IndexScan {
          * Returns a resume secondary key based on the specified element.
          *
          * @param result result object
-         * @param elementList the list of elements converted by convert.
          * @return a resume secondary key
          */
-        protected abstract byte[]
-            extractResumeSecondaryKey(Result result, List<K> elementList);
-
-        /**
-         * Returns a resume primary key based on the specified element.
-         *
-         * @param elementList the list of elements converted by convert.
-         * @return a resume primary key
-         */
-        protected abstract byte[]
-            extractResumePrimaryKey(List<K> elementList);
+        protected byte[] extractResumeSecondaryKey(Result result) {
+            return result.getSecondaryResumeKey();
+        }
 
         @Override
         protected void close(Exception reason) {
@@ -572,26 +660,27 @@ class IndexScan {
             return closed;
         }
 
-        @Override
-        public String toString() {
-            return "IndexScanIterator[" + index.getName() +
-                ", " + itrDirection + "]";
-        }
-
         /**
          * Reading index records of a single shard.
          */
-        private class ShardIndexStream extends Stream {
+        protected class ShardIndexStream extends Stream {
+
             private final RepGroupId groupId;
+
             private byte[] resumeSecondaryKey;
+
             private byte[] resumePrimaryKey;
 
-            ShardIndexStream(RepGroupId groupId,
-                             byte[] resumeSecondaryKey,
-                             byte[] resumePrimaryKey) {
+            protected ShardIndexStream(RepGroupId groupId,
+                                       byte[] resumeSecondaryKey,
+                                       byte[] resumePrimaryKey) {
                 this.groupId = groupId;
                 this.resumeSecondaryKey = resumeSecondaryKey;
                 this.resumePrimaryKey = resumePrimaryKey;
+            }
+
+            protected RepGroupId getGroupId() {
+                return groupId;
             }
 
             @Override
@@ -622,14 +711,9 @@ class IndexScan {
             }
 
             @Override
-            protected void setResumeKey(Result result, List<K> elementList) {
-                final boolean hasMore = result.hasMoreElements();
-                resumeSecondaryKey = (hasMore) ?
-                    extractResumeSecondaryKey(result, elementList) :
-                    null;
-                resumePrimaryKey = (hasMore) ?
-                    extractResumePrimaryKey(elementList) :
-                    null;
+            protected void setResumeKey(Result result) {
+                resumeSecondaryKey = extractResumeSecondaryKey(result);
+                resumePrimaryKey = result.getPrimaryResumeKey();
             }
 
             @Override

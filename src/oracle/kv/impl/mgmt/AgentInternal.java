@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,6 +43,7 @@
 
 package oracle.kv.impl.mgmt;
 
+import java.rmi.Remote;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.ArrayList;
@@ -52,6 +53,7 @@ import java.util.Map;
 import java.util.logging.Level;
 
 import oracle.kv.impl.admin.CommandServiceAPI;
+import oracle.kv.impl.arb.admin.ArbNodeAdminAPI;
 import oracle.kv.impl.measurement.ProxiedServiceStatusChange;
 import oracle.kv.impl.measurement.ServiceStatusChange;
 import oracle.kv.impl.param.ParameterMap;
@@ -60,6 +62,7 @@ import oracle.kv.impl.rep.monitor.StatsPacket;
 import oracle.kv.impl.sna.ServiceManager;
 import oracle.kv.impl.sna.StorageNodeAgent;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.ResourceId;
 import oracle.kv.impl.util.ConfigurableService.ServiceStatus;
@@ -79,6 +82,8 @@ public abstract class AgentInternal implements MgmtAgent {
         new ArrayList<ServiceManager.Listener>();
     private ServiceStatusTracker snaStatusTracker;
     private AdminStatusReceiver adminStatusReceiver = null;
+    private final Map<ArbNodeId, ArbNodeStatusReceiver> anStatusReceivers =
+        new HashMap<ArbNodeId, ArbNodeStatusReceiver>();
 
     protected AgentInternal(StorageNodeAgent sna) {
         this.sna = sna;
@@ -142,6 +147,23 @@ public abstract class AgentInternal implements MgmtAgent {
             @Override
             public void startupCallback() {
                 installRepNodeStatusReceiver(rnId);
+            }
+        };
+
+        smListeners.add(listener);
+    }
+
+    protected void addServiceManagerListener(final ArbNodeId anId,
+                                             final ServiceManager mgr) {
+
+        if (mgr.isRunning()) {
+            installArbNodeStatusReceiver(anId);
+        }
+
+        ServiceManager.Listener listener = mgr.new Listener() {
+            @Override
+            public void startupCallback() {
+                installArbNodeStatusReceiver(anId);
             }
         };
 
@@ -263,8 +285,15 @@ public abstract class AgentInternal implements MgmtAgent {
         }
     }
 
+    protected void unexportStatusReceiver(ArbNodeId anid) {
+        ArbNodeStatusReceiver ansr = anStatusReceivers.get(anid);
+        if (ansr != null) {
+            unexportStatusReceiver(ansr, true);
+        }
+    }
+
     private void unexportStatusReceiver
-        (RepNodeStatusReceiver rnsr, boolean remove) {
+        (Remote rnsr, boolean remove) {
 
         try {
             UnicastRemoteObject.unexportObject(rnsr, true);
@@ -296,6 +325,87 @@ public abstract class AgentInternal implements MgmtAgent {
             sna.getLogger().log
                 (Level.WARNING,
                  "Error installing AdminStatusReceiver.", e);
+        }
+    }
+
+    public void installArbNodeStatusReceiver(final ArbNodeId anId) {
+
+        /*
+         * Wait for the arbnode to come up.  UNREACHABLE is interpreted
+         * to mean any state is acceptable.  We want a handle on the
+         * RepNode so that we can enable mgmt on it, regardless of its
+         * service state.
+         */
+        ServiceStatus[] targets = {ServiceStatus.UNREACHABLE};
+        ArbNodeAdminAPI anai = sna.waitForArbNodeAdmin(anId, targets);
+        if (anai == null) {
+            /*
+             * There is nothing we can do here. The failure has been
+             * logged already.
+             */
+            return;
+        }
+        try {
+            ArbNodeStatusReceiver rnsr = getArbNodeStatusReceiver(anId);
+            anai.installStatusReceiver(rnsr);
+        } catch (RemoteException e) {
+            sna.getLogger().log(Level.WARNING,
+                                "Error installing ArbNodeStatusReceiver for " +
+                                anId.getFullName() + ".", e);
+        }
+    }
+
+    private ArbNodeStatusReceiver getArbNodeStatusReceiver(ArbNodeId anid)
+        throws RemoteException {
+        ArbNodeStatusReceiver ansr = anStatusReceivers.get(anid);
+        if (ansr != null) {
+            /*
+             * We'll avoid trying to unregister the receiver from the
+             * ArbNodeAdmin.  If we are here, the ArbNode has been restarted
+             * and no longer has a reference to the receiver anyway.
+             */
+            unexportStatusReceiver(ansr, true);
+        }
+
+        ansr = new ArbNodeStatusReceiverImpl(anid);
+        anStatusReceivers.put(anid, ansr);
+        return ansr;
+    }
+
+    private class ArbNodeStatusReceiverImpl
+        extends UnicastRemoteObject implements ArbNodeStatusReceiver {
+
+        private static final long serialVersionUID = 1L;
+
+        ArbNodeId anid;
+
+        ArbNodeStatusReceiverImpl(ArbNodeId anid)
+            throws RemoteException {
+            this.anid = anid;
+        }
+
+        @Override
+        public void updateAnStatus(ServiceStatusChange newStatus) {
+            AgentInternal.this.updateArbNodeStatus(anid, newStatus);
+        }
+
+        @Override
+        public void receiveStats(StatsPacket packet)
+            throws RemoteException {
+
+            AgentInternal.this.updateArbNodePerfStats(anid, packet);
+        }
+
+        @Override
+        public void receiveNewParams(ParameterMap newMap)
+            throws RemoteException {
+
+            AgentInternal.this.updateArbNodeParameters(anid, newMap);
+        }
+
+        @Override
+        public String toString() {
+            return anid.getFullName();
         }
     }
 
@@ -367,6 +477,16 @@ public abstract class AgentInternal implements MgmtAgent {
 
     abstract protected void updateRepNodeParameters(RepNodeId which,
                                                     ParameterMap map);
+
+    abstract protected void updateArbNodeStatus(ArbNodeId which,
+                                                ServiceStatusChange newStatus);
+
+    abstract protected void updateArbNodePerfStats(ArbNodeId which,
+                                                   StatsPacket packet);
+
+    abstract protected void updateArbNodeParameters(ArbNodeId which,
+                                                    ParameterMap map);
+
 
     @Override
     public void proxiedStatusChange(ProxiedServiceStatusChange sc) {

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -58,26 +58,42 @@ public interface StringDef extends FieldDef {
      * Get the minimum value for the string.
      *
      * @return the minimum value for the instance if defined, otherwise null
+     *
+     * @deprecated as of release 4.0 it is no longer possible to specify
+     * ranges on String types.
      */
+    @Deprecated
     String getMin();
 
     /**
      * Get the maximum value for the string.
      *
      * @return the maximum value for the instance if defined, otherwise null
+     *
+     * @deprecated as of release 4.0 it is no longer possible to specify
+     * ranges on String types.
      */
+    @Deprecated
     String getMax();
 
     /**
      * @return true if the minimum is inclusive.  This value is only relevant
      * if {@link #getMin} returns a non-null value.
+     *
+     * @deprecated as of release 4.0 it is no longer possible to specify
+     * ranges on String types.
      */
+    @Deprecated
     boolean isMinInclusive();
 
     /**
      * @return true if the maximum is inclusive.  This value is only relevant
      * if {@link #getMax} returns a non-null value.
+     *
+     * @deprecated as of release 4.0 it is no longer possible to specify
+     * ranges on String types.
      */
+    @Deprecated
     boolean isMaxInclusive();
 
     /**

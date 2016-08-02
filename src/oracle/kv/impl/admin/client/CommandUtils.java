@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -55,6 +55,7 @@ import oracle.kv.impl.param.ParameterMap;
 import oracle.kv.impl.param.ParameterState;
 import oracle.kv.impl.security.util.PasswordReader;
 import oracle.kv.impl.security.util.SecurityUtils;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.DatacenterMap;
@@ -111,6 +112,16 @@ public class CommandUtils {
         if (get(cs, rnid) == null)  {
             throw new ShellUsageException("RepNode does not exist: " +
                                           rnid, command);
+        }
+    }
+
+    public static void ensureArbNodeExists(ArbNodeId anid, CommandServiceAPI cs,
+                                           ShellCommand command)
+        throws ShellException, RemoteException {
+
+        if (get(cs, anid) == null)  {
+            throw new ShellUsageException("ArbNode does not exist: " +
+                                          anid, command);
         }
     }
 
@@ -338,7 +349,7 @@ public class CommandUtils {
      * verification succeeds if and only if the new input is not null, not
      * empty, is identical to the specified password and no exception occurs.
      * Otherwise, an error message is returned.
-     * 
+     *
      * @param passReader
      * @param newPassword the password to be verified
      * @return an error message if any problem happens in verification,

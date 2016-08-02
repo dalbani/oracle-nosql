@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -54,10 +54,12 @@ import java.util.Collection;
 import oracle.kv.KVVersion;
 import oracle.kv.impl.admin.AdminStatus;
 import oracle.kv.impl.admin.param.Parameters;
+import oracle.kv.impl.arb.ArbNodeStatus;
 import oracle.kv.impl.rep.MasterRepNodeStats;
 import oracle.kv.impl.rep.RepNodeStatus;
 import oracle.kv.impl.sna.StorageNodeStatus;
 import oracle.kv.impl.topo.AdminId;
+import oracle.kv.impl.topo.ArbNode;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.RepGroup;
@@ -140,11 +142,14 @@ public class PingDisplay {
     public static ObjectNode zoneOverviewToJson
         (Topology topology,
          Datacenter dc,
-         Ping.RepNodeStatusFunction rnStatusFunc) {
+         Ping.RepNodeStatusFunction rnStatusFunc,
+         Ping.ArbNodeStatusFunction anStatusFunc) {
 
         final DatacenterId dcId = dc.getResourceId();
         int online = 0;
         int offline = 0;
+        int onlineANs = 0;
+        int offlineANs = 0;
         boolean hasReplicas = false;
         Long maxDelay = null;
         Long maxCatchupTime = null;
@@ -200,6 +205,16 @@ public class PingDisplay {
                     maxCatchupTime = catchupTime;
                 }
             }
+
+            for (final ArbNode an : rg.getArbNodes()) {
+                final ArbNodeStatus status = anStatusFunc.get(an);
+                if ((status != null) &&
+                    status.getArbiterState().isActive()) {
+                    onlineANs++;
+                } else {
+                    offlineANs++;
+                }
+            }
         }
         final ObjectNode on = createObjectNode();
         zoneNameToJson(dc, on);
@@ -212,6 +227,11 @@ public class PingDisplay {
         }
         if (maxCatchupTime != null) {
             rnStatus.put("maxCatchupTimeSecs", maxCatchupTime);
+        }
+        if (onlineANs > 0 || offlineANs > 0) {
+            final ObjectNode anStatus = on.putObject("anSummaryStatus");
+            anStatus.put("online", onlineANs);
+            anStatus.put("offline", offlineANs);
         }
         return on;
     }
@@ -247,6 +267,7 @@ public class PingDisplay {
     public static void shardOverviewToJson
         (Topology topology,
          Ping.RepNodeStatusFunction rnStatusFunc,
+         Ping.ArbNodeStatusFunction anStatusFunc,
          ObjectNode jsonTop) {
 
         int totalRF = 0;
@@ -258,6 +279,12 @@ public class PingDisplay {
                 totalPrimaryRF += rf;
             }
         }
+
+        /*
+         * The quorum value is used to compute the writable-degraded
+         * state. This state indicates that an RNs/ANs may be unavailable,
+         * but simple majority ack writes would succeed.
+         */
         final int quorum = (totalPrimaryRF / 2) + 1;
         int healthy = 0;
         int writableDegraded = 0;
@@ -266,6 +293,8 @@ public class PingDisplay {
         for (RepGroup rg : topology.getRepGroupMap().getAll()) {
             int onlineRNs = 0;
             int onlinePrimaryRNs = 0;
+            int onlineANs = 0;
+            int offlineANs = 0;
             for (final RepNode rn : rg.getRepNodes()) {
                 final StorageNode sn = topology.get(rn.getStorageNodeId());
                 final Datacenter dc = topology.get(sn.getDatacenterId());
@@ -278,9 +307,19 @@ public class PingDisplay {
                     }
                 }
             }
-            if (onlineRNs >= totalRF) {
+            for (final ArbNode an : rg.getArbNodes()) {
+                final ArbNodeStatus status = anStatusFunc.get(an);
+                if ((status != null) &&
+                    status.getArbiterState().isActive()) {
+                    onlineANs++;
+               } else {
+                  offlineANs++;
+               }
+            }
+
+            if (onlineRNs >= totalRF && offlineANs == 0) {
                 healthy++;
-            } else if (onlinePrimaryRNs >= quorum) {
+            } else if (onlinePrimaryRNs + onlineANs >= quorum) {
                 writableDegraded++;
             } else if (onlineRNs > 0) {
                 readonly++;
@@ -449,6 +488,28 @@ public class PingDisplay {
     }
 
     /**
+     * Converts arbiter node information from the JSON node into a human
+     * readable string.
+     */
+    public static String displayArbNode(JsonNode node) {
+        String result = "\tArb Node [" +
+            getAsText(node, "resourceId", "?") + "]\tStatus: " +
+            displayStatus(node);
+        final String stopped =
+            "UNREACHABLE".equals(getAsText(node, "expectedStatus")) ?
+            " (Stopped)" : "";
+        if (getAsText(node, "status", "UNREACHABLE").equals("UNREACHABLE")) {
+            return result + stopped;
+        }
+        final Long sequenceNumber = getLong(node, "sequenceNumber");
+        result += " sequenceNumber:" +
+            ((sequenceNumber != null) ?
+             String.format("%,d", sequenceNumber) : "?") +
+            " haPort:" + getAsText(node, "haPort", "?");
+        return result;
+    }
+
+    /**
      * Returns a JSON node with information about the storage node, by creating
      * an object node that the caller will add as an array element of the
      * "snStatus" field.
@@ -548,12 +609,14 @@ public class PingDisplay {
         node.put("resourceId", dc.getResourceId().toString());
         node.put("name", dc.getName());
         node.put("type", dc.getDatacenterType().toString());
+        node.put("allowArbiters", dc.getAllowArbiters());
     }
 
     private static String displayZoneName(JsonNode node) {
         return "[name=" + getAsText(node, "name", "?") +
             " id=" + getAsText(node, "resourceId", "?") +
-            " type=" + getAsText(node, "type", "?") + "]";
+            " type=" + getAsText(node, "type", "?") +
+            " allowArbiters=" + getAsText(node, "allowArbiters", "?") + "]";
     }
 
     private static void statusToJson(ServiceInfo status, ObjectNode on) {
@@ -572,4 +635,37 @@ public class PingDisplay {
             }
         }
     }
+
+    private static void statusToJson(ArbNodeStatus status, ObjectNode on) {
+        if (status == null) {
+            on.put("status", "UNREACHABLE");
+        } else {
+            on.put("status", status.getServiceStatus().toString());
+            State arbState = status.getArbiterState();
+            on.put("state", arbState.toString());
+        }
+    }
+
+    /**
+     * Returns a JSON node with information about the arbiter node that the
+     * caller will add as an array element of the "anStatus" field within the
+     * "snStatus" field.
+     */
+    public static ObjectNode arbNodeToJson(ArbNode an,
+                                           ArbNodeStatus status,
+                                           ServiceStatus expected) {
+        final ObjectNode on = createObjectNode();
+        on.put("resourceId", an.getResourceId().toString());
+        statusToJson(status, on);
+        if (expected != null) {
+            on.put("expectedStatus", expected.toString());
+        }
+        if (status == null) {
+            return on;
+        }
+        on.put("sequenceNumber", status.getVlsn());
+        on.put("haPort", status.getHAHostPort());
+        return on;
+    }
+
 }

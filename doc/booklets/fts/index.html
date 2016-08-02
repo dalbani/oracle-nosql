@@ -1,0 +1,1285 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <title>Oracle NoSQL Database Full Text Search</title>
+    <link rel="stylesheet" href="gettingStarted.css" type="text/css" />
+    <meta name="generator" content="DocBook XSL Stylesheets V1.73.2" />
+    <link rel="start" href="index.html" title="Oracle NoSQL Database Full Text Search" />
+  </head>
+  <body>
+    <div xmlns="" class="navheader">
+      <div class="libver">
+        <p>(Library Version 12.1.4.0)</p>
+      </div>
+      <table width="100%" summary="Navigation header">
+        <tr>
+          <th colspan="3" align="center">Oracle NoSQL Database Full Text Search </th>
+        </tr>
+      </table>
+      <hr />
+    </div>
+    <div class="article" lang="en" xml:lang="en">
+      <div class="titlepage">
+        <div>
+          <div>
+            <h1 class="title"><a id="idp32352"></a>Oracle NoSQL Database Full Text Search </h1>
+          </div>
+          <div>
+            <div class="legalnotice">
+              <a id="idp55536"></a>
+              <p class="legalnotice-title">
+                <b>Legal Notice</b>
+              </p>
+              <span>
+        <p>
+            Copyright © 2011, 2012, 2013, 2014, 2015, 2016 Oracle and/or its affiliates. All rights
+            reserved.
+        </p>
+        <p>
+            This software and related documentation are provided under a
+            license agreement containing restrictions on use and disclosure
+            and are protected by intellectual property laws. Except as
+            expressly permitted in your license agreement or allowed by
+            law, you may not use, copy, reproduce, translate, broadcast,
+            modify, license, transmit, distribute, exhibit, perform,
+            publish, or display any part, in any form, or by any means.
+            Reverse engineering, disassembly, or decompilation of this
+            software, unless required by law for interoperability, is
+            prohibited.
+        </p>
+        <p>
+            The information contained herein is subject to change without
+            notice and is not warranted to be error-free. If you find any
+            errors, please report them to us in writing.
+        </p>
+        
+        <p>
+            If this is software or related documentation that is delivered
+            to the U.S. Government or anyone licensing it on behalf of the
+            U.S. Government, the following notice is applicable:
+        </p>
+        <p>
+            U.S. GOVERNMENT END USERS: Oracle programs, including any
+            operating system, integrated software, any programs installed
+            on the hardware, and/or documentation, delivered to U.S.
+            Government end users are "commercial computer software"
+            pursuant to the applicable Federal Acquisition Regulation and
+            agency-specific supplemental regulations. As such, use,
+            duplication, disclosure, modification, and adaptation of the
+            programs, including any operating system, integrated software,
+            any programs installed on the hardware, and/or documentation,
+            shall be subject to license terms and license restrictions
+            applicable to the programs. No other rights are granted to the
+            U.S. Government.
+        </p>
+        <p>
+            This software or hardware is developed for general use in a
+            variety of information management applications. It is not
+            developed or intended for use in any inherently dangerous
+            applications, including applications that may create a risk of
+            personal injury. If you use this software or hardware in
+            dangerous applications, then you shall be responsible to take
+            all appropriate fail-safe, backup, redundancy, and other
+            measures to ensure its safe use. Oracle Corporation and its
+            affiliates disclaim any liability for any damages caused by use
+            of this software or hardware in dangerous applications.
+        </p>
+        <p>
+            Oracle and Java are registered trademarks of Oracle and/or its
+            affiliates. Other names may be trademarks of their respective
+            owners.
+        </p>
+        <p>
+            Intel and Intel Xeon are trademarks or registered trademarks of
+            Intel Corporation. All SPARC trademarks are used under license
+            and are trademarks or registered trademarks of SPARC
+            International, Inc. AMD, Opteron, the AMD logo, and the AMD
+            Opteron logo are trademarks or registered trademarks of
+            Advanced Micro Devices. UNIX is a registered trademark of The
+            Open Group.
+        </p>
+        <p>
+            This software or hardware and documentation may provide access
+            to or information on content, products, and services from third
+            parties. Oracle Corporation and its affiliates are not
+            responsible for and expressly disclaim all warranties of any
+            kind with respect to third-party content, products, and
+            services. Oracle Corporation and its affiliates will not be
+            responsible for any loss, costs, or damages incurred due to
+            your access to or use of third-party content, products, or
+            services.
+        </p>
+    </span>
+            </div>
+          </div>
+          <div>
+            <p class="pubdate">6/3/2016</p>
+          </div>
+        </div>
+        <hr />
+      </div>
+      <div class="toc">
+        <p>
+          <b>Table of Contents</b>
+        </p>
+        <dl>
+          <dt>
+            <span class="sect1">
+              <a href="index.html#introduction">Introduction</a>
+            </span>
+          </dt>
+          <dt>
+            <span class="sect1">
+              <a href="index.html#prerequisite">Prerequisite</a>
+            </span>
+          </dt>
+          <dt>
+            <span class="sect1">
+              <a href="index.html#intg_es_nosql">
+        Integrating Elasticsearch with Oracle NoSQL Database
+        </a>
+            </span>
+          </dt>
+          <dd>
+            <dl>
+              <dt>
+                <span class="sect2">
+                  <a href="index.html#create_fts">Creating Full Text Index</a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="index.html#mapping_es">Mapping in Elasticsearch</a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="index.html#create_es_for_each_textindex">
+              Creating ES Index for Each Text Index in KVStore
+          </a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="index.html#create_fts_example">
+          Example - Creating Full Text Search
+          </a>
+                </span>
+              </dt>
+              <dt>
+                <span class="sect2">
+                  <a href="index.html#drop_index">Drop Index</a>
+                </span>
+              </dt>
+            </dl>
+          </dd>
+          <dt>
+            <span class="sect1">
+              <a href="index.html#troubleshooting">Troubleshooting</a>
+            </span>
+          </dt>
+        </dl>
+      </div>
+      <div class="sect1" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h2 class="title" style="clear: both"><a id="introduction"></a>Introduction</h2>
+            </div>
+          </div>
+        </div>
+        <p>
+         Full Text Search (or just text search) provides the
+         capability to identify natural-language documents that
+         satisfy a query, and optionally to sort them by relevance
+         to the query. The most common type of search is to find
+         all documents containing given query terms and return
+         them in order of their similarity to the query. Notions
+         of query and similarity are very flexible and depend
+         on the specific application. The simplest search
+         considers query as a set of words and similarity as the
+         frequency of query words in the document.
+     </p>
+        <p>
+         Oracle NoSQL Database integrates with a third-party open-source 
+         search engine, Elasticsearch (ES) to enable text-searching
+         capability in Oracle NoSQL Database, in-concert with the Tables
+         interface. Full-text search is an important aspect of 
+         any big data and Oracle NoSQL Database system. Users expect that
+         when they input text into a box and click “search”, they
+         will get the relevant search results they are looking for
+         in a fraction of a second. This feature provides:
+     </p>
+        <div class="itemizedlist">
+          <ul type="disc">
+            <li>
+              <p>
+              High performance full-text search of Tables stored
+              in Oracle NoSQL Database
+            </p>
+            </li>
+            <li>
+              <p>
+              Search which allows users to explore a collection
+              of information by applying multiple filters
+           </p>
+            </li>
+          </ul>
+        </div>
+        <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+          <h3 class="title">Note</h3>
+          <p>
+                So that the maintenance of indexes does not affect
+                the performance of an Oracle NoSQL Database store, text
+                indexes will not be maintained locally by Oracle NoSQL Database 
+                components, but will instead be maintained
+                by a remote service (Elasticsearch) hosted on other
+                nodes. 
+            </p>
+        </div>
+        <p>
+            This feature provides a means of marking fields in an 
+            Oracle NoSQL Database Tables schema as being text searchable. 
+            Text indexing allows creating indexes on Oracle NoSQL Database
+            tables that cause the indexed fields to automatically
+            enter into an Elasticsearch cluster. Once the data is
+            in Elasticsearch, you may use any native Elasticsearch
+            API to search and retrieve it. The documents retrieved
+            from Elasticsearch contain references back to the original
+            Oracle NoSQL Database records, facilitating their retrieval.
+        </p>
+        <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+          <h3 class="title">Note</h3>
+          <p>
+                This is a preview release of Full Text Search. As a preview
+                release its use and feedback is encouraged. For more
+                details on what it means for a feature to be a preview
+                release feature, please see the release notes.
+            </p>
+        </div>
+        <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+          <h3 class="title">Note</h3>
+          <p>
+                Oracle strongly recommends that you do not use the Full Text
+                Search feature with a secure Oracle NoSQL Database installation.
+            </p>
+        </div>
+      </div>
+      <div class="sect1" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h2 class="title" style="clear: both"><a id="prerequisite"></a>Prerequisite</h2>
+            </div>
+          </div>
+        </div>
+        <p>
+            To use this feature, you must have an Elasticsearch 2.0 
+            cluster running as well as the Oracle NoSQL Database store. In a
+            production environment, for performance reason, both Oracle NoSQL Database
+            nodes and Elasticsearch nodes are intended to be
+            used in distributed environments with different hosts.
+        </p>
+        <div class="itemizedlist">
+          <ul type="disc">
+            <li>
+              <p>
+                    You can download ES here: 
+                </p>
+              <p>
+               <a class="ulink" href="https://www.elastic.co/downloads/past-releases/elasticsearch-2-0-0" target="_top">https://www.elastic.co/downloads/past-releases/elasticsearch-2-0-0</a>
+                </p>
+            </li>
+            <li>
+              <p>
+                    You can find the installation instructions here:
+                </p>
+              <p>
+               <a class="ulink" href="https://www.elastic.co/guide/en/elasticsearch/reference/2.0/_installation.html" target="_top">https://www.elastic.co/guide/en/elasticsearch/reference/2.0/_installation.html</a>
+                </p>
+            </li>
+          </ul>
+        </div>
+        <p>
+            When your ES cluster is running, it will consist of one or 
+            more nodes. Some or all of the nodes will have services
+            listening on two ports.
+        </p>
+        <div class="itemizedlist">
+          <ul type="disc">
+            <li>
+              <p>
+                    The HTTP port, which is used for REST requests. It is 9200 by
+                    default. 
+                </p>
+            </li>
+            <li>
+              <p>
+                    The ES transport port, which is used for communication
+                    between ES nodes. It is 9300 by default.
+                </p>
+            </li>
+          </ul>
+        </div>
+        <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+          <h3 class="title">Note</h3>
+          <p>
+               You must know the host name and transport port of at least
+               one node in the cluster, and the name of the cluster itself,
+               which by default is "elasticsearch". See the command
+               <code class="literal">show parameters</code> in 
+               <a class="xref" href="index.html#intg_es_nosql" title="Integrating Elasticsearch with Oracle NoSQL Database">
+        Integrating Elasticsearch with Oracle NoSQL Database
+        </a>.
+               This information will be provided to the Oracle NoSQL Database store so 
+               that it can connect to the ES cluster. 
+            </p>
+        </div>
+      </div>
+      <div class="sect1" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h2 class="title" style="clear: both"><a id="intg_es_nosql"></a>
+        Integrating Elasticsearch with Oracle NoSQL Database
+        </h2>
+            </div>
+          </div>
+        </div>
+        <div class="toc">
+          <dl>
+            <dt>
+              <span class="sect2">
+                <a href="index.html#create_fts">Creating Full Text Index</a>
+              </span>
+            </dt>
+            <dt>
+              <span class="sect2">
+                <a href="index.html#mapping_es">Mapping in Elasticsearch</a>
+              </span>
+            </dt>
+            <dt>
+              <span class="sect2">
+                <a href="index.html#create_es_for_each_textindex">
+              Creating ES Index for Each Text Index in KVStore
+          </a>
+              </span>
+            </dt>
+            <dt>
+              <span class="sect2">
+                <a href="index.html#create_fts_example">
+          Example - Creating Full Text Search
+          </a>
+              </span>
+            </dt>
+            <dt>
+              <span class="sect2">
+                <a href="index.html#drop_index">Drop Index</a>
+              </span>
+            </dt>
+          </dl>
+        </div>
+        <p>
+            Before you can create a text index, you must register the
+            Elasticsearch cluster with the Oracle NoSQL Database store, using
+            the <code class="literal">register-es</code> plan command. In this
+            command you provide the ES cluster name, and the host name
+            and transport port of any node in the cluster as follows: 
+        </p>
+        <pre class="programlisting">plan register-es -clustername &lt;name&gt; -host &lt;host&gt; 
+-port &lt;transport port&gt; [-force]</pre>
+        <p>For example:</p>
+        <pre class="programlisting">kv-&gt; plan register-es -clustername elasticsearch 
+-host 127.0.0.1 -port 9300
+Started plan 5. Use show plan -id 5 to check status.
+To wait for completion, use plan wait -id 5</pre>
+        <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+          <h3 class="title">Note</h3>
+          <p>
+                You will see an error message if the Elasticsearch cluster
+                already contains "stale indexes" corresponding to the Oracle NoSQL Database.
+                A stale index is one that was not created by the current 
+                instance of the store, but by a previous instance of the 
+                store, or by a concurrent instance of a store with the same 
+                name as the current store, which is not allowed.
+           </p>
+        </div>
+        <p>
+            The optional <code class="literal">-force</code> argument causes the Oracle NoSQL Database
+            store to initialize an Elasticsearch cluster regardless of whether
+            it already contains a stale index corresponding to the Oracle NoSQL Database
+            store. See for example:
+        </p>
+        <pre class="programlisting">kv-&gt; plan register-es -clustername elasticsearch 
+-host localhost -port 9300 -force
+Started plan 38. Use show plan -id 38 to check status.
+To wait for completion, use plan wait -id 38</pre>
+        <p>
+            Oracle NoSQL Database store Admin communicates with the Elasticsearch node to verify
+            its existence, and it will acquire a complete list of connection
+            information for all the nodes in the ES cluster. This information
+            will be stored and distributed to all the nodes of the Oracle NoSQL Database 
+            store. This command can be repeated if the Elasticsearch cluster's
+            population of nodes changes significantly, to update Oracle NoSQL Database's
+            list of Elasticsearch node connections.
+        </p>
+        <p>
+            If you want to verify that your KV is registered with the ES, run the
+            following command:
+        </p>
+        <pre class="programlisting">show parameters -service &lt;storage node id&gt;</pre>
+        <p>
+            This has a list of properties which also includes the cluster
+            instance and the name of the cluster. See the 
+            <code class="literal">searchClusterMembers=127.0.0.1:9300</code> and 
+            <code class="literal">searchClusterName=elasticsearch</code> in the 
+            output below:
+        </p>
+        <pre class="programlisting">kv-&gt; show parameters -service sn1
+capacity=1
+haHostname=localhost
+haPortRange=5005,5007
+hostname=localhost
+memoryMB=0
+mgmtClass=oracle.kv.impl.mgmt.NoOpAgent
+mgmtPollPort=0
+mgmtTrapPort=0
+numCPUs=8
+registryPort=5000
+rnHeapMaxMB=0
+rnHeapPercent=85
+rootDirPath=./kvroot
+searchClusterMembers=127.0.0.1:9300
+searchClusterName=elasticsearch
+serviceLogFileCount=20
+serviceLogFileLimit=2000000
+storageNodeId=1
+systemPercent=10</pre>
+        <p>
+            To deregister an Elasticsearch cluster from the Oracle NoSQL Database store,
+            use the following command:
+        </p>
+        <pre class="programlisting">kv-&gt; plan deregister-es
+Executed plan 16, waiting for completion...
+Plan 16 ended successfully</pre>
+        <p>
+            This is allowed only if all full text indexes are first removed 
+            using the following command:
+</p>
+        <pre class="programlisting">DROP INDEX [IF EXISTS] index_name ON table_name</pre>
+        <pre class="programlisting">kv-&gt; plan deregister-es
+Cannot deregister ES because these text indexes exist:
+mytestIndex
+JokeIndex</pre>
+        <p>
+            To verify if the deregistration of the ES was successful or 
+            not, run the <code class="literal">show parameters -service &lt;storage node id&gt;</code>
+            command. 
+        </p>
+        <div class="sect2" lang="en" xml:lang="en">
+          <div class="titlepage">
+            <div>
+              <div>
+                <h3 class="title"><a id="create_fts"></a>Creating Full Text Index</h3>
+              </div>
+            </div>
+          </div>
+          <p>
+              You can create text indexes by using this DDL command: 
+            </p>
+          <pre class="programlisting">CREATE FULLTEXT INDEX [if not exists] &lt;index-name&gt; ON &lt;table-name&gt;
+    (&lt;field-name&gt; [ &lt;mapping-spec&gt; ], ...) 
+    [ES_SHARDS = &lt;n&gt;] [ES_REPLICAS = &lt;n&gt;]</pre>
+          <p>
+               For more information, see 
+               <a class="xref" href="index.html#create_fts_example" title="Example - Creating Full Text Search">
+          Example - Creating Full Text Search
+          </a>. 
+            </p>
+          <p>
+               After you create the text index, you can verify the same by 
+               using the following statement:
+            </p>
+          <pre class="programlisting">show indexes - table &lt;name&gt;</pre>
+          <p>
+               After you create the index, you can run the <code class="literal">show table</code>
+               command that lists the full text index that you have created. This
+               command will give the table structure including the indexes that have
+               been created for that table: 
+            </p>
+          <pre class="programlisting">show table -name &lt;tableName&gt;</pre>
+          <p>For example:</p>
+          <pre class="programlisting">kv-&gt; show table -name mytestTable
+{
+"type" : "table",
+"name" : "mytestTable",
+"owner" : null,
+"comment" : null,
+"shardKey" : [ "id" ],
+"primaryKey" : [ "id" ],
+"fields" : [ {
+"name" : "id",
+"type" : "INTEGER",
+"nullable" : true,
+"default" : null
+}, {
+"name" : "category",
+"type" : "STRING",
+"nullable" : true,
+"default" : null
+}, {
+"name" : "txt",
+"type" : "STRING",
+"nullable" : true,
+"default" : null
+} ],
+"indexes" : [ {
+"name" : "mytestIndex",
+"comment" : null,
+"fields" : [ "category", "txt" ]
+} ]
+}</pre>
+          <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+            <h3 class="title">Note</h3>
+            <p>
+                   You cannot evolve an index. If you want to change the index
+                   definition, for example, add more columns to the index 
+                   structure, you have to delete the index and create a new
+                   one. 
+                 </p>
+          </div>
+        </div>
+        <div class="sect2" lang="en" xml:lang="en">
+          <div class="titlepage">
+            <div>
+              <div>
+                <h3 class="title"><a id="mapping_es"></a>Mapping in Elasticsearch</h3>
+              </div>
+            </div>
+          </div>
+          <p>
+              This DDL command is similar to the command that creates 
+              regular secondary indexes. One difference is the addition 
+              of the optional &lt;mapping-spec&gt; clause that follows 
+              the field name. If present, &lt;mapping-spec&gt; is a small 
+              JSON document that influences Elasticsearch's treatment of 
+              the field. The other difference is optional settings of 
+              shards and replicas for the ES index.
+            </p>
+          <p>
+               When a user creates a text index, an ES index will be created and 
+               named as ondb.&lt;kvstore&gt;.&lt;table&gt;.&lt;textIndex&gt;. 
+               For more information, see the section
+               <a class="xref" href="index.html#create_es_for_each_textindex" title="Creating ES Index for Each Text Index in KVStore">
+              Creating ES Index for Each Text Index in KVStore
+          </a>.
+            </p>
+          <p>
+               The index contains a single mapping which is
+               generated from the CREATE FULLTEXT INDEX command.
+               See, <a class="ulink" href="https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping.html#mapping-type" target="_top">https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping.html#mapping-type</a>
+            </p>
+          <p>
+               One aspect of the mapping is a list of fields that 
+               compose the document type, along with their types. In  
+               the absence of a &lt;mapping-spec&gt;, Oracle NoSQL Database will supply 
+               a default type for each field that corresponds to the type 
+               of the column in the Oracle NoSQL Database table. For example, if a 
+               table column A has the type string, then the mapping 
+               supplied to Elasticsearch will declare a field named A 
+               of type string. If you want Elasticsearch to treat column 
+               A as an integer despite its being a string in Oracle NoSQL Database, 
+               you must provide an explicit type by including a
+               &lt;mapping-spec&gt; clause:
+            </p>
+          <pre class="programlisting">{ "type" : "integer" }</pre>
+          <p>
+               The &lt;mapping-spec&gt;, in addition to specifying the
+               type of the field, can also contain any of a large set 
+               of parameters for determining how Elasticsearch handles 
+               the field. For example, if you want to store the field, 
+               but not index it (that is, not make it available for 
+               search), you would include the tuple "index" : "no". 
+               For information on a list of such parameters, see:
+               <a class="ulink" href="https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping-params.html" target="_top">https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping-params.html</a>               
+            </p>
+          <p>
+               You may supply a &lt;mapping-spec&gt; that does not include
+               the <code class="literal">type</code> key, and Oracle NoSQL Database will supply 
+               the default type. 
+            </p>
+          <p>
+               The following scalar column type will be mapped to ES, STRING,  
+               INTEGER, LONG, BOOLEAN, FLOAT, DOUBLE. For example a Long ("LONG") 
+               in Oracle NoSQL Database will be mapped to Long ("long") in ES. 
+            </p>
+          <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+            <h3 class="title">Note</h3>
+            <p>
+                Indexed fields can include non-scalar types, which are specified
+                in the same way and with the same limitations as those for 
+                secondary indexes. For more information, see
+                <a href="../../GettingStartedGuideTables/indexnonscalar.html" class="olink">
+                Indexing Non-Scalar Data Types</a> in <em class="citetitle"> Oracle
+                Getting Started with Oracle NoSQL Database Tables</em>.
+              </p>
+          </div>
+        </div>
+        <div class="sect2" lang="en" xml:lang="en">
+          <div class="titlepage">
+            <div>
+              <div>
+                <h3 class="title"><a id="create_es_for_each_textindex"></a>
+              Creating ES Index for Each Text Index in KVStore
+          </h3>
+              </div>
+            </div>
+          </div>
+          <p>
+              For each text index in kvstore, an ES index is created with
+              a unique name: 
+            </p>
+          <pre class="programlisting">ondb.&lt;kvstore&gt;.&lt;table&gt;.&lt;textIndex&gt;</pre>
+          <p>
+               For example, for a text index <code class="literal">mytestIndex</code> in table
+               <code class="literal">mytestTable</code> in store mystore (mystore should be
+               set in a fixed width font, as are mytestIndex and mytestTable), 
+               the corresponding ES index would be:
+               <span class="emphasis"><em>ondb.mystore.mytesttable.mytestindex</em></span>.
+            </p>
+          <pre class="programlisting">ondb.&lt;kvstore&gt;.&lt;parentTable&gt;.&lt;childTable&gt;.&lt;textIndex&gt;
+</pre>
+          <p>
+               Since the ES index name uniquely identifies the text index
+               in kvstore, the ES index type will be constant name as
+               <span class="emphasis"><em>text_index_mapping</em></span>.
+            </p>
+        </div>
+        <div class="sect2" lang="en" xml:lang="en">
+          <div class="titlepage">
+            <div>
+              <div>
+                <h3 class="title"><a id="create_fts_example"></a>
+          Example - Creating Full Text Search
+          </h3>
+              </div>
+            </div>
+          </div>
+          <div class="orderedlist">
+            <ol type="1">
+              <li>
+                <p>
+                        Create a table as follows:
+                    </p>
+                <pre class="programlisting">kv-&gt; execute 'CREATE TABLE mytestTable 
+(id INTEGER, category STRING, txt STRING, PRIMARY KEY (id))'
+Statement completed successfully</pre>
+              </li>
+              <li>
+                <p>
+                        Use the following command to make a text index on that 
+                        table that indexes the category and txt columns:
+                   </p>
+                <pre class="programlisting">kv-&gt; execute 'CREATE FULLTEXT INDEX mytestIndex
+ON mytestTable (category, txt)'
+Statement completed successfully</pre>
+              </li>
+              <li>
+                <p>
+                        Insert data into the “mytestTable” Table:
+                   </p>
+                <pre class="programlisting">kv-&gt; put table -name mytestTable -json 
+'{ "id" : 1, "category" : "pun", "txt" : "Spring is natures way of
+saying, Let us party" }'
+Operation successful, row inserted.</pre>
+                <pre class="programlisting">kv-&gt; put table -name mytestTable -json 
+'{ "id" : 2, "category" : "self-referential", "txt" : "I am thankful
+for the mess to clean after a party because it means I have been
+surrounded by friends" }'
+Operation successful, row inserted.</pre>
+                <pre class="programlisting">kv-&gt; put table -name mytestTable -json 
+'{ "id" : 3, "category" : "stupid", "txt" : "Doing nothing is hard,
+you never know when you are done" }'
+Operation successful, row inserted.</pre>
+                <pre class="programlisting">kv-&gt; put table -name mytestTable -json 
+'{ "id" : 4, "category" : "thoughtful", "txt" : "Do not worry if plan
+A fails, there are 25 more letters in the alphabet" }'
+Operation successful, row inserted.</pre>
+                <pre class="programlisting">kv-&gt; get table -name mytestTable
+{"id":4,"category":"thoughtful","txt":"Do not worry if plan A fails, 
+there are 25 more letters in the alphabet"}
+{"id":1,"category":"pun","txt":"Spring is natures way of saying, 
+Let us party"}
+{"id":2,"category":"self-referential","txt":"I am thankful for the
+mess to clean after a party because it means I have been surrounded
+by friends"}
+{"id":3,"category":"stupid","txt":"Doing nothing is hard, you never
+know when you are done"}
+4 rows returned</pre>
+                <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+                  <h3 class="title">Note</h3>
+                  <p>
+                         As you enter these records, Oracle NoSQL Database produces
+                         a document that is sent to Elasticsearch for 
+                         indexing. You can find the document by 
+                         searching the Elasticsearch cluster. 
+                       </p>
+                  <p>
+                         elasticsearch-head is a plugin of Elasticsearch. For
+                         more information, see
+                         <a class="ulink" href="https://mobz.github.io/elasticsearch-head/" target="_top">https://mobz.github.io/elasticsearch-head/</a>. 
+                         It is recommended to use one of the Elasticsearch
+                         plugins to identify if the documents are getting
+                         indexed. 
+                       </p>
+                </div>
+                <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+                  <h3 class="title">Note</h3>
+                  <p>
+                         Once you get the result back from ES, you can use list 
+                         of  _id returned by elasticsearch to retrieve the records 
+                         from  Oracle NoSQL Database. 
+                       </p>
+                </div>
+              </li>
+              <li>
+                <p>
+                        Search Elasticsearch cluster to find the document
+                        that was created in the steps before. ES allows 
+                        REST calls as queries, so we can do REST calls using
+                        the <code class="literal">cURL</code> command. The 
+                        <code class="literal">cURL</code> command sends an http request
+                        to the ES node listening on port 9200.
+                   </p>
+                <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+                  <h3 class="title">Note</h3>
+                  <p>
+                         <code class="literal">cURL</code> is a common utility program
+                         that can issue and display the results of http
+                         requests. Currently, it is supported on Microsoft
+                         Windows, Linux, and Mac OS X. 
+                         For more information, see:
+                       <a class="ulink" href="https://en.wikipedia.org/wiki/CURL" target="_top">https://en.wikipedia.org/wiki/CURL</a> and
+                         <a class="xref" href="index.html#search_curl_example" title="Search Using cURL command">
+                Search Using <code class="literal">cURL</code> command</a>. 
+                         However, <code class="literal">cURL</code> is an alternative 
+                         method/option for querying Elasticsearch. The other 
+                         options can be using: 
+                       </p>
+                  <div class="itemizedlist">
+                    <ul type="disc">
+                      <li>
+                        <p>
+                              elasticsearch-head, a web front end for browsing 
+                              and interacting with an Elasticsearch cluster, 
+                              helps to query. elasticsearch-head is part 
+                              of ES standard installation and can be enabled by 
+                              following the steps mentioned here:
+                        <a class="ulink" href="https://mobz.github.io/elasticsearch-head/" target="_top">https://mobz.github.io/elasticsearch-head/</a> 
+                            </p>
+                        <p>
+                              For more information, see 
+                              <a class="xref" href="index.html#search_es-head_example" title="Search using elasticsearch-head">
+                Search using elasticsearch-head</a>.
+                            </p>
+                      </li>
+                      <li>
+                        <p>
+                              Java API commands, see section
+                              <a class="xref" href="index.html#search_java_example" title="Search Text Index using JAVA APIs">
+                Search Text Index using JAVA APIs</a>. 
+                            </p>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </li>
+            </ol>
+          </div>
+          <div class="sect3" lang="en" xml:lang="en">
+            <div class="titlepage">
+              <div>
+                <div>
+                  <h4 class="title"><a id="search_curl_example"></a>
+                Search Using <code class="literal">cURL</code> command</h4>
+                </div>
+              </div>
+            </div>
+            <div class="itemizedlist">
+              <ul type="disc">
+                <li>
+                  <p>
+                           Use the following cURL command to produce every 
+                           document that is indexed with the mytestIndex 
+                           mapping:
+                        </p>
+                  <pre class="programlisting">curl -s localhost:9200/ondb.mystore
+.mytesttable.mytestindex/_search\?pretty
+{
+  "took" : 4,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 5,
+    "successful" : 5,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : 4,
+    "max_score" : 1.0,
+    "hits" : [ {
+      "_index" : "ondb.mystore.mytesttable.mytestindex",
+      "_type" : "text_index_mapping",
+      "_id" : "/w/¨0003",
+      "_score" : 1.0,
+      "_source":{"_pkey":{"_table":"mytestTable","id":"3"},"category":
+      "stupid","txt":       "Doing nothing is hard, you never know when
+      you are done"}
+    }, {
+      "_index" : "ondb.mystore.mytesttable.mytestindex",
+      "_type" : "text_index_mapping",
+      "_id" : "/w/¨0002",
+      "_score" : 1.0,
+      "_source":{"_pkey":{"_table":"mytestTable","id":"2"},"category":
+      "self-referential","txt": "I am thankful for the mess to clean
+      after a party because it means I have been surrounded by friends"}
+    }, {
+      "_index" : "ondb.mystore.mytesttable.mytestindex",
+      "_type" : "text_index_mapping",
+      "_id" : "/w/¨0004",
+      "_score" : 1.0,
+      "_source":{"_pkey":{"_table":"mytestTable","id":"4"},"category":
+      "thoughtful","txt": "Do not worry if plan A fails, there are 25
+      more letters in the alphabet"}
+    }, {
+      "_index" : "ondb.mystore.mytesttable.mytestindex",
+      "_type" : "text_index_mapping",
+      "_id" : "/w/¨0001",
+      "_score" : 1.0,
+      "_source":{"_pkey":{"_table":"mytestTable","id":"1"},"category":
+      "pun","txt": "Spring is natures way of saying, Let us party"}
+    } ]
+  }
+}</pre>
+                  <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+                    <h3 class="title">Note</h3>
+                    <div class="itemizedlist">
+                      <ul type="circle">
+                        <li>
+                          <p>
+                           The name that we gave to the text index in 
+                           the CREATE FULLTEXT statement was "mytestIndex", 
+                           so we are restricting the search to the ES index 
+                           associated with that Oracle NoSQL Database text index. 
+                        </p>
+                        </li>
+                        <li>
+                          <p>
+                           The "cURL" command above asked to search for every
+                           record in mytestIndex (there is no search term, so 
+                           every record matches the search). The argument 
+                           "pretty" means to pretty-print the output. 
+                        </p>
+                        </li>
+                        <li>
+                          <p>
+                           The result contains an array of "hits" with a single member.
+                           The interesting property is "_source" which contains "_pkey"
+                           which has the table and primary key for the original kvstore
+                           record; and the two indexed fields "category" and "txt".
+                        </p>
+                        </li>
+                        <li>
+                           Each item has a “_score” field which Elasticsearch uses to
+                           indicate the level of relevance for search hits. For more
+                           information, see:
+<a class="ulink" href="https://www.elastic.co/guide/en/elasticsearch/guide/current/relevance-intro.html" target="_top">https://www.elastic.co/guide/en/elasticsearch/guide/current/relevance-intro.html</a></li>
+                      </ul>
+                    </div>
+                  </div>
+                </li>
+                <li>
+                  <p>
+                           You can narrow the search by putting a search term into 
+                             request, using "q=" like the example below:
+                        </p>
+                  <pre class="programlisting">curl -s localhost:9200/ondb.mystore.mytesttable
+.mytestindex/_search\?q=25\&amp;pretty
+{
+  "took" : 11,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 5,
+    "successful" : 5,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : 1,
+    "max_score" : 0.25,
+    "hits" : [ {
+      "_index" : "ondb.mystore.mytesttable.mytestindex",
+      "_type" : "text_index_mapping",
+      "_id" : "/w/¨0004",
+      "_score" : 0.25,
+      "_source":{"_pkey":{"_table":"mytestTable","id":"4"},"category":
+      "thoughtful","txt": "Do not worry if plan A fails, there are 25
+      more letters in the alphabet"}
+    } ]
+  }
+}</pre>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <div class="sect3" lang="en" xml:lang="en">
+            <div class="titlepage">
+              <div>
+                <div>
+                  <h4 class="title"><a id="search_es-head_example"></a>
+                Search using elasticsearch-head</h4>
+                </div>
+              </div>
+            </div>
+            <p>
+                           An aggregated query looks as follows:
+                        </p>
+            <div class="mediaobject">
+              <img src="aggregate_search.jpg" />
+            </div>
+            <p>
+                           A query with “match_all” looks as follows:
+                        </p>
+            <div class="mediaobject">
+              <img src="match-all_search.jpg" />
+            </div>
+            <p>
+                     For more information, see
+                  <a class="ulink" href="https://mobz.github.io/elasticsearch-head/" target="_top">https://mobz.github.io/elasticsearch-head/</a> 
+                     </p>
+          </div>
+          <div class="sect3" lang="en" xml:lang="en">
+            <div class="titlepage">
+              <div>
+                <div>
+                  <h4 class="title"><a id="search_java_example"></a>
+                Search Text Index using JAVA APIs</h4>
+                </div>
+              </div>
+            </div>
+            <p>
+                           For information on creating Oracle NoSQL Database tables, see 
+                      <a href="../../GettingStartedGuideTables/tablesapi.html" class="olink">
+                           Introducing Oracle NoSQL Database Tables and Indexes</a> in the 
+                           <em class="citetitle">Getting Started with Oracle NoSQL Database
+                           Tables</em> guide. To create a text 
+                           index, you must use the method KVStore.executeSync 
+                           to issue the DDL command CREATE FULLTEXT INDEX, as
+                           mentioned in the section
+                           <a class="xref" href="index.html#create_fts_example" title="Example - Creating Full Text Search">
+          Example - Creating Full Text Search
+          </a>.
+                        </p>
+            <p>
+                           Searching the index, on the other hand, must be done
+                           using Elasticsearch APIs. Here is a very simple 
+                           example of a program that searches a document 
+                           type that corresponds to an Oracle NoSQL Database text index. 
+                           This command, given the arguments 
+                           "localhost 9300 kvstore MyIndex 25" produces exactly 
+                           the same output as the curl command in the section 
+                           <a class="xref" href="index.html#search_curl_example" title="Search Using cURL command">
+                Search Using <code class="literal">cURL</code> command</a>. 
+                        </p>
+            <div class="note" style="margin-left: 0.5in; margin-right: 0.5in;">
+              <h3 class="title">Note</h3>
+              <p>
+                                 To build and run this program, you will need all 
+                                 jar files supplied with the Elasticsearch 
+                                 distribution in your class path. One way to 
+                                 achieve this would be to use the java command's 
+                                 class path wildcard feature, for example:
+                               </p>
+            </div>
+            <pre class="programlisting">java -cp ".:/home/…/elasticsearch-2.0.0/lib/*" \
+    DoSearch localhost 9300 kvstore mytestIndex 25</pre>
+            <p>
+                 See the following example program:
+            </p>
+            <pre class="programlisting">import java.net.InetAddress;
+
+import org.elasticsearch.action.search.SearchRequestBuilder;
+import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.client.transport.TransportClient;
+import org.elasticsearch.common.transport.InetSocketTransportAddress;
+import org.elasticsearch.index.query.QueryBuilders;
+
+public class DoSearch {
+
+    public static void main(String args[]) throws Exception {
+        
+        if (args.length &lt; 4 || args.length &gt; 5) {
+            System.err.println
+                ("Usage: DoSearch &lt;esTransportHost&gt; &lt;esTransportPort&gt; " +
+                 "&lt;kvStoreName&gt; &lt;tableName&gt; &lt;indexName&gt; [search-term]");
+        }
+        String esTransportHost = args[0];
+        int esTransportPort = Integer.parseInt(args[1]);
+        String kvStoreName = args[2];
+        String tableName = args[3];
+        String indexName = args[4];
+        String searchTerm = args.length &gt; 5 ? args[5] : null;
+
+        TransportClient client =
+            TransportClient.builder().build();
+
+        client.addTransportAddress
+            (new InetSocketTransportAddress
+             (InetAddress.getByName(esTransportHost), esTransportPort));
+
+        final String esIndexName = "ondb." + kvStoreName.toLowerCase() 
+        + "." +
+            tableName + "." + indexName;
+            
+        SearchRequestBuilder sb = client.prepareSearch(esIndexName);
+        if (searchTerm != null) {
+            sb.setQuery(QueryBuilders.simpleQueryStringQuery(searchTerm));
+        }
+            
+        SearchResponse response = sb.execute().actionGet();
+        System.out.println(response);
+    }
+}</pre>
+          </div>
+        </div>
+        <div class="sect2" lang="en" xml:lang="en">
+          <div class="titlepage">
+            <div>
+              <div>
+                <h3 class="title"><a id="drop_index"></a>Drop Index</h3>
+              </div>
+            </div>
+          </div>
+          <p>
+                 Text indexes share the same namespace as regular 
+                 secondary indexes within a table. You can use the 
+                 same statement to remove either type of index. 
+                 DROP INDEX on a text index stops the population 
+                 of the index from Oracle NoSQL Database shards, and 
+                 removes the mapping and all related documents 
+                 from ES. If a fulltext index is to be modified, then 
+                 it must first be undeployed, and then re-deployed 
+                 after modification. There is no means of
+                 "evolving" a fulltext index.
+            </p>
+          <p>
+                 If a table to which a text index mapping refers 
+                 is dropped, the text index will automatically 
+                 be dropped as part of the process.
+            </p>
+          <p>
+                 You can drop text indexes by using this DDL command:
+            </p>
+          <pre class="programlisting">DROP INDEX [IF EXISTS] index_name ON table_name
+DROP TABLE [IF EXISTS] table_name</pre>
+          <p>
+                 For example:
+            </p>
+          <pre class="programlisting">kv-&gt; execute 'drop table mytestTable'
+Statement completed successfully</pre>
+        </div>
+      </div>
+      <div class="sect1" lang="en" xml:lang="en">
+        <div class="titlepage">
+          <div>
+            <div>
+              <h2 class="title" style="clear: both"><a id="troubleshooting"></a>Troubleshooting</h2>
+            </div>
+          </div>
+        </div>
+        <p>
+            The most common problems that might arise when using
+             Oracle NoSQL Database with Elasticsearch are those related to
+             data transfer failure and data not getting indexed. For
+             information on troubleshooting in ES, see:
+<a class="ulink" href="https://www.elastic.co/guide/en/elasticsearch/hadoop/current/troubleshooting.html" target="_top">https://www.elastic.co/guide/en/elasticsearch/hadoop/current/troubleshooting.html</a>
+        </p>
+        <p>
+             The following sections describe some of the causes of
+             these issues and provides steps you can follow to 
+             resolve these problems. Here are some things you can 
+             check to verify whether the data is successfully 
+             transferred and indexed: 
+        </p>
+        <div class="itemizedlist">
+          <ul type="disc">
+            <li>
+              <p>
+                 You can verify Oracle NoSQL Database's information that it uses 
+                 to connect to the Elasticsearch cluster by issuing 
+                 the runadmin command <code class="literal">show parameters -service sn1
+                 </code> where <code class="literal">sn1</code> is the id of any 
+                 storage node in the store. The parameters of interest are 
+                 <code class="literal">searchClusterName</code> which is the
+                 Elasticsearch cluster name; and <code class="literal">searchClusterMembers
+                 </code> which is a list of <code class="literal">host:port</code> 
+                 representing the nodes in the Elasticsearch cluster.
+              </p>
+            </li>
+            <li>
+              <p>
+                 Be sure that when you are registering the ES cluster, you
+                 give an ES node's transport port and not its http port.
+              </p>
+            </li>
+            <li>
+              <p>
+                 You can do a quick check of connectivity from the Oracle NoSQL Database 
+                 master administrative node by re-registering the ES
+                 cluster using the command <code class="literal">plan register-es</code>. 
+                 This plan is safe to run multiple times. If it runs without
+                 errors, then the ES cluster is at least available to the
+                 administrative node. 
+              </p>
+            </li>
+            <li>
+              <p>
+                 Both Oracle NoSQL Database and ES nodes should be configured to listen on 
+                 appropriate network interfaces. If an Oracle NoSQL Database store is using 
+                 a public interface, but Elasticsearch is using the loopback  
+                 interface, then they will not be able to communicate properly. 
+                 The network interface is configured for an Elasticsearch 
+                 node by the property <code class="literal">network.host</code> in the 
+                 <code class="literal">elasticsearch.yml</code>, and for an Oracle NoSQL Database 
+                 storage node by the <code class="literal">-host</code> option to the
+                 <code class="literal">makebootconfig</code> command. 
+              </p>
+            </li>
+            <li>
+              <p>
+                 You can issue a command like 
+                 <code class="literal">curl http://localhost:9200/_cat/indices</code> 
+                 to get a list of the indexes in an Elasticsearch cluster, 
+                 to verify that they correspond to the text indexes you  
+                 created in Oracle NoSQL Database. The output of this command will also
+                 show an indication of the status of each index using the 
+                 color names green, yellow, and red. If the status is red, 
+                 then the index cannot be populated. 
+              </p>
+            </li>
+            <li>
+              <p>
+                 If you see unexplained failures to index, see the RepNode 
+                 logs for SEVERE log messages or exceptions related to 
+                 Elasticsearch. For information about finding logs, see
+                 <a href="../../Runbook/softwaremonitor.html" class="olink">
+                Software Monitoring</a> in the <em class="citetitle">Oracle NoSQL Database Runbook</em>.
+               </p>
+            </li>
+            <li>
+              <p>
+                 With a heavily update-dominated work load, the Elasticsearch 
+                 cluster can lag quite far behind Oracle NoSQL Database. It can take minutes 
+                 for a new Oracle NoSQL Database record to be reflected in search results from 
+                 Elasticsearch. This issue can be mitigated by increasing the 
+                 number of Elasticsearch nodes, tuning Elasticsearch, and
+                 especially by storing Elasticsearch data on solid state disks.
+              </p>
+            </li>
+            <li>
+              <p>Compare Record counts</p>
+              <p>
+                 You can compare the number of records in table for Oracle NoSQL Database with 
+                 the number of documents in your Elasticsearch cluster (this 
+                 assumes that the Oracle NoSQL Database has a static number of items). This 
+                 is particularly useful, for instance your cluster is in a 
+                 test environment where the number of records is set and you 
+                 do not add more. To find the number of records in Oracle NoSQL Database, use 
+                 the following statement in the Command Line Interface (CLI): 
+              </p>
+              <pre class="programlisting">kv-&gt; aggregate table -name mytestTable -count
+Row count: 100</pre>
+              <p>
+                 To get the number of records for Elasticsearch,
+                 use the following command:
+<a class="ulink" href="http://localhost:9200/ondb.mystore.joke.jokeindex/_count" target="_top">http://localhost:9200/ondb.mystore.joke.jokeindex/_count</a>
+               </p>
+              <p>If it is successful, you get the following response:</p>
+              <pre class="programlisting">{"count":100,"_shards":
+    {
+    "total":5,"successful":5,"failed":0
+    }
+}</pre>
+              <p>
+                 The <code class="literal">count</code> returned by Elasticsearch is the 
+                 same value as the number of records shown in the CLI. The 
+                 matching values provide assurance that all records have been 
+                 transferred and indexed by Elasticsearch.
+               </p>
+            </li>
+            <li>
+              <p>ElasticServer Version Mismatch </p>
+              <p>
+                 You must use Elasticsearch 2.0 version. A different version, 
+                 for example ES 1.7.3, populates the following error:
+             </p>
+              <pre class="programlisting">kv-&gt; plan register-es -clustername elasticsearch -host 
+localhost -port 9300
+Can't connect to an Elasticsearch cluster at localhost:9300 
+{elasticsearch}</pre>
+              <p>The Admin log shows this:</p>
+              <pre class="programlisting">2016-04-05 20:20:19.512 UTC INFO
+[admin1] [Washout] loaded [], sites []
+2016-04-05 20:20:20.434 UTC INFO [admin1] [Washout] 
+failed to get local cluster state for
+{#transport#-1}{127.0.0.1}{localhost/127.0.0.1:9300}, 
+disconnecting...
+RemoteTransportException[[Failed to deserialize response
+of type [org.elasticsearch.action.admin.cluster.state.
+ClusterStateResponse]]]; 
+nested: TransportSerializationException
+[Failed to deserialize response of 
+type [org.elasticsearch.action.admin.cluster.state.
+ClusterStateResponse]]; nested: 
+IndexOutOfBoundsException[Readable byte limit exceeded: 107];</pre>
+            </li>
+            <li>
+              <p>Check Elasticsearch Mappings</p>
+              <p>
+                 You can influence the mapping by including a mapping-spec 
+                 in the original CREATE command, but you cannot provide your 
+                 own mapping. Be aware that this default mapping from 
+                 Elasticsearch includes assumptions about data types and data 
+                 structures in your documents. On the basis of these assumptions, 
+                 Elasticsearch may omit your document from the index. For example, 
+                 string mapped to object will not be indexed in the current version. 
+                 Also, a record that contains only empty strings or nulls in the 
+                 indexed fields will be omitted. For more information about expected 
+                 data structures see: 
+<a class="ulink" href="https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping.html" target="_top">https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping.html</a>
+             </p>
+            </li>
+            <li>
+              <p>
+                 The population of a new text index begins immediately when it is 
+                 created. If the existing database is large, this operation can take 
+                 quite a long time. Furthermore, when a text index is created, if 
+                 other text indexes that were created earlier already exist, they 
+                 too will be populated over again from scratch. This is because 
+                 all text indexes share the single gateway in server to stream 
+                 data to the ES cluster, and due to the newly added index, the 
+                 gateway has to start from the very beginning, resulting 
+                 re-populating all indexes. For these reasons it is best 
+                 to create all the text indexes that you need at the same 
+                 time, and preferably before the database has been populated.
+             </p>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="navfooter">
+      <hr />
+    </div>
+  </body>
+</html>

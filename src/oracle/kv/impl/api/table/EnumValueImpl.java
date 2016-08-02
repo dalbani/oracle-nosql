@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -49,14 +49,11 @@ import oracle.kv.table.EnumValue;
 import oracle.kv.table.FieldDef;
 import oracle.kv.table.FieldValue;
 
-import org.apache.avro.Schema;
-import org.apache.avro.generic.GenericData;
-
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.TextNode;
+import org.codehaus.jackson.util.CharTypes;
 
 import com.sleepycat.persist.model.Persistent;
-import org.codehaus.jackson.util.CharTypes;
 
 /**
  * A single value in an enumeration is represented as a string.  Only strings
@@ -66,10 +63,13 @@ import org.codehaus.jackson.util.CharTypes;
  * the enumeration.
  */
 @Persistent(version=1)
-class EnumValueImpl extends FieldValueImpl implements EnumValue {
+public class EnumValueImpl extends FieldValueImpl implements EnumValue {
+
     private static final long serialVersionUID = 1L;
+
     private final EnumDefImpl field;
-    private final String value;
+
+    private String value;
 
 
     EnumValueImpl(EnumDef field, String value) {
@@ -85,20 +85,9 @@ class EnumValueImpl extends FieldValueImpl implements EnumValue {
         value = null;
     }
 
-    @Override
-    public EnumDef getDefinition() {
-        return field;
-    }
-
-    @Override
-    public String get() {
-        return value;
-    }
-
-    @Override
-    public FieldDef.Type getType() {
-        return FieldDef.Type.ENUM;
-    }
+    /*
+     * Public api methods from Object and FieldValue
+     */
 
     @Override
     public EnumValueImpl clone() {
@@ -106,11 +95,16 @@ class EnumValueImpl extends FieldValueImpl implements EnumValue {
     }
 
     @Override
+    public int hashCode() {
+        return value.hashCode();
+    }
+
+    @Override
     public boolean equals(Object other) {
         if (other instanceof EnumValueImpl) {
             EnumValueImpl otherVal = (EnumValueImpl) other;
             EnumDefImpl def = field;
-            EnumDefImpl otherDef = (EnumDefImpl) otherVal.getDefinition();
+            EnumDefImpl otherDef = otherVal.getDefinition();
             /*
              * Avoid calling EnumDefImpl.equals() because it will
              * result in a recursive calling circle.
@@ -119,11 +113,6 @@ class EnumValueImpl extends FieldValueImpl implements EnumValue {
                     value.equals(otherVal.get()));
         }
         return false;
-    }
-
-    @Override
-    public int hashCode() {
-        return value.hashCode();
     }
 
     /**
@@ -142,6 +131,21 @@ class EnumValueImpl extends FieldValueImpl implements EnumValue {
     }
 
     @Override
+    public String toString() {
+        return value;
+    }
+
+    @Override
+    public FieldDef.Type getType() {
+        return FieldDef.Type.ENUM;
+    }
+
+    @Override
+    public EnumDefImpl getDefinition() {
+        return field;
+    }
+
+    @Override
     public EnumValue asEnum() {
         return this;
     }
@@ -151,14 +155,37 @@ class EnumValueImpl extends FieldValueImpl implements EnumValue {
         return true;
     }
 
-    /**
-     * In order to sort correctly keys from an enumeration value must be the
-     * value's index in the declaration.
-     */
     @Override
-    public String formatForKey(FieldDef field1) {
-        return SortableString.toSortable
-            (getIndex(), (field).getEncodingLen());
+    public boolean isAtomic() {
+        return true;
+    }
+
+    /*
+     * Public api methods from EnumValue
+     */
+
+    @Override
+    public String get() {
+        return value;
+    }
+
+    @Override
+    public int getIndex() {
+        return (field).indexOf(value);
+    }
+
+    /*
+     * FieldValueImpl internal api methods
+     */
+
+    @Override
+    public String getEnumString() {
+        return value;
+    }
+
+    @Override
+    public void setEnum(String v) {
+        value = v;
     }
 
     /**
@@ -184,6 +211,16 @@ class EnumValueImpl extends FieldValueImpl implements EnumValue {
         return (field).createEnum(0);
     }
 
+    /**
+     * In order to sort correctly keys from an enumeration value must be the
+     * value's index in the declaration.
+     */
+    @Override
+    public String formatForKey(FieldDef field1, int storageSize) {
+        return SortableString.toSortable
+            (getIndex(), (field).getEncodingLen());
+    }
+
     @Override
     public JsonNode toJsonNode() {
         return new TextNode(value);
@@ -201,36 +238,13 @@ class EnumValueImpl extends FieldValueImpl implements EnumValue {
         sb.append('\"');
     }
 
-    @Override
-    public int getIndex() {
-        return (field).indexOf(value);
-    }
-
-    /**
-     * Overrides the FieldValueImpl method to make sure that the correct schema
-     * is used when constructing the GenericEnumSymbol instance.
+    /*
+     * local methods
      */
-    @Override
-    Object toAvroValue(Schema schema) {
-        Schema toUse = getUnionSchema(schema, Schema.Type.ENUM);
-        return new GenericData.EnumSymbol(toUse, get());
-    }
-
-    @Override
-    public String toString() {
-        return value;
-    }
 
     int indexOf(String enumValue) {
         return (field).indexOf(enumValue);
     }
-
-    static EnumValueImpl createFromKey(EnumDef field, String indexString) {
-        EnumDefImpl def = (EnumDefImpl)field;
-        int index = SortableString.intFromSortable(indexString);
-        return def.createEnum(index);
-    }
-
 
     private void validate() {
         if (field != null && value != null) {
@@ -239,5 +253,11 @@ class EnumValueImpl extends FieldValueImpl implements EnumValue {
         }
         throw new IllegalArgumentException
             ("Value not valid for enumeration: " + value);
+    }
+
+    static EnumValueImpl createFromKey(EnumDef field, String indexString) {
+        EnumDefImpl def = (EnumDefImpl)field;
+        int index = SortableString.intFromSortable(indexString);
+        return def.createEnum(index);
     }
 }

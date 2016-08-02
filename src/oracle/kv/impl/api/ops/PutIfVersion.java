@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,16 +43,14 @@
 
 package oracle.kv.impl.api.ops;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 
 import oracle.kv.ReturnValueVersion;
 import oracle.kv.Value;
 import oracle.kv.Version;
-import oracle.kv.impl.topo.PartitionId;
-
-import com.sleepycat.je.Transaction;
+import oracle.kv.table.TimeToLive;
 
 /**
  * Inserts a key/data pair.
@@ -79,19 +77,34 @@ public class PutIfVersion extends Put {
                         ReturnValueVersion.Choice prevValChoice,
                         Version matchVersion,
                         long tableId) {
-        super(OpCode.PUT_IF_VERSION, keyBytes, value, prevValChoice, tableId);
-        this.matchVersion = matchVersion;
+        this(keyBytes, value, prevValChoice, matchVersion, tableId,
+                null, false);
     }
 
+    public PutIfVersion(byte[] keyBytes,
+            Value value,
+            ReturnValueVersion.Choice prevValChoice,
+            Version matchVersion,
+            long tableId,
+            TimeToLive ttl,
+            boolean updateTTL) {
+        super(OpCode.PUT_IF_VERSION, keyBytes, value, prevValChoice, tableId,
+                ttl, updateTTL);
+        this.matchVersion = matchVersion;
+    }
     /**
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    PutIfVersion(ObjectInput in, short serialVersion)
+    PutIfVersion(DataInput in, short serialVersion)
         throws IOException {
 
         super(OpCode.PUT_IF_VERSION, in, serialVersion);
-        matchVersion = new Version(in, serialVersion);
+        matchVersion = Version.createVersion(in, serialVersion);
+    }
+
+    Version getMatchVersion() {
+        return matchVersion;
     }
 
     /**
@@ -99,29 +112,11 @@ public class PutIfVersion extends Put {
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);
         matchVersion.writeFastExternal(out, serialVersion);
-    }
-
-    @Override
-    public Result execute(Transaction txn,
-                          PartitionId partitionId,
-                          OperationHandler operationHandler) {
-
-        verifyDataAccess(operationHandler, getTableId());
-
-        final ReturnResultValueVersion prevVal =
-            new ReturnResultValueVersion(getReturnValueVersionChoice());
-
-        final Version newVersion = operationHandler.putIfVersion
-            (txn, partitionId, getKeyBytes(), getValueBytes(), matchVersion,
-             prevVal);
-
-        return new Result.PutResult(getOpCode(), prevVal.getValueVersion(),
-                                    newVersion);
     }
 
     @Override

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2014 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -320,7 +320,7 @@ public abstract class StatsScan <T extends LeaseInfo> {
     /**
      * Add a scan result into a list.
      *
-     * @param statisticsInfo stored result, must not be null
+     * @param row a row of collected statistics result
      */
     protected void addRow(Row row) {
         statRows.add(row);

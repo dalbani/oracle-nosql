@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,9 +43,9 @@
 
 package oracle.kv.impl.topo;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
 
 import com.sleepycat.persist.model.Persistent;
 
@@ -80,7 +80,7 @@ public class DatacenterId extends ResourceId
      * FastExternalizable constructor.  Must call superclass constructor first
      * to read common elements.
      */
-    public DatacenterId(ObjectInput in, short serialVersion)
+    public DatacenterId(DataInput in, short serialVersion)
         throws IOException {
 
         super(in, serialVersion);
@@ -92,7 +92,7 @@ public class DatacenterId extends ResourceId
      * common elements.
      */
     @Override
-    public void writeFastExternal(ObjectOutput out, short serialVersion)
+    public void writeFastExternal(DataOutput out, short serialVersion)
         throws IOException {
 
         super.writeFastExternal(out, serialVersion);

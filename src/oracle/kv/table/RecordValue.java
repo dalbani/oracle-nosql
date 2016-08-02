@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -63,6 +63,7 @@ public interface RecordValue extends FieldValue {
      *
      * @return the RecordDef
      */
+    @Override
     RecordDef getDefinition();
 
     /**
@@ -79,6 +80,24 @@ public interface RecordValue extends FieldValue {
     List<String> getFields();
 
     /**
+     * Returns a deep copy of this object.
+     *
+     * @return a deep copy of this object
+     */
+    @Override
+    public RecordValue clone();
+
+    /**
+     * Returns a String representation of the value.  The value is returned
+     * is a JSON string, and is the same as that returned by
+     * {@link FieldValue#toJsonString}.
+     *
+     * @return a String representation of the value
+     */
+    @Override
+    public String toString();
+
+    /**
      * Returns the value of the named field.
      *
      * @param fieldName the name of the desired field
@@ -90,6 +109,65 @@ public interface RecordValue extends FieldValue {
      * the definition of the object
      */
     FieldValue get(String fieldName);
+
+    /**
+     * Returns the value of the indexed field, by definition order.
+     *
+     * @param fieldIndex the index of the desired field.
+     *
+     * @return the field value if it is available, null if it has not
+     * been set
+     *
+     * @throws IndexOutOfBoundsException if the named field does not exist in
+     * the definition of the object
+     *
+     * @since 4.0
+     */
+    FieldValue get(int fieldIndex);
+
+    /**
+     * Returns the number of the record's fields that have been set. Only
+     * top-level fields are counted.
+     *
+     * @return the number of fields that have been set.
+     */
+    int size();
+
+    /**
+     * Returns true if none of the record's fields have been set, false otherwise.
+     *
+     * @return true if none of the record's fields have been set, false otherwise.
+     */
+    boolean isEmpty();
+
+    /**
+     * Copies the fields from another RecordValue instance, overwriting
+     * fields in this object with the same name.
+     *
+     * @param source the source RecordValue from which to copy
+     *
+     * @throws IllegalArgumentException if the {@link RecordDef} of source
+     * does not match that of this instance.
+     */
+    void copyFrom(RecordValue source);
+
+    /**
+     * Returns true if the record contains the named field.
+     *
+     * @param fieldName the name of the field
+     *
+     * @return true if the field exists in the record, otherwise null
+     */
+    boolean contains(String fieldName);
+
+    /**
+     * Remove the named field if it exists.
+     *
+     * @param fieldName the name of the field to remove
+     *
+     * @return the FieldValue if it existed, otherwise null
+     */
+    FieldValue remove(String fieldName);
 
     /**
      * Set the named field, silently overwriting existing values.
@@ -555,66 +633,4 @@ public interface RecordValue extends FieldValue {
     RecordValue putMapAsJson(String fieldName,
                              InputStream jsonInput,
                              boolean exact);
-
-    /**
-     * Returns the number of fields in the record.  Only top-level fields are
-     * counted.
-     *
-     * @return the number of fields
-     */
-    int size();
-
-    /**
-     * Returns true if there are no fields in the record, false otherwise.
-     *
-     * @return true if there are no fields in the record, false otherwise
-     */
-    boolean isEmpty();
-
-    /**
-     * Remove the named field if it exists.
-     *
-     * @param fieldName the name of the field to remove
-     *
-     * @return the FieldValue if it existed, otherwise null
-     */
-    FieldValue remove(String fieldName);
-
-    /**
-     * Copies the fields from another RecordValue instance, overwriting
-     * fields in this object with the same name.
-     *
-     * @param source the source RecordValue from which to copy
-     *
-     * @throws IllegalArgumentException if the {@link RecordDef} of source
-     * does not match that of this instance.
-     */
-    void copyFrom(RecordValue source);
-
-    /**
-     * Returns true if the record contains the named field.
-     *
-     * @param fieldName the name of the field
-     *
-     * @return true if the field exists in the record, otherwise null
-     */
-    boolean contains(String fieldName);
-
-    /**
-     * Returns a deep copy of this object.
-     *
-     * @return a deep copy of this object
-     */
-    @Override
-    public RecordValue clone();
-
-    /**
-     * Returns a String representation of the value.  The value is returned
-     * is a JSON string, and is the same as that returned by
-     * {@link FieldValue#toJsonString}.
-     *
-     * @return a String representation of the value
-     */
-    @Override
-    public String toString();
 }

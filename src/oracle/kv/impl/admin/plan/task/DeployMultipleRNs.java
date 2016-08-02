@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,6 +48,7 @@ import java.util.Set;
 
 import oracle.kv.impl.admin.Admin;
 import oracle.kv.impl.admin.PlanLocksHeldException;
+import oracle.kv.impl.admin.param.ArbNodeParams;
 import oracle.kv.impl.admin.param.Parameters;
 import oracle.kv.impl.admin.param.RepNodeParams;
 import oracle.kv.impl.admin.param.StorageNodeParams;
@@ -59,6 +60,7 @@ import oracle.kv.impl.metadata.MetadataInfo;
 import oracle.kv.impl.param.ParameterMap;
 import oracle.kv.impl.security.login.LoginManager;
 import oracle.kv.impl.sna.StorageNodeAgentAPI;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.RepGroupId;
 import oracle.kv.impl.topo.RepNodeId;
 import oracle.kv.impl.topo.StorageNode;
@@ -69,8 +71,8 @@ import oracle.kv.impl.util.registry.RegistryUtils;
 import com.sleepycat.persist.model.Persistent;
 
 /**
- * Task for creating and starting all RepNodes which are housed on a particular
- * Storage Node.
+ * Task for creating and starting all RepNodes and ArbNodes which are
+ * housed on a particular Storage Node.
  *
  * version 0: original.
  */
@@ -115,6 +117,18 @@ public class DeployMultipleRNs extends SingleJobTask {
         return targetSet;
     }
 
+    private Set<ArbNodeId> getANTargets() {
+        Parameters parameters = plan.getAdmin().getCurrentParameters();
+        Set<ArbNodeId> targetSet = new HashSet<ArbNodeId>();
+
+        for (ArbNodeParams anp: parameters.getArbNodeParams()) {
+            if (anp.getStorageNodeId().equals(snId)) {
+                targetSet.add(anp.getArbNodeId());
+            }
+        }
+        return targetSet;
+    }
+
     @Override
     public State doWork()
         throws Exception {
@@ -135,6 +149,8 @@ public class DeployMultipleRNs extends SingleJobTask {
         int gcThreads = snp.calcGCThreads();
         Set<RepNodeId> targetRNIds = getTargets();
         int numRNsOnSN = targetRNIds.size();
+        int numANsOnSN = topo.getHostedArbNodeIds(snId).size();
+
 
         final Set<Metadata<? extends MetadataInfo>> metadataSet =
                                             Utils.getMetadataSet(topo, plan);
@@ -144,7 +160,8 @@ public class DeployMultipleRNs extends SingleJobTask {
             RNHeapAndCacheSize heapAndCache =
                 snp.calculateRNHeapAndCache(policyMap,
                                             numRNsOnSN,
-                                            rnp.getRNCachePercent());
+                                            rnp.getRNCachePercent(),
+                                            numANsOnSN);
             rnp.setRNHeapAndJECache(heapAndCache);
             rnp.setParallelGCThreads(gcThreads);
             sna.createRepNode(rnp.getMap(), metadataSet);
@@ -155,6 +172,19 @@ public class DeployMultipleRNs extends SingleJobTask {
                                              sn.getRegistryPort(),
                                              rnId);
         }
+
+        Set<ArbNodeId> targetANIds = getANTargets();
+        for (ArbNodeId anId : targetANIds) {
+            ArbNodeParams anp = admin.getArbNodeParams(anId);
+            sna.createArbNode(anp.getMap());
+
+            /* Register this arbNode with the monitor. */
+            StorageNode sn = topo.get(snId);
+            admin.getMonitor().registerAgent(sn.getHostname(),
+                                             sn.getRegistryPort(),
+                                             anId);
+        }
+
 
         /*
          * At this point, we've succeeded. The user will have to rely on ping
@@ -169,7 +199,7 @@ public class DeployMultipleRNs extends SingleJobTask {
     }
 
     @Override
-    public void lockTopoComponents(Planner planner) 
+    public void lockTopoComponents(Planner planner)
         throws PlanLocksHeldException {
         Set<RepNodeId> targets = getTargets();
 

@@ -7,5 +7,6 @@ oracle.kv.hadoop.hive.table
 oracle.kv.hadoop.table
 oracle.kv.lob
 oracle.kv.mgmt.jmx
+oracle.kv.query
 oracle.kv.stats
 oracle.kv.table

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,32 +43,31 @@
 
 package oracle.kv.impl.api.table;
 
-import oracle.kv.table.BooleanDef;
+import com.sleepycat.persist.model.Persistent;
 
 import org.codehaus.jackson.JsonNode;
 
-import com.sleepycat.persist.model.Persistent;
+import oracle.kv.table.BooleanDef;
 
 /**
  * BooleanDefImpl implements the BooleanDef interface.
  */
 @Persistent(version=1)
-class BooleanDefImpl extends FieldDefImpl
-    implements BooleanDef {
+public class BooleanDefImpl extends FieldDefImpl implements BooleanDef {
 
     private static final long serialVersionUID = 1L;
 
     /**
      * Constructor requiring all fields.
      */
-    public BooleanDefImpl(final String description) {
+    BooleanDefImpl(final String description) {
         super(Type.BOOLEAN, description);
     }
 
     /**
      * This constructor defaults most fields.
      */
-    public BooleanDefImpl() {
+    BooleanDefImpl() {
         super(Type.BOOLEAN);
     }
 
@@ -76,8 +75,27 @@ class BooleanDefImpl extends FieldDefImpl
         super(impl);
     }
 
+    /*
+     * Public api methods from Object and FieldDef
+     */
+
+    @Override
+    public BooleanDefImpl clone() {
+        return new BooleanDefImpl(this);
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        return (other instanceof BooleanDefImpl);
+    }
+
     @Override
     public boolean isBoolean() {
+        return true;
+    }
+
+    @Override
+    public boolean isAtomic() {
         return true;
     }
 
@@ -87,18 +105,23 @@ class BooleanDefImpl extends FieldDefImpl
     }
 
     @Override
-    public boolean equals(Object other) {
-        return (other instanceof BooleanDefImpl);
-    }
-
-    @Override
-    public BooleanDefImpl clone() {
-        return new BooleanDefImpl(this);
-    }
-
-    @Override
     public BooleanValueImpl createBoolean(boolean value) {
         return new BooleanValueImpl(value);
+    }
+
+    /*
+     * FieldDefImpl internal api methods
+     */
+
+    @Override
+    public boolean isSubtype(FieldDefImpl superType) {
+
+        if (superType.isBoolean() ||
+            superType.isAny() ||
+            superType.isAnyAtomic()) {
+            return true;
+        }
+        return false;
     }
 
     @Override

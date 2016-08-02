@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -51,12 +51,12 @@ import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
+import org.apache.avro.Schema;
+
 import oracle.kv.Consistency;
 import oracle.kv.Value;
 import oracle.kv.avro.UndefinedSchemaException;
 import oracle.kv.impl.test.TestHook;
-
-import org.apache.avro.Schema;
 
 /**
  * Keeps a cache of all schemas for use by clients that use the Avro bindings,
@@ -130,6 +130,7 @@ import org.apache.avro.Schema;
  * the JVM heap.  This is considered a programming error and is not explicitly
  * handled.  There is a warning to this effect in the AvroCatalog javadoc.
  */
+@SuppressWarnings("deprecation")
 class SchemaCache {
 
     /** Used to read schema kv pairs from the store. */

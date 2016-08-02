@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -115,5 +115,17 @@ public interface RemoteTestInterface extends VersionedRemote {
     public void setHook(TestHook<?> hook,
                         String memberName,
                         short serialVersion)
+        throws RemoteException;
+
+    /**
+     * Asks the implementation to set the TTL time to the specified value.
+     * This is used by TTL tests to set a RepNode's TTL time to allow timeouts
+     * to occur in short periods of real time.
+     *
+     * @param time the absolute time to use for the TTL time. A value of 0
+     * removes the test hook, restoring normal TTL time on the RN.
+     * 0.
+     */
+    public void setTTLTime(long time, short serialVersion)
         throws RemoteException;
 }

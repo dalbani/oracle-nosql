@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -47,7 +47,9 @@ import static oracle.kv.impl.api.table.TableImpl.ANONYMOUS;
 import static oracle.kv.impl.api.table.TableImpl.KEY_TAG;
 import static oracle.kv.impl.api.table.TableImpl.SEPARATOR;
 import static oracle.kv.impl.api.table.TableJsonUtils.DESC;
+import static oracle.kv.impl.api.table.TableJsonUtils.FIELDS;
 import static oracle.kv.impl.api.table.TableJsonUtils.NAME;
+import static oracle.kv.impl.api.table.TableJsonUtils.TYPE;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -55,16 +57,20 @@ import java.io.InputStream;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 
 import org.codehaus.jackson.node.ArrayNode;
 import org.codehaus.jackson.node.ObjectNode;
+import org.codehaus.jackson.node.JsonNodeFactory;
 
 import com.sleepycat.bind.tuple.TupleInput;
 import com.sleepycat.bind.tuple.TupleOutput;
 
 import oracle.kv.impl.admin.IllegalCommandException;
+import oracle.kv.impl.util.JsonUtils;
 import oracle.kv.table.FieldDef;
 import oracle.kv.table.FieldRange;
 import oracle.kv.table.FieldValue;
@@ -78,6 +84,44 @@ import oracle.kv.table.Table;
  * and associated with a table when an index is defined.  It contains the index
  * metdata as well as many utility functions used in serializing and
  * deserializing index keys.
+ *
+ * An index can be viewed as a sorted table of N + 1 columns. Each of the first
+ * N columns has an indexable atomic type (one of the numeric types or string
+ * or enum). The last column stores serialized primary keys "pointing" to rows
+ * in the undelying base table.
+ *
+ * The rows of the index are computed as follows:
+ *
+ * - Each index column C (other than the last one) is associated with a path
+ *   expr Pc, which when evaluated on a base-table row R produces one or more
+ *   indexable atomic values. Let Pc(R) be the *set* of values produced by Pc
+ *   on a row R (Pc(R) may produce duplicate values, but the duplicates do not
+ *   participate in index creation). If Pc is a path expr that may produce
+ *   multiple values from a row, we say that C is a "multi-key" column, and
+ *   the whole index is a "multi-key" index.
+ *
+ * - Each Pc may have at most one step, call it MK, that may produce multiple
+ *   values. MK is a [] or _key step whose input is an array or map value from
+ *   a row. We denote with MK-Pc the path expr that contains the steps from the
+ *   start of Pc up to (and including) MK, and with R-Pc the remaining steps in
+ *   Pc.
+ *
+ * - An index may contain more than one multi-key column, but the path exprs
+ *   for all of these columns must all have the same MK-Pc.
+ *
+ * - Then, conceptually, the index rows are computed by a query like this:
+ *
+ *   select a.Pc1 as C1, c.R-Pc2 as C2, c.R-Pc3 as C3, primary_key(a) as PK
+ *   from A as a, a.MK-Pc as c
+ *   order by a.Pc1, c.R-Pc2, c.R-Pc3
+ *
+ *   In the above query, we assumed the index has 4 columns (N = 3), two of
+ *   which (C2 and C3) are multi-key columns sharing the MK-Pc path. If there
+ *   are no multi-key columns, the query is simpler:
+ *
+ *   select a.Pc1 as C1, a.Pc2 as C2, a.Pc3 as C3, primary_key(a) as PK
+ *   from A as a,
+ *   order by a.Pc1, a.Pc2, a.Pc3
  */
 public class IndexImpl implements Index, Serializable {
 
@@ -85,24 +129,36 @@ public class IndexImpl implements Index, Serializable {
 
     /* the index name */
     private final String name;
+
     /* the (optional) index description, user-provided */
     private final String description;
+
     /* the associated table */
     private final TableImpl table;
+
     /*
-     * a raw list of the fields that define the index.  In the case of map
-     * indexes this list may contain the special strings TableImpl.KEY_TAG and
-     * TableImpl.ANONYMOUS to help define the indexed field.
+     * The stringified path exprs that define the index columns. In the case of
+     * map indexes a path expr may contain the special strings TableImpl.KEY_TAG
+     * ("_key") and TableImpl.ANONYMOUS ("[]") to distinguish between the 3
+     * possible ways of indexing a map: (a) all the keys (using a _key step),
+     * (b) all the values (using a [] step), or (c) the value of a specific map
+     * entry (using the specific key of the entry we want indexed). In case of
+     * array indexes, the "[]" could be used optionally, but we have decided not
+     * to allow it, so that there is a single representation of array indexes
+     * (there is only one way of indexing arrays).
      */
     private final List<String> fields;
+
     /* status is used when an index is being populated to indicate readiness */
     private IndexStatus status;
+
     /*
-     * transient version of the fields, materialized as IndexField for
-     * efficiency.  It is technically final but is not because it needs to be
-     * initialized in readObject after deserialization.
+     * transient version of the index column definitions, materialized as
+     * IndexField for efficiency. It is technically final but is not because it
+     * needs to be initialized in readObject after deserialization.
      */
     private transient List<IndexField> indexFields;
+
     /*
      * transient indication of whether this is a multiKeyMapIndex.  This is
      * used for serialization/deserialization of map indexes.  It is
@@ -110,8 +166,13 @@ public class IndexImpl implements Index, Serializable {
      * readObject after deserialization.
      */
     private transient boolean isMultiKeyMapIndex;
-    
+
     private Map<String, String> annotations;
+
+    /*
+     * properties of the index; used by text indexes only; can be null.
+     */
+    private Map<String, String> properties;
 
     public enum IndexStatus {
         /** Index is transient */
@@ -150,7 +211,7 @@ public class IndexImpl implements Index, Serializable {
          * Returns true if this is the {@link #POPULATING} type.
          * @return true if this is the {@link #POPULATING} type
          */
-	public boolean isPopulating() {
+        public boolean isPopulating() {
             return false;
         }
 
@@ -158,35 +219,35 @@ public class IndexImpl implements Index, Serializable {
          * Returns true if this is the {@link #READY} type.
          * @return true if this is the {@link #READY} type
          */
-	public boolean isReady() {
+        public boolean isReady() {
             return false;
         }
     }
 
     public IndexImpl(String name, TableImpl table, List<String> fields,
                      String description) {
+    	this(name, table, fields, null, null, description);
+    }
+
+    /* Constructor for Full Text Indexes. */
+    public IndexImpl(String name, TableImpl table,
+                     List<String> fields,
+                     Map<String, String> annotations,
+                     Map<String, String> properties,
+                     String description) {
     	this.name = name;
     	this.table = table;
     	this.fields = translateFields(fields);
+    	this.annotations = annotations;
+    	this.properties = properties;
     	this.description = description;
-    	annotations = null;
     	status = IndexStatus.TRANSIENT;
 
     	/* validate initializes indexFields as well as isMultiKeyMapIndex */
     	validate();
     	assert indexFields != null;
     }
-        
-    /* Constructor for Full Text Indexes. */
-    public IndexImpl(String name, TableImpl table,
-                     List<String> fields,
-                     Map<String, String> annotations,
-                     String description) {
 
-        this(name, table, fields, description);
-    	this.annotations = annotations;
-    }
-    
     public static void populateMapFromAnnotatedFields
         (List<AnnotatedField> fields,
          List<String> fieldNames,
@@ -203,7 +264,7 @@ public class IndexImpl implements Index, Serializable {
             annotations.put(fieldName, f.getAnnotation());
     	}
     }
-    
+
     @Override
     public Table getTable() {
         return table;
@@ -214,9 +275,46 @@ public class IndexImpl implements Index, Serializable {
         return name;
     }
 
+    /**
+     * Returns true if this index indexes all the entries (both keys and
+     * associated data) of a map, with the key field appearing before any
+     * of the data fields. This is info needed by the query optimizer.
+     */
+    public boolean isMapBothIndex() {
+
+        List<IndexField> ipaths = getIndexFields();
+        boolean haveMapKey = false;
+        boolean haveMapValue = false;
+
+        if (!isMultiKeyMapIndex) {
+            return false;
+        }
+
+        for (IndexField ipath : ipaths) {
+
+            if (ipath.isMapKey()) {
+                haveMapKey = true;
+                if (haveMapValue) {
+                    return false;
+                }
+            } else if (ipath.isMapValue()) {
+                haveMapValue = true;
+                if (haveMapKey) {
+                    break;
+                }
+            }
+        }
+
+        return (haveMapKey && haveMapValue);
+    }
+
     @Override
     public List<String> getFields() {
         return Collections.unmodifiableList(fields);
+    }
+
+    public IndexField getIndexPath(int i) {
+        return indexFields.get(i);
     }
 
     /**
@@ -230,19 +328,33 @@ public class IndexImpl implements Index, Serializable {
             throw new IllegalStateException
                 ("getFieldsWithAnnotations called on non-text index");
     	}
-    	
+
     	final List<AnnotatedField> fieldsWithAnnotations =
     			new ArrayList<AnnotatedField>(fields.size());
-    	
+
     	for(String field : fields) {
             fieldsWithAnnotations.add
                 (new AnnotatedField(field, annotations.get(field)));
     	}
         return fieldsWithAnnotations;
     }
-    
+
     Map<String, String> getAnnotations() {
-    	return Collections.unmodifiableMap(annotations);
+        if (isTextIndex()) {
+            return Collections.unmodifiableMap(annotations);
+        }
+        return Collections.emptyMap();
+    }
+
+    Map<String, String> getAnnotationsInternal() {
+    	return annotations;
+    }
+
+    public Map<String, String> getProperties() {
+        if (properties != null) {
+            return properties;
+        }
+        return Collections.emptyMap();
     }
 
     @Override
@@ -258,8 +370,134 @@ public class IndexImpl implements Index, Serializable {
     @Override
     public IndexKeyImpl createIndexKey(RecordValue value) {
         IndexKeyImpl ikey = new IndexKeyImpl(this);
-        TableImpl.populateRecord(ikey, value);
+        populateIndexRecord(ikey, (RecordValueImpl) value);
         return ikey;
+    }
+
+    /**
+     * Create index keys.
+     *
+     * If the index contains multiKey field like array, keyof(map) and
+     * elementof(map), it returns multiple index keys. Otherwise, the returned
+     * index key array contains a single index key.
+     *
+     * Skip the index key if the any of key field value is null, returns null if
+     * there is no valid index key returned.
+     */
+    public IndexKey[] createMultiIndexKeys(RecordValue value) {
+
+        final List<IndexKey> list = new ArrayList<IndexKey>();
+        final RecordValueImpl recVal = ((RecordValueImpl)value);
+        final Map<IndexField, FieldValue> singleKeyFieldValues =
+            new HashMap<IndexField, FieldValue>();
+        final List<IndexField> multiKeyFields = new ArrayList<IndexField>();
+        IndexField multiKeyField = null;
+
+        for (IndexField field: getIndexFields()) {
+            if (field.isMultiKey()) {
+                /* Only one multi-key field is allowed for an index. */
+                if (multiKeyField == null) {
+                    multiKeyField = field.getMultiKeyField();
+                }
+                multiKeyFields.add(field);
+            } else {
+                final FieldValue fval = recVal.getComplex(field);
+                if (fval == null) {
+                    /*
+                     * Index key dones't contain null value, so no valid
+                     * index keys returned.
+                     */
+                    return null;
+                }
+                singleKeyFieldValues.put(field, fval);
+            }
+        }
+
+        if (!multiKeyFields.isEmpty()) {
+
+            /* Index on multiKey fields */
+            final FieldValue multiKeyValue =
+                ((RecordValueImpl)value).getComplex(multiKeyField);
+            if (multiKeyValue.isNull()) {
+                return null;
+            }
+
+            if (multiKeyValue.isArray()) {
+                /* The multiKey field is a array */
+                final int size = multiKeyValue.asArray().size();
+                for (int i = 0; i < size; i++) {
+                    final IndexKeyImpl idxKey = new IndexKeyImpl(this);
+                    boolean hasNullValue = false;
+                    for (IndexField field: multiKeyFields) {
+                        final String fname = field.getPathName();
+                        final FieldValue fval =
+                            recVal.findFieldValue(field.iterator(), i);
+                        if (fval == null || fval.isNull()) {
+                            hasNullValue = true;
+                            break;
+                        }
+                        idxKey.putComplex(fname, fval);
+                    }
+                    /* Skip the index key if its field value is null */
+                    if (!hasNullValue) {
+                        list.add(idxKey);
+                    }
+                }
+            } else {
+                /* The multiKey field is a keyof(map) or elementof(map) */
+                assert(multiKeyValue.isMap());
+
+                final Map<String, FieldValue> mapFields =
+                    multiKeyValue.asMap().getFields();
+
+                for (Entry<String, FieldValue> entry : mapFields.entrySet()) {
+                    final String key = entry.getKey();
+                    final IndexKeyImpl idxKey = new IndexKeyImpl(this);
+                    boolean hasNullValue = false;
+                    for (IndexField field: multiKeyFields) {
+                        final String fname = field.getPathName();
+                        FieldValue fval;
+                        if (field.isMapKey()) {
+                            fval = findIndexField(field).createString(key);
+                        } else {
+                            assert(field.isMapValue());
+                            fval = entry.getValue();
+                            if (fval.isComplex()) {
+                                fval = recVal.findFieldValue(field.iterator(),
+                                                             key);
+                            }
+                        }
+                        if (fval == null || fval.isNull()) {
+                            hasNullValue = true;
+                            break;
+                        }
+                        idxKey.putComplex(fname, fval);
+                    }
+                    /* Skip the index key if its field value is null */
+                    if (!hasNullValue) {
+                        list.add(idxKey);
+                    }
+                }
+            }
+            if (list.isEmpty()) {
+                return null;
+            }
+        } else {
+            /* Create a index key on single key field */
+            list.add(createIndexKey());
+        }
+
+        /* Fill in the simple key field values */
+        if (!singleKeyFieldValues.isEmpty()) {
+            for (Entry<IndexField, FieldValue> entry :
+                 singleKeyFieldValues.entrySet()) {
+                for (IndexKey idxKey : list) {
+                    ((IndexKeyImpl)idxKey).putComplex(entry.getKey(),
+                                                      entry.getValue());
+                }
+            }
+        }
+        return list.toArray(new IndexKey[list.size()]);
     }
 
     @Override
@@ -272,7 +510,7 @@ public class IndexImpl implements Index, Serializable {
     public IndexKey createIndexKeyFromJson(InputStream jsonInput,
                                            boolean exact) {
         IndexKeyImpl key = createIndexKey();
-        TableImpl.createFromJson(key, jsonInput, exact);
+        ComplexValueImpl.createFromJson(key, jsonInput, exact);
         return key;
     }
 
@@ -298,21 +536,41 @@ public class IndexImpl implements Index, Serializable {
     }
 
     @Override
-    public FieldRange createFieldRange(String fieldName) {
-        IndexField field = new IndexField(table, fieldName);
-        FieldDef def = findIndexField(field);
-        if (def == null) {
-            throw new IllegalArgumentException
-                ("Field does not exist in table definition: " + fieldName);
+    public FieldRange createFieldRange(String path) {
+
+        IndexField ifield = new IndexField(table, path);
+
+        FieldDef ifieldDef;
+
+        try {
+            ifieldDef = validateIndexField(ifield);
+        } catch (IllegalCommandException e) {
+            throw new IllegalArgumentException(e);
         }
-        if (!containsField(field)) {
-            throw new IllegalArgumentException
-                ("Field does not exist in index: " + fieldName);
+
+        if (!isIndexField(ifield)) {
+            throw new IllegalArgumentException(
+                "Field does not exist in index: " + path);
         }
-        return new FieldRange(fieldName, def);
+
+        return new FieldRange(ifield.getPathName(), ifieldDef, 0);
     }
 
-    int numFields() {
+    /**
+     * Populates the IndexKey from the record, handling complex values.
+     */
+    private void populateIndexRecord(IndexKeyImpl indexKey,
+                                     RecordValueImpl value) {
+        for (IndexField field : getIndexFields()) {
+            FieldValueImpl v = value.getComplex(field);
+            if (v != null) {
+                indexKey.putComplex(field, v);
+            }
+        }
+        indexKey.validate();
+    }
+
+    public int numFields() {
         return fields.size();
     }
 
@@ -336,11 +594,13 @@ public class IndexImpl implements Index, Serializable {
      * array or map.
      */
     public boolean isMultiKey() {
-        for (IndexField field : getIndexFields()) {
-            if (field.isMultiKey()) {
-                return true;
+    	if (! isTextIndex()) {
+            for (IndexField field : getIndexFields()) {
+                if (field.isMultiKey()) {
+                    return true;
+                }
             }
-        }
+    	}
         return false;
     }
 
@@ -360,15 +620,15 @@ public class IndexImpl implements Index, Serializable {
         return fields;
     }
 
+    public String getFieldPathName(int i) {
+        return fields.get(i);
+    }
+
     /**
      * Returns the list of IndexField objects defining the index.  It is
      * transient, and if not yet initialized, initialize it.
      */
-    List<IndexField> getIndexFields() {
-    	if (isTextIndex()) {
-            throw new IllegalStateException
-                ("getIndexFields called on a text index");
-    	}
+    public List<IndexField> getIndexFields() {
         if (indexFields == null) {
             initIndexFields();
         }
@@ -392,7 +652,7 @@ public class IndexImpl implements Index, Serializable {
                 IndexField indexField = new IndexField(table, field);
 
                 /* this sets the multiKey state of the IndexField */
-                isMultiKey(indexField);
+                validateIndexField(indexField);
                 list.add(indexField);
             }
             indexFields = list;
@@ -416,113 +676,6 @@ public class IndexImpl implements Index, Serializable {
 
     private boolean isMultiKeyMapIndex() {
         return isMultiKeyMapIndex;
-    }
-
-    /**
-     * Returns true if the (complex) fieldName contains a reference to a
-     * field that has multiple keys anywhere in its path, false otherwise.
-     * MultiKey fields include arrays and most map indexes.
-     *
-     * This call has a side effect of setting the multiKey state in the
-     * IndexField so that the lookup need not be done twice.
-     */
-    private boolean isMultiKey(IndexField field) {
-        StringBuilder sb = new StringBuilder();
-        List<String> components = field.getComponents();
-        int compIndex = 0;
-
-        FieldDefImpl def = field.getFirstDef();
-        sb.append(components.get(compIndex++));
-        if (checkMultiKey(field, def, components, compIndex, sb)) {
-                return true;
-        }
-        sb.append(SEPARATOR);
-        while (compIndex < components.size()) {
-            String current = components.get(compIndex++);
-            sb.append(current);
-            def = def.findField(current);
-            assert def != null;
-            if (checkMultiKey(field, def, components, compIndex, sb)) {
-                return true;
-            }
-            sb.append(SEPARATOR);
-        }
-        return false;
-    }
-
-    /**
-     * Determine if the current FieldDef is a multiKey field, and if so,
-     * set the field's path in the IndexField and return true.
-     *
-     * All arrays are multiKey, as well as some map indexes.
-     * There are 3 types of map index:
-     * 1.  value-only (not multi-key).  mapField.key[.path], where "key" is
-     * not part of the map's schema.
-     * 2.  key-only (multi-key).  Specified by mapField._key
-     * 3.  key + value (multi-key).  Specified by mapField.[].
-     *
-     * @param field the IndexField being checked
-     * @param def the current FieldDef in the field
-     * @param components the list of string components in the field
-     * @param compIndex the index in components of the *next* field name
-     * in the IndexField path
-     * @param sb a StringBuilder holding the path to the current component
-     *
-     * @return true if the field is multi-key.
-     */
-    private boolean checkMultiKey(IndexField field,
-                                  FieldDefImpl def,
-                                  List<String> components,
-                                  int compIndex,
-                                  StringBuilder sb) {
-        assert sb != null;
-        assert compIndex > 0;
-        if (def.isArray()) {
-            field.setMultiKeyPath(sb.toString());
-            return true;
-        }
-
-        if (def.isMap()) {
-            FieldDefImpl elementDef =
-                (FieldDefImpl) ((MapDefImpl)def).getElement();
-
-            if (compIndex == components.size()) {
-                throw new IllegalCommandException
-                    ("Indexes on maps must specify _key, [], or a path " +
-                     "to the target field");
-            }
-
-            /*
-             * Get the next component and keep processing.
-             */
-            String next = components.get(compIndex);
-
-            /*
-             * index on key
-             */
-            if (MapDefImpl.isMapKeyTag(next)) {
-                field.setMultiKeyPath(sb.toString());
-                field.setIsMapKey();
-                isMultiKeyMapIndex = true;
-                return true;
-            }
-
-            /*
-             * index on value
-             */
-            if (MapDefImpl.isMapValueTag(next)) {
-                if (elementDef.isMap() || elementDef.isArray()) {
-                    throw new IllegalCommandException
-                        ("Indexes are not allowed on a map " +
-                         "containing a map or array");
-                }
-                field.setMultiKeyPath(sb.toString());
-                field.setIsMapValue();
-                isMultiKeyMapIndex = true;
-                return true;
-            }
-        }
-        return false;
     }
 
     /**
@@ -639,14 +792,33 @@ public class IndexImpl implements Index, Serializable {
 
     public void toJsonNode(ObjectNode node) {
         node.put(NAME, name);
-        node.put(DESC, description);
+        node.put(TYPE, getType().toString().toLowerCase());
+        if (description != null) {
+            node.put(DESC, description);
+        }
         if (isMultiKey()) {
             node.put("multi_key", "true");
         }
-        ArrayNode fieldArray = node.putArray("fields");
+        ArrayNode fieldArray = node.putArray(FIELDS);
         for (String s : fields) {
             fieldArray.add(TableImpl.translateToExternalField(s));
         }
+        if (annotations != null) {
+            putMapAsJson(node, "annotations", annotations);
+        }
+        if (properties != null) {
+            putMapAsJson(node, "properties", properties);
+        }
+    }
+
+    private static void putMapAsJson(ObjectNode node,
+                                     String mapName,
+                                     Map<String, String> map) {
+        ObjectNode mapNode = JsonNodeFactory.instance.objectNode();
+        for (Map.Entry<String, String> entry : map.entrySet()) {
+            mapNode.put(entry.getKey(), entry.getValue());
+        }
+        node.put(mapName, mapNode);
     }
 
     /**
@@ -658,8 +830,11 @@ public class IndexImpl implements Index, Serializable {
      * synchronized and changes internal state.
      */
     private void validate() {
+
         TableImpl.validateComponent(name, false);
+
         IndexField multiKeyField = null;
+
         if (fields.isEmpty()) {
             throw new IllegalCommandException
                 ("Index requires at least one field");
@@ -670,25 +845,13 @@ public class IndexImpl implements Index, Serializable {
         indexFields = new ArrayList<IndexField>(fields.size());
 
         for (String field : fields) {
+
             if (field == null || field.length() == 0) {
                 throw new IllegalCommandException
                     ("Invalid (null or empty) index field name");
             }
-            IndexField ifield = new IndexField(table, field);
 
-            /*
-             * This call handles indexes into complex, nested types.
-             */
-            FieldDefImpl def = findIndexField(ifield);
-            if (def == null) {
-                throw new IllegalCommandException
-                    ("Index field not found in table: " + field);
-            }
-            if (!def.isValidIndexField()) {
-                throw new IllegalCommandException
-                    ("Field type is not valid in an index: " +
-                     def.getType() + ", field name: " + field);
-            }
+            IndexField ifield = new IndexField(table, field);
 
             /*
              * The check for multiKey needs to consider all fields as well as
@@ -701,8 +864,10 @@ public class IndexImpl implements Index, Serializable {
              * Allow more than one multiKey field in a single index IFF they are
              * in the same object (map or array).
              */
-            boolean fieldIsMultiKey = isMultiKey(ifield);
-            if (fieldIsMultiKey) {
+            validateIndexField(ifield);
+
+            /* Don't restrict number of multi-key fields for text indexes. */
+            if (ifield.isMultiKey() && !isTextIndex()) {
                 IndexField mkey = ifield.getMultiKeyField();
                 if (multiKeyField != null && !mkey.equals(multiKeyField)) {
                     throw new IllegalCommandException
@@ -710,15 +875,200 @@ public class IndexImpl implements Index, Serializable {
                 }
                 multiKeyField = mkey;
             }
+
             if (indexFields.contains(ifield)) {
                 throw new IllegalCommandException
                     ("Index already contains the field: " + field);
             }
+
             indexFields.add(ifield);
         }
+
         assert fields.size() == indexFields.size();
+
         table.checkForDuplicateIndex(this);
     }
+
+    /**
+     * Validates the given index path expression (ipath) and returns its data
+     * type (which must be one of the indexable atomic types).
+     *
+     * This call has a side effect of setting the multiKey state in the
+     * IndexField so that the lookup need not be done twice.
+     */
+    private FieldDef validateIndexField(IndexField ipath) {
+
+        StringBuilder sb = new StringBuilder();
+
+        boolean addedStep = false;
+        List<String> steps = ipath.getSteps();
+        int numSteps = steps.size();
+
+        int stepIdx = 0;
+        String step = steps.get(stepIdx);
+        sb.append(step);
+        FieldDef stepDef = ipath.getFirstDef();
+
+        if (stepDef == null) {
+            throw new IllegalCommandException(
+                "Invalid index field definition : " + ipath + "\n" +
+                "There is no field named " + step);
+        }
+
+        while (stepIdx < numSteps) {
+
+            /*
+             * TODO: Prevent any path through these types from
+             * participating in a text index, until the text index
+             * implementation supports them correctly.
+             */
+            if (isTextIndex() &&
+                (stepDef.isBinary() ||
+                 stepDef.isFixedBinary() || stepDef.isEnum())) {
+                    throw new IllegalCommandException
+                        ("Invalid index field definition : " + ipath + "\n" +
+                         "Fields of type " + stepDef.getType() +
+                         " cannot participate in a FULLTEXT index.");
+            }
+
+            if (stepDef.isRecord()) {
+
+                ++stepIdx;
+                if (stepIdx >= numSteps) {
+                    break;
+                }
+
+                step = steps.get(stepIdx);
+                stepDef = stepDef.asRecord().getField(step);
+
+                if (stepDef == null) {
+                    throw new IllegalCommandException(
+                        "Invalid index field definition : " + ipath + "\n" +
+                        "There is no field named \"" + step + "\" after " +
+                        "path " + sb.toString());
+                }
+
+                sb.append(SEPARATOR);
+                sb.append(step);
+
+            } else if (stepDef.isArray()) {
+
+                if (ipath.isMultiKey()) {
+                    throw new IllegalCommandException(
+                        "Invalid index field definition : " + ipath + "\n" +
+                        "The definition contains more than one multi-key " +
+                        "fields. The second mulit-key field is " + step);
+                }
+
+                ipath.setMultiKeyPath(sb.toString());
+
+                /*
+                 * If there is no next step or the next step is not [], add
+                 * a [] step.
+                 */
+                if (stepIdx + 1 >= numSteps ||
+                    !steps.get(stepIdx + 1).equals(TableImpl.ANONYMOUS)) {
+                    ipath.add(stepIdx + 1, TableImpl.ANONYMOUS);
+                    ++numSteps;
+                    addedStep = true;
+                }
+
+                /* Consume the [] step */
+                ++stepIdx;
+                step = TableImpl.ANONYMOUS;
+                stepDef = stepDef.asArray().getElement();
+                sb.append(SEPARATOR);
+                sb.append(step);
+
+            } else if (stepDef.isMap()) {
+
+                ++stepIdx;
+                if (stepIdx >= numSteps) {
+                    throw new IllegalCommandException(
+                        "Invalid index field definition : " + ipath + "\n" +
+                        "Indexes on maps must specify keyof, elementof, " +
+                        "or a path to a target field");
+                }
+
+                step = steps.get(stepIdx);
+
+                if (step.equals(TableImpl.ANONYMOUS)) {
+
+                    if (ipath.isMultiKey()) {
+                        throw new IllegalCommandException(
+                            "Invalid index field definition : " + ipath + "\n" +
+                            "The definition contains more than one multi-key " +
+                            "fields. The second mulit-key field is " + step);
+                    }
+
+                    ipath.setMultiKeyPath(sb.toString());
+                    ipath.setIsMapValue();
+                    isMultiKeyMapIndex = true;
+
+                    /* Consume the [] step */
+                    stepDef = stepDef.asMap().getElement();
+                    sb.append(SEPARATOR);
+                    sb.append(step);
+
+                } else if (step.equals(TableImpl.KEY_TAG)) {
+
+                    if (ipath.isMultiKey()) {
+                        throw new IllegalCommandException(
+                            "Invalid index field definition : " + ipath + "\n" +
+                            "The definition contains more than one multi-key " +
+                            "fields. The second mulit-key field is " + step);
+                    }
+
+                    ipath.setMultiKeyPath(sb.toString());
+                    ipath.setIsMapKey();
+                    isMultiKeyMapIndex = true;
+
+                    /* Consume the _key step */
+                    stepDef = FieldDefImpl.stringDef;
+                    sb.append(SEPARATOR);
+                    sb.append(step);
+
+                } else {
+                    stepDef = stepDef.asMap().getElement();
+                    sb.append(SEPARATOR);
+                    sb.append(step);
+                }
+
+            } else {
+
+                ++stepIdx;
+                if (stepIdx >= numSteps) {
+                    break;
+                }
+
+                step = steps.get(stepIdx);
+                throw new IllegalCommandException(
+                    "Invalid index field definition : " + ipath + "\n" +
+                    "There is no field named \"" + step + "\" after " +
+                    "path " + sb.toString());
+            }
+        }
+
+        if (!stepDef.isValidIndexField()) {
+            throw new IllegalCommandException(
+                "Invalid index field definition : " + ipath + "\n" +
+                "Cannot index values of type " + stepDef);
+        }
+
+        if (addedStep) {
+            sb = new StringBuilder();
+            for(int i = 0; i < steps.size(); ++i) {
+                sb.append(steps.get(i).toLowerCase());
+                if (i < steps.size() - 1) {
+                    sb.append(SEPARATOR);
+                }
+            }
+            ipath.setPathName(sb.toString());
+        }
+
+        return stepDef;
+    }
+
 
     @Override
     public String toString() {
@@ -755,42 +1105,34 @@ public class IndexImpl implements Index, Serializable {
      * TODO: consider sharing more code with the other serializeIndexKey()
      * method.
      */
-    byte[] serializeIndexKey(RecordValueImpl record, boolean allowPartial,
-                             int arrayIndex) {
+    byte[] serializeIndexKey(
+        RecordValueImpl record,
+        boolean allowPartial,
+        int arrayIndex) {
+
         if (isMultiKeyMapIndex()) {
             throw new IllegalStateException("Wrong serializer for map index");
         }
+
         TupleOutput out = null;
+
         try {
             out = new TupleOutput();
+
             for (IndexField field : getIndexFields()) {
+
                 FieldValue val =
                     record.findFieldValue(field.iterator(), arrayIndex);
-                FieldDefImpl def = findIndexField(field);
-                if (def == null) {
-                    throw new IllegalStateException
-                        ("Index field not found in table: " + field);
-                }
 
-                /*
-                 * If the target field is an array use its type, which must be
-                 * simple, and indexable.
-                 */
-                if (val != null) {
-                    if (def.isArray()) {
-                        def = (FieldDefImpl) ((ArrayDefImpl)def).getElement();
-                        val = ((ArrayValueImpl)val).get(arrayIndex);
-                    } else if (def.isMap()) {
-                        String mapKey = ((MapValueImpl)val).getMapKey();
-                        /*
-                         * Call the serialize method that takes a mapKey.
-                         * This is a single-key map index inside an array.
-                         * This method restarts serialization from the start,
-                         * so return the result.
-                         */
-                        return serializeIndexKey(record, allowPartial,
-                                                 mapKey, false);
-                    }
+                FieldDefImpl def = findIndexField(field);
+
+                if (def == null) {
+                    throw new IllegalStateException(
+                        "Index field not found in table: " + field);
+                }
+                if (!def.isValidIndexField()) {
+                    throw new IllegalStateException(
+                        "Index field does not have indexable type: " + field);
                 }
 
                 /*
@@ -818,7 +1160,9 @@ public class IndexImpl implements Index, Serializable {
 
                 serializeValue(out, val, def);
             }
+
             return (out.size() != 0 ? out.toByteArray() : null);
+
         } finally {
             try {
                 if (out != null) {
@@ -860,14 +1204,17 @@ public class IndexImpl implements Index, Serializable {
      * This method is package protected vs private because it's used by test
      * code.
      */
-    /* private */ byte[] serializeIndexKey(RecordValueImpl record,
-                                           boolean allowPartial,
-                                           String mapKey,
-                                           boolean extracting) {
+    byte[] serializeIndexKey(
+        RecordValueImpl record,
+        boolean allowPartial,
+        String mapKey,
+        boolean extracting) {
+
         assert isMultiKeyMapIndex();
         TupleOutput out = null;
         try {
             out = new TupleOutput();
+
             for (IndexField field : getIndexFields()) {
 
                 /*
@@ -877,8 +1224,10 @@ public class IndexImpl implements Index, Serializable {
                  */
                 String keyString = (extracting || !field.isMapValue()) ?
                     mapKey : null;
-                FieldValue val = record.findFieldValue(field.iterator(),
-                                                       keyString);
+
+                FieldValue val = record.findFieldValue(
+                    field.iterator(), keyString);
+
                 FieldDefImpl def = findIndexField(field);
                 if (def == null) {
                     throw new IllegalStateException
@@ -910,7 +1259,9 @@ public class IndexImpl implements Index, Serializable {
 
                 serializeValue(out, val, def);
             }
+
             return (out.size() != 0 ? out.toByteArray() : null);
+
         } finally {
             try {
                 if (out != null) {
@@ -929,10 +1280,12 @@ public class IndexImpl implements Index, Serializable {
      * be serialized (e.g. it has null values).
      */
     public byte[] serializeIndexKey(IndexKeyImpl record) {
+
         if (isMultiKeyMapIndex()) {
             String mapKey = findMapKey(record);
             return serializeIndexKey(record, true, mapKey, false);
         }
+
         return serializeIndexKey(record, true, 0);
     }
 
@@ -950,11 +1303,13 @@ public class IndexImpl implements Index, Serializable {
      * causes a null return.
      */
     private String findMapKey(IndexKeyImpl record) {
+
         for (IndexField field : getIndexFields()) {
+
             IndexField mapField = field.getMultiKeyField();
+
             if (mapField != null) {
-                FieldValue val =
-                    record.findFieldValue(mapField.iterator(), -1);
+                FieldValue val = record.findFieldValue(mapField.iterator(), -1);
                 if (val != null) {
                     if (!val.isMap()) {
                         throw new IllegalStateException
@@ -997,22 +1352,16 @@ public class IndexImpl implements Index, Serializable {
             /* enumerations are sorted by declaration order */
             out.writeSortedPackedInt(val.asEnum().getIndex());
             break;
-        case MAP:
-        case ARRAY:
-        case BINARY:
-        case BOOLEAN:
-        case FIXED_BINARY:
-        case RECORD:
+        default:
             throw new IllegalStateException
-                ("Type not supported in indexes: " +
-                 def.getType());
+            ("Type not supported in indexes: " +
+                    def.getType());
         }
     }
 
     /**
-     * Deserialize an index key into IndexKey.  The caller will also have
-     * access to the primary key bytes which can be turned into a PrimaryKey
-     * and combined with the IndexKey for the returned KeyPair.
+     * Deserialize an index key into a RecordValue, which may be a Row or an
+     * IndexKey.
      *
      * Arrays -- if there is an array index the index key returned will
      * be the serialized value of a single array entry and not the array
@@ -1025,30 +1374,36 @@ public class IndexImpl implements Index, Serializable {
      * need to be created.
      *
      * @param data the bytes
+     * @param rec the RecordValue to use. This may be an IndexKeyImpl or a
+     * RowImpl. RecordValueImpl is shared between them.
      * @param partialOK true if not all fields must be in the data stream.
+     * @param createTableRow Whether rec is a RowImpl or an IndexKeyImpl.
      */
-    public IndexKeyImpl rowFromIndexKey(byte[] data, boolean partialOK) {
-        IndexKeyImpl ikey = createIndexKey();
+    public void rowFromIndexKey(byte[] data,
+                                RecordValueImpl rec,
+                                boolean partialOK,
+                                boolean createTableRow) {
         TupleInput input = null;
+
+        assert(!createTableRow || rec instanceof RowImpl);
+        assert(createTableRow || rec instanceof IndexKeyImpl);
 
         try {
             input = new TupleInput(data);
-            for (IndexField field : getIndexFields()) {
+
+            for (IndexField ifield : getIndexFields()) {
+
                 if (input.available() <= 0) {
                     break;
                 }
 
-                IndexField mapField = (field.isMapKey() ?
-                                       field.getMultiKeyField() :
-                                       null);
+                FieldDefImpl def = findIndexField(ifield);
 
-                FieldDef def = (mapField != null ?
-                                findIndexField(mapField) :
-                                findIndexField(field));
                 if (def == null) {
                     throw new IllegalStateException
-                        ("Could not find index field: " + field);
+                        ("Could not find index field: " + ifield);
                 }
+
                 switch (def.getType()) {
                 case INTEGER:
                 case STRING:
@@ -1056,40 +1411,23 @@ public class IndexImpl implements Index, Serializable {
                 case DOUBLE:
                 case FLOAT:
                 case ENUM:
-                    ikey.putComplex(field, def.getType(),
-                                    FieldValueImpl.readTuple(def, input));
+                    FieldValue val =
+                        def.createValue(FieldValueImpl.readTuple(def, input));
+                    rec.putComplex(ifield.iterator(), val, createTableRow);
                     break;
-                case MAP:
 
-                    /* the data is not used by the map constructor */
-                    assert mapField != null;
-                    ikey.putComplex(mapField, FieldDef.Type.MAP, null);
-                    MapValueImpl map = (MapValueImpl) ikey.getComplex(mapField);
-                    handleMapKey(map, input, field);
-                    break;
-                case ARRAY:
-                    /* the data is not used by the array constructor */
-                    ikey.putComplex(field, FieldDef.Type.ARRAY, null);
-                    ArrayValueImpl array =
-                        (ArrayValueImpl) ikey.getComplex(field);
-                    readArrayElement(array, input);
-                    break;
-                case BINARY:
-                case BOOLEAN:
-                case FIXED_BINARY:
-                case RECORD:
+                 default:
                     throw new IllegalStateException
-                        ("Type not supported in indexes: " +
-                         def.getType());
+                        ("Type not supported in indexes: " + def.getType());
                 }
             }
-            if (!partialOK && (ikey.numValues() != fields.size())) {
+
+            if (!partialOK && (rec.numValues() != fields.size())) {
                 throw new IllegalStateException
                     ("Missing fields from index data for index " +
                      getName() + ", expected " +
-                     fields.size() + ", received " + ikey.numValues());
+                     fields.size() + ", received " + rec.numValues());
             }
-            return ikey;
         } finally {
             try {
                 if (input != null) {
@@ -1100,58 +1438,14 @@ public class IndexImpl implements Index, Serializable {
         }
     }
 
-    private void readArrayElement(ArrayValueImpl array,
-                                  TupleInput input) {
-        switch (array.getDefinition().getElement().getType()) {
-        case INTEGER:
-            array.add(input.readSortedPackedInt());
-            break;
-        case STRING:
-            array.add(input.readString());
-            break;
-        case LONG:
-            array.add(input.readSortedPackedLong());
-            break;
-        case DOUBLE:
-            array.add(input.readSortedDouble());
-            break;
-        case FLOAT:
-            array.add(input.readSortedFloat());
-            break;
-        case ENUM:
-            array.addEnum(input.readSortedPackedInt());
-            break;
-        default:
-            throw new IllegalStateException("Type not supported in indexes: ");
-        }
-    }
-
     /**
-     * Reads key from a serialized index key.  Value fields don't follow
-     * this path.
+     * Returns true if the given path is the same as one of the paths that
+     * define the index columns.
      */
-    private void handleMapKey(MapValueImpl map,
-                              TupleInput input,
-                              IndexField field) {
+    public boolean isIndexField(TablePath path) {
 
-        /*
-         * A map key field
-         */
-        if (!field.isMapKey()) {
-            throw new IllegalStateException
-                ("Field should have been a map key field: " + field);
-        }
-        String mapKey = input.readString();
-        map.putNull(mapKey);
-    }
-
-    /**
-     * Does a direct comparison of the IndexField to the existing fields to
-     * look for duplicates.
-     */
-    boolean containsField(IndexField indexField) {
         for (IndexField iField : getIndexFields()) {
-            if (iField.equals(indexField)) {
+            if (iField.equals(path)) {
                 return true;
             }
         }
@@ -1175,12 +1469,12 @@ public class IndexImpl implements Index, Serializable {
 
         for (IndexField indexField : getIndexFields()) {
             if (indexField.isComplex()) {
-                if (indexField.getFieldName().contains(fname)) {
+                if (indexField.getPathName().contains(fname)) {
                     return true;
                 }
 
             } else {
-                if (indexField.getFieldName().equals(fname)) {
+                if (indexField.getPathName().equals(fname)) {
                     return true;
                 }
             }
@@ -1248,7 +1542,7 @@ public class IndexImpl implements Index, Serializable {
      * complex.  Simple fields (e.g. "name") have a single component. Fields
      * that navigate into nested fields (e.g. "address.city") have multiple
      * components.  The state of whether a field is simple or complex is kept
-     * by TableField.
+     * by TablePath.
      *
      * IndexField adds this state:
      *   multiKeyField -- if this field results in a multi-key index this holds
@@ -1262,15 +1556,17 @@ public class IndexImpl implements Index, Serializable {
      * Field names are case-insensitive, so strings are stored lower-case to
      * simplify case-insensitive comparisons.
      */
-    static class IndexField extends TableImpl.TableField {
+    public static class IndexField extends TablePath {
+
         /* the path to a multi-key field (map or array) */
         private IndexField multiKeyField;
+
         private MultiKeyType multiKeyType;
 
         /* ARRAY is not included because no callers need that information */
         private enum MultiKeyType { NONE, MAPKEY, MAPVALUE }
 
-        private IndexField(TableImpl table, String field) {
+        public IndexField(TableImpl table, String field) {
             super(table, field);
             multiKeyType = MultiKeyType.NONE;
         }
@@ -1284,7 +1580,7 @@ public class IndexImpl implements Index, Serializable {
             return multiKeyField;
         }
 
-        private boolean isMultiKey() {
+        public boolean isMultiKey() {
             return multiKeyField != null;
         }
 
@@ -1292,7 +1588,7 @@ public class IndexImpl implements Index, Serializable {
             multiKeyField = new IndexField(getFieldMap(), path);
         }
 
-        boolean isMapKey() {
+        public boolean isMapKey() {
             return multiKeyType == MultiKeyType.MAPKEY;
         }
 
@@ -1300,7 +1596,7 @@ public class IndexImpl implements Index, Serializable {
             multiKeyType = MultiKeyType.MAPKEY;
         }
 
-        boolean isMapValue() {
+        public boolean isMapValue() {
             return multiKeyType == MultiKeyType.MAPVALUE;
         }
 
@@ -1375,7 +1671,7 @@ public class IndexImpl implements Index, Serializable {
 
             return (annotation == null ?
                     other.annotation == null :
-                    annotation.equals(other.annotation));
+                    JsonUtils.jsonStringsEqual(annotation, other.annotation));
         }
 
         @Override
@@ -1397,9 +1693,8 @@ public class IndexImpl implements Index, Serializable {
         }
         return annotations.get(fieldName);
     }
-	
+
     public RowImpl deserializeRow(byte[] keyBytes, byte[] valueBytes) {
-        TableImpl topTable = table.getTopLevelTable(); 
-        return topTable.createRowFromBytes(keyBytes, valueBytes, false);
+        return table.createRowFromBytes(keyBytes, valueBytes, false);
     }
 }

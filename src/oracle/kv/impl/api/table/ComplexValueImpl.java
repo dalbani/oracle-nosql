@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -44,13 +44,14 @@
 package oracle.kv.impl.api.table;
 
 import java.io.IOException;
-
-import oracle.kv.table.FieldDef;
-
-import org.codehaus.jackson.JsonParser;
-import org.codehaus.jackson.JsonToken;
+import java.io.InputStream;
+import java.io.Reader;
 
 import com.sleepycat.persist.model.Persistent;
+import oracle.kv.table.FieldDef;
+import oracle.kv.table.IndexKey;
+import org.codehaus.jackson.JsonParser;
+import org.codehaus.jackson.JsonToken;
 
 /**
  * ComplexValueImpl is an intermediate abstract implementation class used to
@@ -65,7 +66,8 @@ import com.sleepycat.persist.model.Persistent;
  */
 
 @Persistent(version=1)
-abstract class ComplexValueImpl extends FieldValueImpl {
+public abstract class ComplexValueImpl extends FieldValueImpl {
+
     private static final long serialVersionUID = 1L;
 
     /*
@@ -74,6 +76,7 @@ abstract class ComplexValueImpl extends FieldValueImpl {
      * to a map, record, or array that are not part of the index.
      */
     transient protected IndexImpl indexImpl;
+
     final private FieldDef fieldDef;
 
     ComplexValueImpl(FieldDef fieldDef) {
@@ -86,16 +89,54 @@ abstract class ComplexValueImpl extends FieldValueImpl {
         fieldDef = null;
     }
 
+    /*
+     * Public api methods from Object and FieldValue
+     */
+
+    /**
+     * Provides a common method for the string value of the complex types.
+     */
+    @Override
+    public String toString() {
+        return toJsonString(false);
+    }
+
+    @Override
+    public boolean isComplex() {
+        return true;
+    }
+
+    /*
+     * FieldValueImpl internal api methods
+     */
+
+    @Override
+    public FieldDefImpl getDefinition() {
+        return (FieldDefImpl)fieldDef;
+    }
+
+    /*
+     * Local methods
+     */
+
     protected void setIndex(IndexImpl indexImpl) {
         this.indexImpl = indexImpl;
     }
 
     /**
-     * Validates the field name as part of the index.  This is called when
-     * fields are put into Map and Record types when constructing an IndexKey.
-     * For records the field name must exist in the index.  For maps the
-     * field name must exist if the index is not multi-key; otherwise the field
-     * name is just a map key and not relevant to the index itself.
+     * Validate the value of the object.  By default there is not validation.
+     * Subclasses may implement this.
+     */
+    public void validate() {
+    }
+
+    /**
+     * Validates the field name as part of the index. This is called during
+     * IndexKey construction by the app, when nested fields are put into Map
+     * and Record values that participate in the IndexKey. For records the
+     * field name must exist in the index definition. For maps the field name
+     * must exist if the index is not multi-key; otherwise the field name is
+     * just a map key and not relevant to the index itself.
      *
      * This method isn't called when adding fields to an array so the check
      * for a multi-key index is map-only.
@@ -110,32 +151,83 @@ abstract class ComplexValueImpl extends FieldValueImpl {
     }
 
     /**
-     * Return the definition of this field
+     * Populate the given complex value from a JSON doc (which is given as
+     * a reader). If exact is true, the json doc must match exactly to the
+     * schema of the complex value. Otherwise, if this is a RecordValue, then
+     * (a) the JSON doc may have fields that do not appear in the record
+     *     schema. Such fields are simply skipped.
+     * (b) the JSON doc may be missing fields that appear in the record's
+     *     schema. Such fields will remain unset in the record value.
      */
-    public FieldDef getDefinition() {
-        return fieldDef;
-    }
+    public static void createFromJson(
+        ComplexValueImpl complexValue,
+        Reader jsonInput,
+        boolean exact) {
 
-    static protected ComplexValueImpl createComplexValue(FieldDef def) {
-        switch (def.getType()) {
-        case MAP:
-            return (ComplexValueImpl) def.createMap();
-        case RECORD:
-            return (ComplexValueImpl) def.createRecord();
-        case ARRAY:
-            return (ComplexValueImpl) def.createArray();
-        default:
-            throw new IllegalArgumentException
-                ("Not a complex type: " + def.getType());
+        JsonParser jp = null;
+
+        try {
+            jp = TableJsonUtils.createJsonParser(jsonInput);
+            /*move to START_OBJECT or START_ARRAY*/
+            jp.nextToken();
+
+            complexValue.addJsonFields(
+                jp, (complexValue instanceof IndexKey), null, exact);
+
+            complexValue.validate();
+
+        } catch (IOException ioe) {
+            throw new IllegalArgumentException(
+                ("Failed to parse JSON input: " + ioe.getMessage()), ioe);
+        } finally {
+            if (jp != null) {
+                try {
+                    jp.close();
+                } catch (IOException ignored) {
+                    /* ignore failures on close */
+                }
+            }
         }
     }
 
     /**
-     * Provides a common method for the string value of the complex types.
+     * Populate the given complex value from a JSON doc (which is given as an
+     * input stream). If exact is true, the json doc must match exactly to the
+     * schema of the complex value. Otherwise, if this is a RecordValue, then
+     * (a) the JSON doc may have fields that do not appear in the record
+     *     schema. Such fields are simply skipped.
+     * (b) the JSON doc may be missing fields that appear in the record's
+     *     schema. Such fields will remain unset in the record value.
      */
-    @Override
-    public String toString() {
-        return toJsonString(false);
+    public static void createFromJson(
+        ComplexValueImpl complexValue,
+        InputStream jsonInput,
+        boolean exact) {
+
+        JsonParser jp = null;
+
+        try {
+            jp = TableJsonUtils.createJsonParser(jsonInput);
+            /*move to START_OBJECT or START_ARRAY*/
+            jp.nextToken();
+
+            complexValue.addJsonFields(
+                jp, (complexValue instanceof IndexKey), null, exact);
+
+            complexValue.validate();
+
+        } catch (IOException ioe) {
+            throw new IllegalArgumentException(
+                ("Failed to parse JSON input: " + ioe.getMessage()), ioe);
+        } finally {
+            if (jp != null) {
+                try {
+                    jp.close();
+                } catch (IOException ignored) {
+                    /* ignore failures on close */
+                }
+            }
+        }
     }
 
     /**
@@ -150,15 +242,11 @@ abstract class ComplexValueImpl extends FieldValueImpl {
      * names.
      * @param exact true if the JSON needs have all fields present.
      */
-    abstract void addJsonFields(JsonParser jp, boolean isIndexKey,
-                                String currentFieldName, boolean exact);
-
-    /**
-     * Validate the value of the object.  By default there is not validation.
-     * Subclasses may implement this.
-     */
-    void validate() {
-    }
+    abstract void addJsonFields(
+        JsonParser jp,
+        boolean isIndexKey,
+        String currentFieldName,
+        boolean exact);
 
     /**
      * A utility method for use by subclasses to skip JSON input

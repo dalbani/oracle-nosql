@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -86,6 +86,7 @@ import oracle.kv.impl.topo.Topology;
 import oracle.kv.impl.util.ConfigurableService.ServiceStatus;
 import oracle.kv.impl.util.registry.VersionedRemote;
 import oracle.kv.table.FieldDef;
+import oracle.kv.table.TimeToLive;
 
 import com.sleepycat.je.rep.ReplicatedEnvironment;
 
@@ -409,6 +410,16 @@ public interface CommandService extends VersionedRemote {
         throws RemoteException;
 
     /**
+     * Changes the allow arbiter attribute of the specified data center.
+     *
+     * @since 4.0
+     */
+    String changeZoneArbiters(String candidateName, DatacenterId dcId,
+                              boolean allowArbiters,
+                     AuthContext authCtx, short serialVersion)
+        throws RemoteException;
+
+    /**
      * Redistributes partitions in the topology having the name referenced by
      * the <code>candidateName</code> parameter. The number of shards will be
      * recalculated and new replication nodes will be added as needed. The new
@@ -675,10 +686,11 @@ public interface CommandService extends VersionedRemote {
 
     /**
      * Create a new Plan to deploy a new Datacenter with the specified type.
-     * This command is used by R3 or later clients.
-     *
+     * This command is used by R3.0 to R3.5 clients.
+     * @deprecated
      * @since 3.0
      */
+    @Deprecated
     int createDeployDatacenterPlan(String planName,
                                    String datacenterName,
                                    int repFactor,
@@ -687,6 +699,21 @@ public interface CommandService extends VersionedRemote {
                                    short serialVersion)
         throws RemoteException;
 
+    /**
+     * Create a new Plan to deploy a new Datacenter with the specified type and
+     * whether to allow arbiters.
+     * This command is used by R4.0 or later clients.
+     *
+     * @since 4.0
+     */
+    int createDeployDatacenterPlan(String planName,
+                                   String datacenterName,
+                                   int repFactor,
+                                   DatacenterType datacenterType,
+                                   boolean allowArbiters,
+                                   AuthContext authCtx,
+                                   short serialVersion)
+        throws RemoteException;
     /**
      * To be removed after R2 compatibility period.
      * @deprecated
@@ -994,6 +1021,22 @@ public interface CommandService extends VersionedRemote {
         throws RemoteException;
 
     /**
+    * Create a new Plan to alter parameters for all ArbNodes deployed to the
+    * specified datacenter. If <code>null</code> is input for the
+    * <code>dcid</code> parameter, then the specified parameters will be
+    * changed for all ArbNodes from each of the datacenters making up the
+    * store.
+    *
+    * @since 4.0
+    */
+    int createChangeAllANParamsPlan(String planName,
+                                    DatacenterId dcid,
+                                    ParameterMap newParams,
+                                    AuthContext authCtx,
+                                    short serialVersion)
+        throws RemoteException;
+
+    /**
      * Create a new Plan to alter parameters for all admin services deployed to
      * the specified datacenter. If <code>null</code> is input for the
      * <code>dcid</code> parameter, then the specified parameters will be
@@ -1174,25 +1217,37 @@ public interface CommandService extends VersionedRemote {
         throws RemoteException;
 
     /**
+     * To be removed after 3.5 compatibility period.
+     */
+    @Deprecated
+    public int createAddTablePlan(String planName,
+                                  String tableName,
+                                  String parentName,
+                                  FieldMap fieldMap,
+                                  List<String> primaryKey,
+                                  List<String> majorKey,
+                                  boolean r2compat,
+                                  int schemaId,
+                                  String description,
+                                  AuthContext authCtx,
+                                  short serialVersion)
+        throws RemoteException;
+
+    /**
      * Create a new Plan to create a new Table in the store.
      *
      * @param planName the name of the plan
-     *
      * @param tableName the id of the new table.  This is used in its generated
      * Key objects so it should be short to save space in the store.
-     *
      * @param parentName set to a qualified ("." separated) path to a parent
      * table if the new table is a child table, null otherwise.
-     *
      * @param fieldMap an object that represents the map of {@link FieldDef}
      * objects that comprises the table, along with the field declaration
      * order.
-     *
      * @param primaryKey the list of fields that comprise the primary key for
      * this table.  It must contain at least one field.  For child tables it is
      * a superset of its parent table's primary key.  Primary key fields turn
      * into Keys in requests.
-     *
      * @param majorKey the list of primary key fields that comprise the major
      * portion of generated Key objects for the table. This must be strict,
      * ordered subset of the primaryKey if set.  It is only used for top-level
@@ -1200,16 +1255,21 @@ public interface CommandService extends VersionedRemote {
      * the parent table or the boundary between the parent and child table
      * primary keys.  The Key components generated by a child table are
      * implicitly minor-only.
-     *
+     * @param ttl default Time-to-Live duration for the new table.
+     * Time-To_live for child tables are independent of their parent table.
      * @param description an option description of the table, used for
      * human-readable purposes.  This string does not affect table records.
+     *
+     * @since 4.0
      */
     public int createAddTablePlan(String planName,
                                   String tableName,
                                   String parentName,
                                   FieldMap fieldMap,
                                   List<String> primaryKey,
+                                  List<Integer> primaryKeySizes,
                                   List<String> majorKey,
+                                  TimeToLive ttl,
                                   boolean r2compat,
                                   int schemaId,
                                   String description,
@@ -1240,10 +1300,25 @@ public interface CommandService extends VersionedRemote {
                                      short serialVersion)
         throws RemoteException;
 
+    /**
+     * Deprecated in favor of overloaded method accepting a {@link TimeToLive}
+     * argument.
+     * Can be removed after 3.5 compatibility period.
+     */
+    @Deprecated
     public int createEvolveTablePlan(String planName,
                                      String tableName,
                                      int tableVersion,
                                      FieldMap fieldMap,
+                                     AuthContext authCtx,
+                                     short serialVersion)
+         throws RemoteException;
+    
+    public int createEvolveTablePlan(String planName,
+                                     String tableName,
+                                     int tableVersion,
+                                     FieldMap fieldMap,
+                                     TimeToLive ttl,
                                      AuthContext authCtx,
                                      short serialVersion)
          throws RemoteException;
@@ -2425,5 +2500,36 @@ public interface CommandService extends VersionedRemote {
                                           Set<AdminId> adminIds,
                                           AuthContext authCtx,
                                           short serialVersion)
+        throws RemoteException;
+
+    /**
+     * Creates a plan to inform the Store of the existence of an ES node, and
+     * stores it by its plan id.
+     * @param planName - the name of the plan
+     * @param clusterName - the cluster name of the ES cluster.
+     * @param transportHp - transport host:port of any node in the ES cluster.
+     * @param forceClear - if true, allows deletion of an existing ES index.
+     * @return the plan id of the created plan
+     * @since 4.0
+     */
+    int createRegisterESClusterPlan(String planName,
+                                    String clusterName,
+                                    String transportHp,
+                                    boolean forceClear,
+                                    AuthContext authCtx,
+                                    short serialVersion)
+        throws RemoteException;
+
+    /**
+     * Creates a plan to cause the Store to forget about a registered ES
+     * cluster.  Only one cluster may be registered, so no identifying
+     * information is needed.
+     * @param planName the name of the plan
+     * @return the plan id of the created plan
+     * @since 4.0
+     */
+    int createDeregisterESClusterPlan(String planName,
+                                      AuthContext authCtx,
+                                      short serialVersion)
         throws RemoteException;
 }

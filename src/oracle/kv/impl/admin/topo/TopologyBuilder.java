@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -68,10 +68,17 @@ import oracle.kv.impl.admin.param.StorageNodeParams;
 import oracle.kv.impl.admin.param.StorageNodePool;
 import oracle.kv.impl.admin.topo.Rules.Results;
 import oracle.kv.impl.admin.topo.Rules.RulesProblemFilter;
+import oracle.kv.impl.admin.topo.Validations.ANWrongDC;
+import oracle.kv.impl.admin.topo.Validations.ANProximity;
+import oracle.kv.impl.admin.topo.Validations.ANNotAllowedOnSN;
+import oracle.kv.impl.admin.topo.Validations.ExcessANs;
+import oracle.kv.impl.admin.topo.Validations.InsufficientANs;
 import oracle.kv.impl.admin.topo.Validations.InsufficientRNs;
 import oracle.kv.impl.admin.topo.Validations.OverCapacity;
 import oracle.kv.impl.admin.topo.Validations.RNProximity;
 import oracle.kv.impl.fault.CommandFaultException;
+import oracle.kv.impl.topo.ArbNode;
+import oracle.kv.impl.topo.ArbNodeId;
 import oracle.kv.impl.topo.Datacenter;
 import oracle.kv.impl.topo.DatacenterId;
 import oracle.kv.impl.topo.Partition;
@@ -170,7 +177,8 @@ public class TopologyBuilder {
             if (dcs.add(dcId)) {
                 totalRF += sourceTopo.get(dcId).getRepFactor();
                 final Datacenter dc = sourceTopo.get(dcId);
-                if (dc.getDatacenterType().isPrimary()) {
+                if (dc.getDatacenterType().isPrimary() &&
+                    dc.getRepFactor() > 0) {
                     foundPrimaryDC = true;
                 }
             }
@@ -279,8 +287,55 @@ public class TopologyBuilder {
                 }
             });
 
+        final List<InsufficientANs> insufficientANs = results.find(
+            InsufficientANs.class,
+            new RulesProblemFilter<InsufficientANs>() {
+                @Override
+                public boolean match(final InsufficientANs p) {
+                    return ((dcId == null) || dcId.equals(p.getDCId()));
+                }
+            });
+
+        final List<ExcessANs> excessANs = results.find(
+            ExcessANs.class,
+            new RulesProblemFilter<ExcessANs>() {
+                @Override
+                public boolean match(final ExcessANs p) {
+                    return filterByDC(dcId, p.getANId());
+                }
+            });
+
+        final List<ANNotAllowedOnSN> ansnHost = results.find(
+            ANNotAllowedOnSN.class,
+            new RulesProblemFilter<ANNotAllowedOnSN>() {
+                @Override
+                public boolean match(final ANNotAllowedOnSN p) {
+                    return filterByDC(dcId, p.getANId());
+                }
+            });
+
+        final List<ANWrongDC> andcHost = results.find(
+            ANWrongDC.class,
+            new RulesProblemFilter<ANWrongDC>() {
+                @Override
+                public boolean match(final ANWrongDC p) {
+                    return filterByDC(dcId, p.getANId());
+                }
+            });
+
+        final List<ANProximity> anProximity = results.find(
+            ANProximity.class,
+            new RulesProblemFilter<ANProximity>() {
+                @Override
+                public boolean match(final ANProximity p) {
+                    return filterByDC(dcId, p.getANId());
+                }
+            });
+
         if (proximity.isEmpty() && overCap.isEmpty() &&
-            insufficient.isEmpty()) {
+            insufficient.isEmpty() && insufficientANs.isEmpty() &&
+            excessANs.isEmpty() && andcHost.isEmpty() &&
+            ansnHost.isEmpty() && anProximity.isEmpty()) {
             logger.info(startingPoint + " has nothing to rebalance");
             return startingPoint;
         }
@@ -344,6 +399,71 @@ public class TopologyBuilder {
                    currentLayout, ir.getNumNeeded());
         }
 
+        /*
+         * ExcessANs: remove ANs that are not needed
+         */
+        logger.log(Level.FINE,
+                   "{0} has {1} shards with unneeded Arbiter",
+                   new Object[]{candidate, excessANs.size()});
+
+        for (ExcessANs ea : excessANs) {
+            ArbNode an = candidateTopo.get(ea.getANId());
+            removeAN(candidateTopo, an.getStorageNodeId(), currentLayout,
+                    ea.getANId());
+        }
+
+        /*
+         * InsufficientANs: add ANs that are missing
+         */
+        logger.log(Level.FINE,
+                   "{0} has {1} shards that do not have an Arbiter",
+                   new Object[]{candidate, insufficientANs.size()});
+
+        for (InsufficientANs ia : insufficientANs) {
+            addAN(candidateTopo, ia.getDCId(), ia.getRGId(),
+                   currentLayout);
+        }
+
+        for (ANWrongDC ia : andcHost) {
+            ArbNode an = candidateTopo.get(ia.getANId());
+            /* check if AN was removed */
+            if (an == null) {
+                continue;
+            }
+            moveAN(candidateTopo, an.getStorageNodeId(), currentLayout,
+                   ia.getANId(), ia.getTargetDCId());
+        }
+
+        for (ANNotAllowedOnSN ia : ansnHost) {
+            ArbNode an = candidateTopo.get(ia.getANId());
+            /* check if AN was already removed or moved */
+            if (an == null ||
+                !an.getStorageNodeId().equals(ia.getStorageNodeId())) {
+                continue;
+            }
+            StorageNode sn = candidateTopo.get(an.getStorageNodeId());
+            moveAN(candidateTopo, an.getStorageNodeId(), currentLayout,
+                   ia.getANId(), sn.getDatacenterId());
+        }
+
+        DatacenterId anDC =
+            ArbiterTopoUtils.getBestArbiterDC(candidateTopo, params);
+        for (ANProximity anp : anProximity) {
+            ArbNode an = candidateTopo.get(anp.getANId());
+            if (an == null) {
+                /* AN no longer in topo */
+                continue;
+            }
+            RepGroup grp = candidateTopo.get(an.getRepGroupId());
+            SNDescriptor arbiterSN = findSNForArbiter(currentLayout, grp, anDC);
+            if (arbiterSN == null) {
+                /* No SN for AN */
+                continue;
+            }
+            moveAN(candidateTopo, arbiterSN.getId(), currentLayout,
+                   an.getResourceId(), anDC);
+        }
+
         return candidate;
     }
 
@@ -370,6 +490,7 @@ public class TopologyBuilder {
         final Topology startingTopo = startingPoint.getTopology();
 
         TopologyCandidate candidate = null;
+
         try {
 
             /*
@@ -442,10 +563,19 @@ public class TopologyBuilder {
                 candidate = new TopologyCandidate(candidateName,
                                                   startingTopo.getCopy());
                 final StoreDescriptor currentLayout =
-                    new StoreDescriptor(startingTopo, params, snPool);
+                        new StoreDescriptor(startingTopo, params, snPool);
+
                 if (layoutShardsAndRNs(candidate, currentLayout, currentGoal)) {
-                    success = true;
-                    break;
+
+                    if (ArbiterTopoUtils.useArbiters(candidate.getTopology())) {
+                        if (layoutArbiters(candidate, currentLayout)) {
+                           success = true;
+                           break;
+                        }
+                    } else {
+                        success = true;
+                        break;
+                    }
                 }
             }
 
@@ -506,7 +636,8 @@ public class TopologyBuilder {
             startingPoint.getTopology().update(
                 dcId,
                 Datacenter.newInstance(dc.getName(), newRepFactor,
-                                       dc.getDatacenterType()));
+                                       dc.getDatacenterType(),
+                                       dc.getAllowArbiters()));
         }
 
         /* Add RNs to fulfill the desired replication factor */
@@ -580,6 +711,218 @@ public class TopologyBuilder {
     }
 
     /**
+     * Choose the SN in the input list to host an Arbiter.
+     * The SN with the lowest number of hosted AN is selected.
+     * If there are multiple SN with the same number of AN's,
+     * zero capacity SN are given priority over non-zero.
+     * The SN with the higher capacity is given priority if
+     * both SN have non-zero capacity.
+     *
+     * @param sndList SNs without RNs from same shard.
+     * @return SN that is deemed best to host Arbiter
+     */
+    private SNDescriptor findSNForArbiter(List<SNDescriptor> sndList) {
+
+        SNDescriptor bestSn = sndList.get(0);
+        for (int i = 1; i < sndList.size(); i++) {
+            if (compareForArbiter(bestSn, sndList.get(i)) > 0) {
+                bestSn = sndList.get(i);
+            }
+        }
+        return bestSn;
+    }
+
+    /**
+     * Compare two SN's with respect to hosting
+     * Arbiters.
+     *
+     * @param sn1
+     * @param sn2
+     * @return -1 if sn1 is better, 1 if sn2 is better
+     */
+    private int compareForArbiter(SNDescriptor sn1, SNDescriptor sn2) {
+
+        /* Make determination based on number of hosted Arbiters. */
+        if (sn1.getARBs().size() !=  sn2.getARBs().size()) {
+            return Integer.signum(sn1.getARBs().size() - sn2.getARBs().size());
+        }
+
+        /* Make determination based on capacity. */
+        int sn1Cap = sn1.getCapacity();
+        int sn2Cap = sn2.getCapacity();
+
+        /*
+         * Capacity zero SN's have priority over non-zero capacity SNs.
+         */
+        if (sn1Cap != sn2Cap) {
+            if (sn1Cap == 0 && sn2Cap > 0) {
+                return -1;
+            }
+
+            if (sn2Cap == 0 && sn1Cap > 0) {
+                return 1;
+            }
+            return Integer.signum(sn2Cap - sn1Cap);
+        }
+
+        /* Capacities are equal so use lower snId */
+        int sn1Id =  sn1.getId().getStorageNodeId();
+        int sn2Id =  sn2.getId().getStorageNodeId();
+        return Integer.signum(sn1Id - sn2Id);
+    }
+
+    /**
+     * Find the best SN to place the arbiter. Involves 2 passes.
+     * The first pass finds SN's that do not host RN's in the same shard.
+     * From this list of SNs we then find the best SN in the second pass.
+     * If the list returned in first pass is empty, we return null which
+     * implies there is no SN available to place the arbiter.
+     *
+     * @return arbiterSN - the SN to place the arbiter. If an SN is not
+     * found return null.
+     */
+    private SNDescriptor findSNForArbiter(StoreDescriptor currentLayout,
+                                          RepGroup grp,
+                                          DatacenterId arbiterDCId) {
+
+        SNDescriptor arbiterSN = null;
+        List<SNDescriptor> allSNDs = currentLayout.getAllSNDs(arbiterDCId);
+        List<SNDescriptor> notInShardSNDs = new ArrayList<SNDescriptor>();
+        Set<StorageNodeId> shardSNs = new HashSet<StorageNodeId>();
+
+        /* Find all SN's in this shard. */
+        for (final RepNode rn : grp.getRepNodes()) {
+            shardSNs.add(rn.getStorageNodeId());
+        }
+
+        /* Find possible SN's to host this shards Arbiter. */
+        for (SNDescriptor eachSND : allSNDs) {
+            if (eachSND.getAllowArbiters() &&
+                !shardSNs.contains(eachSND.getId())) {
+                /* Add candidate */
+                notInShardSNDs.add(eachSND);
+            }
+        }
+
+        if (!notInShardSNDs.isEmpty()) {
+            arbiterSN = findSNForArbiter(getSortedSNs(notInShardSNDs));
+        }
+
+        return arbiterSN;
+    }
+
+    /**
+     * Assign Arbiters to SNs. Update both the relationship descriptors and
+     * the candidate topology. This method assumes that Arbiters are to be
+     * used and that there is at least one DC that is configured to use
+     * Arbiters.
+     * The number of SNs in the Arbiter DC must be at least RF + 1
+     * in order to have chance to layout the Arbiters. If not
+     * throw IllegalCommandException.
+     *
+     * @return true if successful
+     * @throws IllegalCommandException if the Arbiter DC does not have
+     *         at enough SN's to layout one shard.
+     */
+    private boolean layoutArbiters(TopologyCandidate candidate,
+                                   StoreDescriptor currentLayout) {
+
+        Topology topo = candidate.getTopology();
+        final DatacenterId dcId = ArbiterTopoUtils.getArbiterDC(topo, params);
+
+        /*
+         * Check for ANProximity violations that could have occurred
+         * after RN layout.
+         */
+        final Results results = Rules.validate(topo, params, false);
+        final List<ANProximity> anProximity = results.find(
+                ANProximity.class,
+                new RulesProblemFilter<ANProximity>() {
+                    @Override
+                    public boolean match(final ANProximity p) {
+                        return filterByDC(dcId, p.getANId());
+                    }
+                });
+
+        for (ANProximity anp : anProximity) {
+            ArbNode an = topo.get(anp.getANId());
+            RepGroup grp = topo.get(an.getRepGroupId());
+            SNDescriptor arbiterSN = findSNForArbiter(currentLayout, grp, dcId);
+            if (arbiterSN == null) {
+                /* No SN to move AN */
+                continue;
+            }
+            moveAN(topo, arbiterSN.getId(), currentLayout,
+                   an.getResourceId(), dcId);
+        }
+
+        /*
+         * Note that this method assumes that it is called with at
+         * least one DC configured to support Arbiters so dcId
+         * will not be null.
+         */
+        candidate.log("Target arbiter datacenter: " + dcId);
+
+        int usableSNs =
+            ArbiterTopoUtils.getNumUsableSNs(sourceTopo, params, dcId);
+        Datacenter arbDc = topo.get(dcId);
+        if (usableSNs < arbDc.getRepFactor() + 1) {
+            /* If there is not at least one more SN than the Arbiter
+             * DC repfactor or if there is not atleast one SN that can host
+             * arbiters, we cannot successfully layout a shard.
+             */
+            int needsSN = arbDc.getRepFactor() + 1;
+            throw new IllegalCommandException(
+                "It is not possible to create any shards with " +
+                "Arbiters for this initial topology. The minimum of " +
+                needsSN +
+                " SNs are required in the arbiter " + dcId +
+                " zone. The current number of SN's that may be used to host " +
+                "Arbiters is " + usableSNs + ". " +
+                "Please increase the number of Arbiter hosting storage nodes.");
+        }
+
+        /*
+         * Sort the shards so that the arbiters are placed in an orderly
+         * manner. The RN layout is done by shard,SN order. The layout of
+         * AN's is performed in reverse shard order, SN order. This enables
+         * a little better assignment layout since the shard,SN assignment is
+         * roughly ordered from low to high [#24544].
+         */
+        List<RepGroupId> rgIds = topo.getSortedRepGroupIds();
+        for (int i = rgIds.size() - 1; i >= 0; i--) {
+            RepGroupId rgId = rgIds.get(i);
+            RepGroup grp = topo.get(rgId);
+
+            if (sourceTopo.get(rgId) != null) {
+                /*
+                * Don't add arbiters to pre-existing shards
+                */
+                continue;
+            }
+            SNDescriptor arbiterSN = findSNForArbiter(currentLayout, grp,
+                                                      dcId);
+            if (arbiterSN == null){
+                Datacenter arbDC = sourceTopo.get(dcId);
+                candidate.log(
+                    "It is not possible to create any shards with " +
+                    "Arbiters for this initial topology. " +
+                    "Please increase the number of storage nodes in " +
+                    arbDC.getName() + " Datacenter.");
+                return false;
+            }
+
+
+            addOneARB(topo, arbiterSN, grp.getResourceId());
+            candidate.log("Added arbiter to shard " + rgId);
+        }
+
+        /* Try to better balance the AN distribution. */
+        balanceAN(candidate.getTopology(), currentLayout, dcId);
+        return true;
+    }
+
+    /**
      * Return true if this snId is in this datacenter.
      * if filterDC == null, return true.
      * if filterDC != null, return true if snId is in this datacenter
@@ -589,6 +932,19 @@ public class TopologyBuilder {
             return true;
         }
 
+        return (sourceTopo.get(snId).getDatacenterId().equals(filterDCId));
+    }
+
+    /**
+     * Return true if this anId is in this datacenter.
+     * if filterDC == null, return true.
+     * if filterDC != null, return true if anId is in this datacenter
+     */
+    private boolean filterByDC(DatacenterId filterDCId, ArbNodeId anId) {
+        if (filterDCId == null) {
+            return true;
+        }
+        StorageNodeId snId = sourceTopo.get(anId).getStorageNodeId();
         return (sourceTopo.get(snId).getDatacenterId().equals(filterDCId));
     }
 
@@ -674,6 +1030,11 @@ public class TopologyBuilder {
             /* Add RNs for each data center */
             for (final DCDescriptor dcDesc : currentLayout.getDCDesc()) {
                 final int repFactor = dcDesc.getRepFactor();
+
+                if (repFactor == 0) {
+                    /* Skip Arbiter only Datacenters */
+                    continue;
+                }
                 final SNLoopIterator snIter = new SNLoopIterator(
                     new LinkedList<SNDescriptor>(dcDesc.getSortedSNs()));
 
@@ -1161,7 +1522,6 @@ public class TopologyBuilder {
         }
     }
 
-
     /**
      * Attempt to add RNs to this shard, in this datacenter, to bring its
      * rep factor up to snuff.
@@ -1222,6 +1582,101 @@ public class TopologyBuilder {
                 break;
             }
         }
+    }
+
+    /**
+     * Add an Arbiter to SND and topo.
+     * @param topo
+     * @param snd
+     * @param rgId
+     */
+    private void addOneARB(Topology topo, SNDescriptor snd,
+        RepGroupId rgId) {
+        /* Add an ARB in the candidate topology */
+        final ArbNode newARB = new ArbNode(snd.getId());
+        final ArbNode added = topo.get(rgId).add(newARB);
+
+        /* Add this new Arb to the SN's list of hosted ARBs */
+        snd.add(added.getResourceId());
+    }
+
+
+    /**
+     * Remove arbiter from topo and snd
+     * @param topo
+     * @param snId
+     * @param currentLayout
+     * @param anId
+     */
+    private void removeAN(Topology topo,
+                               StorageNodeId snId,
+                               StoreDescriptor currentLayout,
+                               ArbNodeId anId) {
+
+        final SNDescriptor snd = currentLayout.getSND(snId, topo);
+        snd.remove(anId);
+        topo.remove(anId);
+    }
+
+    /**
+     * Move AN to different SN in the specified DC.
+     * May or may not perform the move.
+     *
+     * @param topo topology object
+     * @param snId SN hosting AN to move
+     * @param currentLayout current layout descripter
+     * @param anId AN to move
+     * @param dcId DC to move AN to
+     * @return whether the move succeeded
+     */
+    private boolean moveAN(Topology topo,
+                           StorageNodeId snId,
+                           StoreDescriptor currentLayout,
+                           ArbNodeId anId,
+                           DatacenterId dcId) {
+        RepGroup rg = topo.get(topo.get(anId).getRepGroupId());
+        SNDescriptor owningSND = currentLayout.getSND(snId, topo);
+        SNDescriptor newSN =
+            findSNForArbiter(currentLayout, rg, dcId);
+        if (newSN != null) {
+            newSN.claim(anId, owningSND);
+            changeSNForAN(topo, anId, newSN.getId());
+            return true;
+        }
+        return false;
+    }
+
+    /** Change the SN for this AN in topology */
+    private void changeSNForAN(Topology topo,
+                               ArbNodeId anToMove,
+                               StorageNodeId snId) {
+        logger.finest("Swapped " + anToMove + " to " + snId);
+        final ArbNode updatedAN = new ArbNode(snId);
+        final RepGroupId rgId = topo.get(anToMove).getRepGroupId();
+        final RepGroup rg = topo.get(rgId);
+        rg.update(anToMove, updatedAN);
+    }
+
+    /**
+     * Add AN to specified DC. May or may not be able to.
+     *
+     * @param topo
+     * @param dcId
+     * @param rgId
+     * @param currentLayout
+     * @return whether the addition was successful
+     */
+    private boolean addAN(Topology topo,
+                       DatacenterId dcId,
+                       RepGroupId rgId,
+                       StoreDescriptor currentLayout) {
+        RepGroup rg = topo.get(rgId);
+        SNDescriptor sn = findSNForArbiter(currentLayout, rg, dcId);
+        if (sn != null) {
+            addOneARB(topo, sn, rgId);
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -1340,6 +1795,97 @@ public class TopologyBuilder {
             usedMap.put(snId, used);
         }
         return used;
+    }
+
+    /**
+     * Return the SNs sorted by SNId.
+     */
+    private List<SNDescriptor> getSortedSNs(List<SNDescriptor> in) {
+        final List<SNDescriptor> snList =
+            new ArrayList<SNDescriptor>(in);
+        Collections.sort(snList, new Comparator<SNDescriptor>() {
+            @Override
+                public int compare(SNDescriptor snA,
+                                   SNDescriptor snB) {
+                    return snA.getId().getStorageNodeId() -
+                        snB.getId().getStorageNodeId();
+            }});
+        return snList;
+    }
+
+    private List<SNDescriptor> getOverAvgSNs(Topology topo,
+                                             StoreDescriptor layout,
+                                             DatacenterId dcId) {
+        int mean = ArbiterTopoUtils.computeAvgAN(topo, params, dcId);
+        List<SNDescriptor> retVal = new ArrayList<SNDescriptor>();
+        for (SNDescriptor snd : layout.getAllSNDs(dcId)) {
+            if (!snd.getAllowArbiters()) {
+                continue;
+            }
+            if (snd.getARBs().size() > mean) {
+                retVal.add(snd);
+            }
+        }
+        return retVal;
+    }
+
+    private List<SNDescriptor> getUnderAvgSNs(Topology topo,
+                                              StoreDescriptor layout,
+                                              DatacenterId dcId) {
+        int mean = ArbiterTopoUtils.computeAvgAN(topo, params, dcId);
+        List<SNDescriptor> retVal = new ArrayList<SNDescriptor>();
+        for (SNDescriptor snd : layout.getAllSNDs(dcId)) {
+            if (!snd.getAllowArbiters()) {
+                continue;
+            }
+            if (snd.getARBs().size() < mean) {
+                retVal.add(snd);
+            }
+        }
+        return retVal;
+    }
+
+    /*
+     * Make one pass over the SN's hosting arbiters in order to
+     * allocate ANs with an even distribution. Simple pass looking for
+     * SNs with more than the computed average number of ANs. Attempts to
+     * move AN to other potential SN's that have AN below the average number.
+     */
+    private void balanceAN(Topology topo,
+                           StoreDescriptor layout,
+                           DatacenterId dcId) {
+        int meanAN = ArbiterTopoUtils.computeAvgAN(topo, params, dcId);
+        List<SNDescriptor> overSNs = getOverAvgSNs(topo, layout, dcId);
+        for (SNDescriptor snd : overSNs) {
+            int numberToMove =  snd.assignedARBs.size() - meanAN;
+            int movedAN = 0;
+            Set<ArbNodeId> assignedANs =
+                new TreeSet<ArbNodeId>(snd.assignedARBs);
+            for (ArbNodeId anId : assignedANs) {
+                if (movedAN == numberToMove) {
+                    break;
+                }
+                List<SNDescriptor> under =
+                    getUnderAvgSNs(topo, layout, dcId);
+                ArbNode an = topo.get(anId);
+                for (SNDescriptor checkSN : under) {
+                    if (!checkSN.hosts(an.getRepGroupId())) {
+                        logger.log(Level.FINE,
+                                   "balanceAN moving AN. System mean {0} " +
+                                   "current SN {1} num ANs {2} " +
+                                   "to SN {3} numANs {4}.",
+                                    new Object[]{meanAN, snd.getId(),
+                                                 snd.assignedARBs.size(),
+                                                 checkSN.getId(),
+                                                 checkSN.assignedARBs.size()});
+                        checkSN.claim(anId, snd);
+                        changeSNForAN(topo, anId, checkSN.getId());
+                        movedAN++;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -1561,6 +2107,9 @@ public class TopologyBuilder {
                  dcMap.entrySet()) {
 
                 final DCDescriptor dcDesc = entry.getValue();
+                if (dcDesc.getRepFactor() == 0) {
+                    continue;
+                }
                 dcDesc.calculateMaxShards(candidate, 0);
                 final int dcMax = dcDesc.getNumShards();
                 if (calculatedMax > dcMax) {
@@ -1669,6 +2218,15 @@ public class TopologyBuilder {
                 }
             }
 
+            for (final ArbNode an : topo.getSortedArbNodes()) {
+                final StorageNodeId snId = an.getStorageNodeId();
+                /* Only add ANs for SNs in this data center */
+                if (dcId.equals(topo.get(snId).getDatacenterId())) {
+                    SNDescriptor snd = sns.get(an.getStorageNodeId());
+                    snd.add(an.getResourceId());
+                }
+            }
+
             // TODO: not sufficient for multi-datacenters. Numshards is not
             // necessarily to be initialed to the the same as the number
             // of shards in the topology, if this datacenter has fewer shards,
@@ -1684,6 +2242,11 @@ public class TopologyBuilder {
          */
         void calculateMaxShards(TopologyCandidate candidate,
                                 int highestShardId) {
+
+            if (repFactor == 0) {
+                numShards = 0;
+                return;
+            }
 
             final LinkedList<SNDescriptor> available =
                 new LinkedList<SNDescriptor>(getSortedSNs());
@@ -1724,11 +2287,13 @@ public class TopologyBuilder {
         private final StorageNode sn;
         private final StorageNodeParams snp;
         private Set<RepNodeId> assignedRNs;
+        private final Set<ArbNodeId> assignedARBs;
 
         SNDescriptor(StorageNode sn, StorageNodeParams snp) {
             this.sn = sn;
             this.snp = snp;
             assignedRNs = new TreeSet<RepNodeId>();
+            assignedARBs = new TreeSet<ArbNodeId>();
         }
 
         public boolean hosts(RepGroupId rgId) {
@@ -1768,6 +2333,14 @@ public class TopologyBuilder {
             assignedRNs.add(rId);
         }
 
+        private void add(ArbNodeId aId) {
+            assignedARBs.add(aId);
+        }
+
+        private void remove(ArbNodeId aId) {
+            assignedARBs.remove(aId);
+        }
+
         StorageNode getStorageNode() {
             return sn;
         }
@@ -1787,6 +2360,15 @@ public class TopologyBuilder {
             logger.log(Level.FINE,
                        "Moved {0} from {1} to {2}",
                        new Object[]{rnId, owner, this});
+        }
+
+        /** Move AN from owning SNDescriptor to this one. */
+        void claim(ArbNodeId anId, SNDescriptor owner) {
+            owner.assignedARBs.remove(anId);
+            assignedARBs.add(anId);
+            logger.log(Level.FINE,
+                       "Moved {0} from {1} to {2}",
+                       new Object[]{anId, owner, this});
         }
 
         /**
@@ -1809,10 +2391,23 @@ public class TopologyBuilder {
             return assignedRNs;
         }
 
+        Set<ArbNodeId> getARBs() {
+            return assignedARBs;
+        }
+
+        int getCapacity() {
+            return snp.getCapacity();
+        }
+
+        boolean getAllowArbiters() {
+            return snp.getAllowArbiters();
+        }
+
         @Override
         public String toString() {
             return sn.getResourceId() + " hosted RNs=" + assignedRNs +
-                " capacity= " + snp.getCapacity();
+                " capacity= " + snp.getCapacity() +
+                " hosted ANs=" + assignedARBs;
         }
     }
 }

@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -101,7 +101,7 @@ public class MessageFileProcessor {
         "/*-\n" +
         " *\n" +
         " *  This file is part of Oracle NoSQL Database\n" +
-        " *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.\n" +
+        " *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.\n" +
         " *\n" +
         " *  Oracle NoSQL Database is free software: you can redistribute it and/or\n" +
         " *  modify it under the terms of the GNU Affero General Public License\n" +

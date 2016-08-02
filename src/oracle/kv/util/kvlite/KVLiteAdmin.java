@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -96,7 +96,7 @@ public class KVLiteAdmin {
 
         admin.configure(kvstore);
         int planId = admin.createDeployDatacenterPlan(
-            "Deploy KVLite", "KVLite", 1, DatacenterType.PRIMARY);
+            "Deploy KVLite", "KVLite", 1, DatacenterType.PRIMARY, false);
         admin.approvePlan(planId);
         admin.executePlan(planId, false);
         admin.awaitPlan(planId, 0, null);

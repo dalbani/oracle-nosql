@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -48,6 +48,8 @@ import java.util.logging.Logger;
 
 import oracle.kv.FaultException;
 import oracle.kv.KVSecurityException;
+import oracle.kv.impl.query.QueryException;
+import oracle.kv.impl.query.QueryStateException;
 import oracle.kv.impl.security.SessionAccessException;
 import oracle.kv.impl.test.TestStatus;
 
@@ -249,6 +251,10 @@ public abstract class ProcessFaultHandler {
         } catch (KVSecurityException kvse) {
             exitCode = null; /* Don't exit the process. */
         } catch (SessionAccessException sae) {
+            exitCode = null; /* Don't exit the process. */
+        } catch (QueryException qe) {
+            exitCode = null; /* Don't exit the process. */
+        } catch (QueryStateException qse) {
             exitCode = null; /* Don't exit the process. */
         } catch (RuntimeException re) {
             exitCode = getExitCode(re, defaultExitCode);

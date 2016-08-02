@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -43,44 +43,56 @@
 
 package oracle.kv.impl.api.table;
 
-import static oracle.kv.impl.api.table.TableJsonUtils.NAME;
-import static oracle.kv.impl.api.table.TableJsonUtils.FIXED_SIZE;
-import static oracle.kv.impl.api.table.TableJsonUtils.FIXED;
-import static oracle.kv.impl.api.table.TableJsonUtils.TYPE;
-
 import java.io.IOException;
 
-import oracle.kv.impl.util.JsonUtils;
-import oracle.kv.table.FixedBinaryDef;
+import com.sleepycat.persist.model.Persistent;
 
 import org.codehaus.jackson.JsonNode;
 import org.codehaus.jackson.node.ObjectNode;
 import org.codehaus.jackson.node.TextNode;
 
-import com.sleepycat.persist.model.Persistent;
+import static oracle.kv.impl.api.table.TableJsonUtils.FIXED;
+import static oracle.kv.impl.api.table.TableJsonUtils.FIXED_SIZE;
+import static oracle.kv.impl.api.table.TableJsonUtils.NAME;
+import static oracle.kv.impl.api.table.TableJsonUtils.TYPE;
+import oracle.kv.impl.util.JsonUtils;
+
+import oracle.kv.table.FixedBinaryDef;
 
 /**
  * FixedBinaryDefImpl implements the FixedBinaryDef interface.
  */
 @Persistent(version=1)
-class FixedBinaryDefImpl extends FieldDefImpl
-    implements FixedBinaryDef {
+public class FixedBinaryDefImpl extends FieldDefImpl implements FixedBinaryDef {
 
     private static final long serialVersionUID = 1L;
-    private final String name;
+
+    /* AVRO requires names for records. */
+    private String name;
+
     private final int size;
 
-    FixedBinaryDefImpl(String name,
-                       int size,
-                       String description) {
+    FixedBinaryDefImpl(int size, String description) {
+
         super(Type.FIXED_BINARY, description);
-        this.name = name;
         this.size = size;
+
         validate();
     }
 
-    FixedBinaryDefImpl(String name,
-                       int size) {
+    FixedBinaryDefImpl(String name, int size, String description) {
+
+        this(size, description);
+
+        if (name == null) {
+            throw new IllegalArgumentException
+                ("FixedBinaryDef requires a name");
+        }
+
+        this.name = name;
+    }
+
+    FixedBinaryDefImpl(String name, int size) {
         this(name, size, null);
     }
 
@@ -98,6 +110,54 @@ class FixedBinaryDefImpl extends FieldDefImpl
         this.size = impl.size;
     }
 
+    /*
+     * Public api methods from Object and FieldDef
+     */
+
+    @Override
+    public FixedBinaryDefImpl clone() {
+        return new FixedBinaryDefImpl(this);
+    }
+
+    @Override
+    public int hashCode() {
+        return super.hashCode() + size + name.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        if (other instanceof FixedBinaryDefImpl) {
+            FixedBinaryDefImpl otherDef = (FixedBinaryDefImpl) other;
+            return (size == otherDef.size);
+        }
+        return false;
+    }
+
+    @Override
+    public boolean isFixedBinary() {
+        return true;
+    }
+
+    @Override
+    public boolean isAtomic() {
+        return true;
+    }
+
+    @Override
+    public FixedBinaryDef asFixedBinary() {
+        return this;
+    }
+
+    @Override
+    public FixedBinaryValueImpl createFixedBinary(byte[] value) {
+        validateValue(value);
+        return new FixedBinaryValueImpl(value, this);
+    }
+
+    /*
+     * Public api methods from FixedBinaryDef
+     */
+
     @Override
     public int getSize() {
         return size;
@@ -109,27 +169,34 @@ class FixedBinaryDefImpl extends FieldDefImpl
     }
 
     @Override
-    public boolean isFixedBinary() {
-        return true;
-    }
-
-    @Override
-    public FixedBinaryDef asFixedBinary() {
-        return this;
-    }
-
-    @Override
-    public boolean equals(Object other) {
-        if (other instanceof FixedBinaryDefImpl) {
-            FixedBinaryDefImpl otherDef = (FixedBinaryDefImpl) other;
-            return (size == otherDef.size && name.equals(otherDef.name));
+    public FixedBinaryValueImpl fromString(String base64) {
+        TextNode n = new TextNode(base64);
+        try {
+            return createFixedBinary(n.getBinaryValue());
+        } catch (IOException ioe) {
+            throw new IllegalArgumentException
+                ("Cannot create binary from string: " + base64, ioe);
         }
-        return false;
     }
 
+    /*
+     * FieldDefImpl internal api methods
+     */
+
     @Override
-    public int hashCode() {
-        return super.hashCode() + size + name.hashCode();
+    public boolean isSubtype(FieldDefImpl superType) {
+
+        if (superType.isFixedBinary()) {
+            return this.equals(superType);
+        }
+
+        if (superType.isBinary() ||
+            superType.isAny() ||
+            superType.isAnyAtomic()) {
+            return true;
+        }
+
+        return false;
     }
 
     @Override
@@ -137,17 +204,6 @@ class FixedBinaryDefImpl extends FieldDefImpl
         super.toJson(node);
         node.put(FIXED_SIZE, size);
         node.put(NAME, name);
-    }
-
-    @Override
-    public FixedBinaryDefImpl clone() {
-        return new FixedBinaryDefImpl(this);
-    }
-
-    @Override
-    public FixedBinaryValueImpl createFixedBinary(byte[] value) {
-        validateValue(value);
-        return new FixedBinaryValueImpl(value, this);
     }
 
     /*
@@ -163,25 +219,6 @@ class FixedBinaryDefImpl extends FieldDefImpl
         node.put(NAME, name);
         node.put(FIXED_SIZE, size);
         return node;
-    }
-
-    private void validate() {
-        if (size <= 0) {
-            throw new IllegalArgumentException
-                ("FixedBinaryDef size limit must be a positive integer");
-        }
-        if (name == null) {
-            throw new IllegalArgumentException
-                ("FixedBinaryDef requires a name");
-        }
-    }
-
-    private void validateValue(byte[] value) {
-        if (value.length != size) {
-            throw new IllegalArgumentException
-                ("Invalid length for FixedBinary array, it must be " + size +
-                 ", and it is " + value.length);
-        }
     }
 
     @Override
@@ -207,14 +244,31 @@ class FixedBinaryDefImpl extends FieldDefImpl
         }
     }
 
-    @Override
-    public FixedBinaryValueImpl fromString(String base64) {
-        TextNode n = new TextNode(base64);
-        try {
-            return createFixedBinary(n.getBinaryValue());
-        } catch (IOException ioe) {
+    /*
+     * local methods
+     */
+
+    public void setName(String n) {
+        name = n;
+
+        if (name == null || name.isEmpty()) {
+            throw new IllegalArgumentException(
+                "Fixed binary types require a name");
+        }
+    }
+
+    private void validate() {
+        if (size <= 0) {
             throw new IllegalArgumentException
-                ("Cannot create binary from string: " + base64, ioe);
+                ("FixedBinaryDef size limit must be a positive integer");
+        }
+    }
+
+    private void validateValue(byte[] value) {
+        if (value.length != size) {
+            throw new IllegalArgumentException
+                ("Invalid length for FixedBinary array, it must be " + size +
+                 ", and it is " + value.length);
         }
     }
 }

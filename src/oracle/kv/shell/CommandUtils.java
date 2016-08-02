@@ -1,7 +1,7 @@
 /*-
  *
  *  This file is part of Oracle NoSQL Database
- *  Copyright (C) 2011, 2015 Oracle and/or its affiliates.  All rights reserved.
+ *  Copyright (C) 2011, 2016 Oracle and/or its affiliates.  All rights reserved.
  *
  *  Oracle NoSQL Database is free software: you can redistribute it and/or
  *  modify it under the terms of the GNU Affero General Public License
@@ -58,6 +58,7 @@ import oracle.kv.impl.admin.IllegalCommandException;
 import oracle.kv.impl.api.table.IndexKeyImpl;
 import oracle.kv.impl.api.table.TableJsonUtils;
 import oracle.kv.impl.api.table.TableImpl;
+import oracle.kv.impl.api.table.TablePath;
 import oracle.kv.table.ArrayDef;
 import oracle.kv.table.FieldDef;
 import oracle.kv.table.FieldDef.Type;
@@ -194,7 +195,7 @@ class CommandUtils {
             if (key.isIndexKey()) {
                 IndexKeyImpl ikey = (IndexKeyImpl) key;
                 FieldDef def = ikey.findFieldDefinition(fieldName);
-                ((IndexKeyImpl) key).putComplexField
+                ((IndexKeyImpl) key).putComplex
                     (fieldName, createFieldValue(def, sValue));
             } else {
                 FieldDef def = findFieldDef(table, fieldName);
@@ -331,7 +332,7 @@ class CommandUtils {
                     fdVal = def.createMap();
                     FieldDef elementDef = getFieldDef(fdVal, null);
                     List<String> components =
-                        TableImpl.parseComplexFieldName(sValue);
+                        TablePath.parsePathName(sValue);
                     if (components.size() == 1) {
                         fdVal.asMap().putNull(sValue);
                     } else {
@@ -344,7 +345,7 @@ class CommandUtils {
                          */
                         Iterator<String> iter = components.listIterator();
                         String mapKey = iter.next();
-                        String val = TableImpl.createFieldName(iter);
+                        String val = TablePath.createPathName(iter);
                         FieldValue fv = createFieldValue(elementDef, val);
                         fdVal.asMap().put(mapKey, fv);
                     }
@@ -361,7 +362,7 @@ class CommandUtils {
                 try {
                     fdVal = def.createRecord();
                     List<String> components =
-                        TableImpl.parseComplexFieldName(sValue);
+                        TablePath.parsePathName(sValue);
                     if (components.size() == 1) {
                         throw new IllegalArgumentException
                             ("Illegal path to value in record: " + sValue);
@@ -369,7 +370,7 @@ class CommandUtils {
                     Iterator<String> iter = components.listIterator();
                     String fieldName = iter.next();
                     FieldDef elementDef = getFieldDef(fdVal, fieldName);
-                    String val = TableImpl.createFieldName(iter);
+                    String val = TablePath.createPathName(iter);
                     FieldValue fv = createFieldValue(elementDef, val);
                     fdVal.asRecord().put(fieldName, fv);
                 } catch (IllegalArgumentException iae) {
