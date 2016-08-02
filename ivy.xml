@@ -1,0 +1,146 @@
+<!-- ======================================================================
+External dependencies.  This is an Ivy file that is used by the ivy-resolve
+target in build.xml.  As dependencies are added they must be added here.
+See updatelibs.xml for information about adding new libraries to the
+repository on sleepycat-scm.us.oracle.com.
+======================================================================  -->
+<ivy-module version="2.0"
+            xmlns:m="http://ant.apache.org/ivy/maven">
+  <info organisation="org.eclipse.jetty" module="retrieve"/>
+  <configurations>
+      <conf name="default"/>
+      <conf name="publicBuild"/>
+  </configurations>
+  <dependencies
+      defaultconf="default"
+      defaultconfmapping="*->*,!sources,!javadoc">
+    <!-- Dependencies are enumerated rather than relying on Ivy for resolving
+         transitive dependencies.  This reduces the number of jar files needed.
+    -->
+    <!-- Mark dependencies as publicBuild that are needed for public
+         builds of the CE source.  Don't mark things that don't need to
+         be downloaded because they are used for non-public targets, are
+         EE-specific, or are included in the distribution.  The mapping
+         from publicBuild to default configuration means to use the
+         dependency's default configuration for our non-standard
+         publicBuild configuration. -->
+    <!-- jetty version 7.4.0.v20110414 -->
+    <dependency org="org.eclipse.jetty" name="jetty-continuation" rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-http" rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-io" rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-server" rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-servlet" rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-util" rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-security" rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-server" rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-webapp" rev="7.4.0.v20110414"/>
+    <dependency org="org.eclipse.jetty" name="jetty-xml" rev="7.4.0.v20110414"/>
+    <dependency org="javax.servlet" name="servlet-api" rev="2.5"/>
+    <!-- gwt version 2.4.0 -->
+    <dependency org="com.google.gwt" name="gwt-user" rev="2.4.0"/>
+    <dependency org="com.google.gwt" name="gwt-servlet" rev="2.4.0"/>
+    <dependency org="com.google.gwt" name="gwt-dev" rev="2.4.0"/>
+    <dependency org="javax.validation" name="validation-api" rev="1.0.0.GA">
+      <artifact name="validation-api"/>
+      <artifact name="validation-api" m:classifier="sources"/>
+    </dependency>
+    <!-- je -->
+    <dependency org="com.sleepycat" name="je" rev="6.4.15"/>
+    <!-- ojdbc6 current version 060812 -->
+    <dependency org="com.oracle" name="jdbc" rev="060812"/>
+    <!-- oraclepki current version 060812 -->
+    <dependency org="com.oracle" name="oraclepki" rev="060812"/>
+    <!-- osdt_cert current version 060812 -->
+    <dependency org="com.oracle" name="osdt_cert" rev="060812"/>
+    <!-- osdt_core current version 060812 -->
+    <dependency org="com.oracle" name="osdt_core" rev="060812"/>
+    <!-- commons-logging for tests and examples -->
+    <dependency org="commons-logging" name="commons-logging" rev="1.0.4"
+                conf="publicBuild->default"/>
+    <!-- commons-collections, commons-configuration, log4j, and slf4j
+        for Hadoop/Hive table integration tests -->
+    <dependency org="commons-collections" name="commons-collections" rev="3.2.1"/>
+    <dependency org="commons-configuration" name="commons-configuration" rev="1.10"/>
+    <dependency org="log4j" name="log4j" rev="1.2.17"/>
+    <dependency org="org.slf4j" name="slf4j-api" rev="1.7.7"/>
+    <dependency org="org.apache.hadoop" name="hadoop-auth" rev="2.3.0-cdh5.1.0"/>
+    <!-- hadoop -->
+    <dependency org="org.apache.hadoop" name="hadoop-common"
+                rev="2.3.0-cdh5.1.0" conf="publicBuild->default"/>
+    <dependency org="org.apache.hadoop" name="hadoop-mapreduce-client-core"
+                rev="2.3.0-cdh5.1.0" conf="publicBuild->default"/>
+    <dependency org="org.apache.hadoop" name="hadoop-annotations"
+                rev="2.3.0-cdh5.1.0" conf="publicBuild->default"/>
+    <!-- hive -->
+    <dependency org="org.apache.hive" name="hive-exec"
+                rev="0.12.0-cdh5.1.0" conf="publicBuild->default"/>
+    <dependency org="org.apache.hive" name="hive-serde"
+                rev="0.12.0-cdh5.1.0" conf="publicBuild->default"/>
+    <dependency org="org.apache.hive" name="hive-metastore"
+                rev="0.12.0-cdh5.1.0" conf="publicBuild->default"/>
+
+    <!-- coherence current version 3.7.1 -->
+    <dependency org="com.tangosol" name="coherence" rev="12.1.2"/>
+    <!-- ycsb -->
+    <dependency org="com.yahoo" name="ycsb" rev="0.1X.20140204"/>
+    <!-- junit -->
+    <dependency org="junit" name="junit" rev="4.11"/>
+    <!-- hamcrest - a junit dependency -->
+    <dependency org="org.hamcrest" name="hamcrest-core" rev="1.3"/>
+    <!-- checkstyle -->
+    <dependency org="com.puppycrawl.tools" name="checkstyle" rev="5.7"/>
+    <!-- antlr for checkstyle -->
+   <dependency org="antlr" name="antlr" rev="2.7.7"/>
+    <!-- guava collections for checkstyle (replaces google-collections) -->
+    <dependency org="com.google.guava" name="guava" rev="18.0"/>
+    <!-- commons-beanutils-core for checkstyle -->
+    <dependency org="commons-beanutils"	name="commons-beanutils-core"
+                rev="1.8.3"/>
+    <!-- commons-cli for checkstyle -->
+    <dependency org="commons-cli" name="commons-cli" rev="1.2"/>
+    <!-- findbugs -->
+    <dependency org="com.google.code.findbugs" name="findbugs" rev="2.0.0"/>
+    <dependency org="com.google.code.findbugs" name="annotations" rev="2.0.0"/>
+    <dependency org="com.google.code.findbugs" name="bcel" rev="2.0.0"/>
+    <dependency org="com.google.code.findbugs" name="jFormatString" rev="2.0.0"/>
+    <dependency org="com.google.code.findbugs" name="jsr305" rev="2.0.0"/>
+    <dependency org="com.google.code.findbugs" name="findbugs-ant" rev="2.0.0"/>
+    <!-- asm for findbugs -->
+    <dependency org="asm" name="asm" rev="3.3"/>
+    <dependency org="asm" name="asm-commons" rev="3.3"/>
+    <dependency org="asm" name="asm-tree" rev="3.3"/>
+    <!-- commons-lang for findbugs -->
+    <dependency org="commons-lang" name="commons-lang" rev="2.4"/>
+    <!-- dom4j for findbugs -->
+    <dependency org="dom4j" name="dom4j" rev="1.6.1"/>
+    <!-- jaxen for findbugs -->
+    <dependency org="jaxen" name="jaxen" rev="1.1.1"/>
+    <!-- Avro -->
+    <dependency org="org.apache.avro" name="avro" rev="1.7.6"/>
+    <!-- Jackson (used by Avro) -->
+    <dependency org="org.codehaus.jackson" name="jackson-core-asl" rev="1.9.3"/>
+    <dependency org="org.codehaus.jackson" name="jackson-mapper-asl"
+                rev="1.9.3"/>
+    <!-- jline (used by CLI) -->
+    <dependency org="jline" name="jline" rev="2.11"/>
+    <!-- JDMK jars for SNMP support -->
+    <dependency org="com.sun.jdmk" name="jdmkrt" rev="06302012"/>
+    <dependency org="com.sun.jdmk" name="jdmktk" rev="06302012"/>
+    <!-- EasyMock (mock object support for JUnit testing) -->
+    <dependency org="org.easymock" name="easymock" rev="3.1"/>
+    <dependency org="cglib" name="cglib-nodep" rev="2.2.2"/>
+    <dependency org="org.objenesis" name="objenesis" rev="1.2"/>
+    <dependency org="org.jacoco" name="jacoco" rev="0.6.3"/>
+    <!-- antlr for DDL.  Different version from that required for checkstyle -->
+    <dependency org="antlr" name="antlr" rev="4.4"/>
+    <!-- jsch for diagnostics project. -->
+    <dependency org="com.jcraft" name="jsch" rev="0.1.51"/>
+    <!-- eclipse jdt for ant warnings target -->
+    <dependency org="jdt-core" name="jdt-core" rev="3.11.0"
+                conf="publicBuild->default"/>
+    <!-- hadoop minikdc and apache ds for Kerberos unit test -->
+    <dependency org="org.apache.hadoop" name="hadoop-minikdc" rev="2.3.0"/>
+    <dependency org="org.apache.directory.server" name="apacheds-service"
+                rev="2.0.0-M15"/>
+  </dependencies>
+</ivy-module>
